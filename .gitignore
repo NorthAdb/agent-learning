@@ -1,0 +1,22 @@
+# Nested source repos — each has its own git remote
+python-100Days/
+learn-claude-code-north/
+
+# Future on-demand clones
+sources/
+
+# Local / OS
+.DS_Store
+Thumbs.db
+*.pyc
+__pycache__/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Editor
+.idea/
+.vscode/
+*.swp
