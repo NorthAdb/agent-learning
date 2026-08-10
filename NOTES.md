@@ -1,7 +1,7 @@
 # NOTES
 
 ## Local sources (own git remotes)
-- 教学根目录 `d:\agent-learning`：独立 git（跟踪 MISSION/lessons 等；子项目在 `.gitignore`）
+- 教学根目录 `d:\agent-learning`：独立 git → origin https://github.com/NorthAdb/agent-learning（跟踪 MISSION/lessons 等；子项目在 `.gitignore`）
 - `python-100Days/` → origin `https://github.com/NorthAdb/Python-100-Days`
 - `learn-claude-code-north/` → origin `https://github.com/NorthAdb/learn-claude-code-north`
 - Clone 策略：其余资源仍按阶段按需拉，勿一次塞满
