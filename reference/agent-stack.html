@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agent / Harness 用语速查</title>
+  <link rel="stylesheet" href="../assets/lesson.css" />
+  <link rel="stylesheet" href="../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="./index.html">速查索引</a> · 与 <a href="../GLOSSARY.md">GLOSSARY.md</a> 对齐</p>
+    <h1>Agent / Harness 用语速查</h1>
+    <p class="mission">阶段 0 用这些词当载体；阶段 1 起会正式加深。这里只保证「本仓库里一词一义」。</p>
+
+    <table>
+      <tr><th>术语</th><th>本仓库含义</th><th>_Avoid_（别混用）</th></tr>
+      <tr>
+        <td><strong>Model</strong></td>
+        <td>提供推理与决策的 LLM（司机）。</td>
+        <td>把整个产品叫「模型」</td>
+      </tr>
+      <tr>
+        <td><strong>Harness</strong></td>
+        <td>让模型能在具体环境干活的外壳：Tools + Knowledge + Observation + Action + Permissions（车）。</td>
+        <td>把任意 prompt 链都叫 harness</td>
+      </tr>
+      <tr>
+        <td><strong>Tool</strong></td>
+        <td>模型可调用的一个动作（读文件、检索、shell…），通常有 name + arguments。</td>
+        <td>插件 / Skill（后两者以后再收紧）</td>
+      </tr>
+      <tr>
+        <td><strong>Tool call</strong></td>
+        <td>一次具体调用请求，常用 <code>dict</code>：<code>name</code> + <code>arguments</code>。</td>
+        <td>把整轮对话叫 tool call</td>
+      </tr>
+      <tr>
+        <td><strong>Agent loop</strong></td>
+        <td>while：模型输出 →（可选）执行 tools → 观察 → 再调用模型，直到 final 或触顶。</td>
+        <td>单次补全、无工具的一次性问答</td>
+      </tr>
+      <tr>
+        <td><strong>max_turns</strong></td>
+        <td>loop 安全带：限制最大轮数，防死循环。</td>
+        <td>当成模型温度参数</td>
+      </tr>
+      <tr>
+        <td><strong>RAG</strong></td>
+        <td>检索增强生成：先查知识再生成；在本使命里常作为 harness 的 Knowledge/工具能力二次开发切入点。</td>
+        <td>「装了向量库 = 做完 Agent」</td>
+      </tr>
+      <tr>
+        <td><strong>封装层</strong></td>
+        <td>如 LangChain / LangGraph：编排与工程脚手架；要会，且能对照自建 harness。</td>
+        <td>把封装层等同于 Agency 来源</td>
+      </tr>
+    </table>
+
+    <h2>一句话栈（面试草稿）</h2>
+    <pre>产品 ≈ Model（决策） + Harness（工具/上下文/权限/观测）
+Agent loop 把「决策 ↔ 工具结果」转起来
+RAG 是 Knowledge 的一种接入方式
+LangGraph 等是编排实现选项，不是 Agency 本身</pre>
+
+    <footer>来源：MISSION / North 心智模型 / 课 0002–0003 载体。细节以 GLOSSARY.md 为准，冲突时改 glossary。</footer>
+  </main>
+</body>
+</html>

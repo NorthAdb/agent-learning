@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0001 · Python 环境确认与第一支脚本</title>
+  <link rel="stylesheet" href="../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0001"></div>
+    <h1>Python 环境确认与第一支脚本</h1>
+    <p class="mission">
+      使命需要你能读改 Agent/RAG 的 Python 代码。今天只做一件事：证明本机 Python 可用，并跑通第一支<strong>文件脚本</strong>（不是聊天框里的片段）。
+    </p>
+
+    <h2>你已经有的</h2>
+    <p>本机已检测到 <code>Python 3.12.9</code>。安装故事可以跳过；把精力留给「项目目录 + 虚拟环境 + 跑文件」。</p>
+
+    <h2>今天要完成的步骤</h2>
+    <div class="box steps">
+      <ol>
+        <li>打开 PowerShell，确认：
+          <pre>python --version
+pip --version</pre>
+        </li>
+        <li>在统一练习场建虚拟环境（所有阶段 0 脚本都放这里）：
+          <pre>cd d:\agent-learning
+mkdir playground\python\0001-hello -Force
+cd playground\python
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python --version</pre>
+          <p class="muted">约定：练习代码 → <code>playground/python/课号-主题/</code>；共用 <code>playground/python/.venv</code>。不要写进 <code>python-100Days/</code>。<br>若激活被策略拦住：<code>Set-ExecutionPolicy -Scope CurrentUser RemoteSigned</code></p>
+        </li>
+        <li>写文件 <code>playground/python/0001-hello/hello_agent.py</code>：
+          <pre>import sys
+
+print("ready for agent stack")
+print("python:", sys.version.split()[0])
+print("mission: internship harness + RAG")</pre>
+        </li>
+        <li>运行（venv 已激活时）：
+          <pre>python 0001-hello\hello_agent.py</pre>
+          看到三行输出即过关。
+        </li>
+      </ol>
+    </div>
+
+    <h2>为什么这样学（对照 Java）</h2>
+    <ul>
+      <li><code>venv</code> ≈ 每个项目独立依赖，类似「模块不污染全局 classpath」。</li>
+      <li>Agent 教程几乎都用 Python；你的 Java 能力后面用 API/MCP 接业务，不在今天重写 runtime。</li>
+    </ul>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。全局污染会在装 LangChain / RAG 依赖时立刻报复你。"
+      data-bad="再想：多教程并行时，全局装包最容易版本打架。">
+      <p>跑 Agent/RAG 教程时，依赖应该装在哪里？</p>
+      <button data-correct="false">系统全局 Python 里，方便到处用</button>
+      <button data-correct="true">当前项目的虚拟环境里，避免污染与版本冲突</button>
+      <button data-correct="false">只装在 IDE 插件目录，不碰命令行</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>主阅读（一手材料）</h2>
+    <p>
+      精读本地教材（跳过装环境长文，聚焦「写文件并运行」）：
+      <a href="../python-100Days/Day01-20/02.第一个Python程序.md">Python-100-Days · Day02 第一个 Python 程序</a>
+    </p>
+    <p class="muted">有余力可扫一眼 Day01 的「优缺点 / 应用领域」，不必记编年史。</p>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>激活了 <code>playground/python/.venv</code></li>
+      <li><code>python hello_agent.py</code> 输出含 <code>ready for agent stack</code></li>
+      <li>能口头说出：为何 Agent 学习要用 venv</li>
+    </ul>
+
+    <h2>速查</h2>
+    <p><a href="../reference/python-phase0.html">Python 阶段 0 速查</a> · <a href="../reference/index.html">速查索引</a></p>
+
+    <div data-lesson-id-footer="0001"></div>
+
+    <footer>
+      卡关或跑通后，直接在对话里问我（粘贴命令与输出）。我是你的老师，下一课再上变量与类型——仍然服务「能读 Agent 代码」，不是刷完 100 天。
+    </footer>
+  </main>
+  <script src="../assets/curriculum.js"></script>
+  <script src="../assets/lesson-nav.js"></script>
+  <script src="../assets/quiz.js"></script>
+</body>
+</html>

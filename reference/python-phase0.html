@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Python 阶段 0 速查</title>
+  <link rel="stylesheet" href="../assets/lesson.css" />
+  <link rel="stylesheet" href="../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="./index.html">速查索引</a> · 课 0001–0003 · 打印友好</p>
+    <h1>Python 阶段 0 速查</h1>
+    <nav class="toc meta">
+      <a href="#env">环境</a>
+      <a href="#types">类型</a>
+      <a href="#control">控制流</a>
+      <a href="#java">Java 对照</a>
+      <a href="#run">常用命令</a>
+    </nav>
+
+    <h2 id="env">环境</h2>
+    <table>
+      <tr><th>概念</th><th>要点</th></tr>
+      <tr><td>解释器</td><td><code>python --version</code>；本机练习用 3.12+</td></tr>
+      <tr><td>venv</td><td>项目隔离依赖；路径 <code>playground/python/.venv</code></td></tr>
+      <tr><td>激活 (PowerShell)</td><td><code>.\.venv\Scripts\Activate.ps1</code></td></tr>
+      <tr><td>跑脚本</td><td><code>python path\to\file.py</code>（先激活再装包）</td></tr>
+    </table>
+
+    <h2 id="types">类型与结构</h2>
+    <table>
+      <tr><th>类型</th><th>例子</th><th>Agent 里常见用途</th></tr>
+      <tr><td><code>str</code></td><td><code>"rag_search"</code></td><td>工具名、query、路径</td></tr>
+      <tr><td><code>int</code> / <code>float</code></td><td><code>3</code> / <code>0.2</code></td><td>top_k、temperature</td></tr>
+      <tr><td><code>bool</code></td><td><code>True</code> / <code>False</code></td><td>stream、开关</td></tr>
+      <tr><td><code>list</code></td><td><code>["a","b"]</code></td><td>工具列表、多条检索结果</td></tr>
+      <tr><td><code>dict</code></td><td><code>{"name": "..."}</code></td><td>tool_call、配置、JSON 对象</td></tr>
+    </table>
+    <pre># 取值
+tool_call["name"]
+tool_call["arguments"]["query"]
+
+# 自查
+type(x)
+isinstance(x, dict)
+
+# 格式化
+f"model={model} temp={temperature}"</pre>
+    <p class="muted"><span class="tag">坑</span> JSON 里的 <code>"3"</code> 是 str；做数值比较前先 <code>int(...)</code>。</p>
+
+    <h2 id="control">控制流</h2>
+    <pre>if cond:
+    ...
+elif other:
+    ...
+else:
+    ...
+
+for item in sequence:
+    ...
+
+while turn &lt; max_turns:
+    if done:
+        break
+    turn += 1
+else:
+    # 仅当 while 没被 break 时执行（触顶）
+    ...</pre>
+    <table>
+      <tr><th>结构</th><th>何时用</th></tr>
+      <tr><td><code>if</code></td><td>按消息类型 / 工具名 / 错误走不同路</td></tr>
+      <tr><td><code>for</code></td><td>遍历已知集合（一轮多个 tool_calls）</td></tr>
+      <tr><td><code>while</code></td><td>圈数未知；配 <code>max_turns</code> + <code>break</code></td></tr>
+    </table>
+
+    <h2 id="java">和 Java 对照（速记）</h2>
+    <table>
+      <tr><th>Python</th><th>Java 直觉</th></tr>
+      <tr><td>缩进定块</td><td><code>{ }</code></td></tr>
+      <tr><td><code>elif</code></td><td><code>else if</code></td></tr>
+      <tr><td><code>for x in xs</code></td><td>增强 for</td></tr>
+      <tr><td><code>dict</code></td><td><code>Map</code></td></tr>
+      <tr><td><code>list</code></td><td><code>List</code></td></tr>
+      <tr><td>动态类型</td><td>无静态声明；靠运行时检查</td></tr>
+    </table>
+
+    <h2 id="run">练习场命令</h2>
+    <pre>cd d:\agent-learning\playground\python
+.\.venv\Scripts\Activate.ps1
+python 0001-hello\hello_agent.py
+python 0002-vars\tool_call.py
+python 0002-vars\top_k_pitfall.py
+python 0003-control-flow\mini_agent_loop.py</pre>
+
+    <footer>
+      课件：
+      <a href="../lessons/0001-python-env-and-first-script.html">0001</a> ·
+      <a href="../lessons/0002-variables-and-types.html">0002</a> ·
+      <a href="../lessons/0003-control-flow-agent-loop.html">0003</a>
+    </footer>
+  </main>
+</body>
+</html>

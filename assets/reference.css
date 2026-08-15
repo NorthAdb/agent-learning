@@ -1,0 +1,44 @@
+/* extras for reference sheets — loaded after lesson.css */
+
+main.ref {
+  max-width: 48rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.92rem;
+  margin: 0.75rem 0 1.25rem;
+}
+
+th, td {
+  border: 1px solid var(--line);
+  padding: 0.45rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: #efeae2;
+  font-weight: 600;
+}
+
+tr:nth-child(even) td {
+  background: #fffcf7;
+}
+
+.tag {
+  display: inline-block;
+  font-family: "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.75rem;
+  color: var(--accent);
+  border: 1px solid var(--line);
+  padding: 0.1rem 0.4rem;
+  margin-right: 0.25rem;
+}
+
+nav.toc a {
+  display: inline-block;
+  margin: 0.25rem 0.75rem 0.25rem 0;
+}

@@ -6,14 +6,50 @@
 - `learn-claude-code-north/` → origin `https://github.com/NorthAdb/learn-claude-code-north`
 - Clone 策略：其余资源仍按阶段按需拉，勿一次塞满
 
+## File layout (where code goes)
+- **练习脚本**（如 `hello_agent.py`）→ `playground/python/`（已在 `.gitignore`，本地统一管理）
+  - 按课号分子目录更清晰：`playground/python/0001-hello/hello_agent.py`
+  - 该目录共用一个 `.venv`（建在 `playground/python/.venv`）
+- **课件** → `lessons/*.html`（进教学仓 git）
+  - 目录首页：`lessons/index.html`（自动渲染）
+  - 课序单一来源：`assets/curriculum.js`（新增课时必须先登记这里）
+  - 每课放 `<div data-lesson-id="00NN"></div>` + 文末 `data-lesson-id-footer`；引入 `curriculum.js` + `lesson-nav.js` 自动生成 首页/上一课/下一课
+- **速查** → `reference/*.html` + 根目录 `GLOSSARY.md`（进教学仓 git）
+  - 索引：`reference/index.html`
+  - 过关后把可压缩知识点追加进对应速查；术语冲突以 GLOSSARY 为准
+  - 后续每课 HTML 末尾链到相关速查页
+- **上游教材/实战仓** → `python-100Days/`、`learn-claude-code-north/`（各自独立 git，不要往里塞你的练习文件）
+- 以后按需 clone 的新上游 → `sources/<name>/`
+
 ## Preferences / profile
+- **学习方式**：练习代码由老师直接创建；用户以读代码 + 运行为主，不要求从空白手写（卡点仍可改着玩）
+- **课件深度**：后续课要**稍详细**——不是百日教材逐段翻译，但比 0001–0002 的「极简导读」厚一档（见下节 Lesson depth）
 - 目标：2027 暑期实习；主叙事 Java 后端 + Agent 补强
 - 硬产出：年前交出可演示二次开发项目（带 RAG）
-- 节奏：每天约 2 小时 ≈ 14h/周
+- 节奏：每天约 2 小时 ≈ 14h/周；单课目标约 60–90 分钟可读完+跑通
 - 工具习惯：Cursor / Claude Code / OpenCode 用得多 → 有「当用户」的直觉，缺「造 harness」的肌肉
 - Python：需系统重学，服务 Agent/RAG，不追求 100 天全刷
 - 二次开发靶子未定：Pi / Hermes / OpenCode；阶段 2 末按「扩展点 × 语言摩擦 × RAG 可演示」选定
 - LangChain/LangGraph：要会 + 必须能对照 harness，不当脊柱
+
+## Lesson depth（后续课标准，0003 起对齐）
+
+仍坚持：**一课一个技能核**；主技能=当前阶段该学的（阶段 0 是 Python），Agent/RAG 作载体。
+
+每课 HTML 应包含：
+1. **使命挂钩**（为什么这周要学这个）
+2. **Java 对照**（降低迁移成本，3–6 条即可）
+3. **概念展开**（不止四条子弹；含小代码块讲语法）
+4. **主代码逐段导读**（按函数/控制流讲「读到这里应理解什么」）
+5. **常见坑**（动态类型、缩进、无限 loop 等）
+6. **主阅读地图**（DayXX 要读哪些小节、哪些可跳）
+7. **检索练习**（至少 1 题，选项等长）
+8. **过关标准**（可自检）
+9. **速查链接**（指向 `reference/` 对应页；新稳定知识点写入速查 / GLOSSARY）
+
+练习代码：注释偏多、文件头说明怎么跑；必要时拆 sibling 对照文件。
+
+不做：把整章 DayXX 贴进 HTML；一课塞两个无关大主题；为细而细拖到 3 小时。
 
 ## Calendar (2026-08 → 2027-02 年前 → 2027 暑期)
 

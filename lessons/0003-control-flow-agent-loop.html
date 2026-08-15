@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0003 · 分支与循环：最小 Agent loop</title>
+  <link rel="stylesheet" href="../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0003"></div>
+    <h1>分支与循环：最小 Agent loop</h1>
+    <p class="mission">
+      Coding agent 的心脏不是「写一段 prompt」，而是一个循环：模型决策 → 调工具 → 观察结果 → 再决策。
+      今天的<strong>主技能</strong>是 Python 的 <code>if</code> / <code>for</code> / <code>while</code>；
+      <strong>载体</strong>是一个假的 tool loop，形状对齐你以后要读的 North s01。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <div class="box">
+      <ul>
+        <li>Python 用<strong>缩进</strong>定代码块，没有 <code>{ }</code>。少一级或多一级空格都会 <code>IndentationError</code> 或逻辑错位。</li>
+        <li><code>if / elif / else</code> ≈ <code>if / else if / else</code>；条件不写括号也可以，但冒号 <code>:</code> 不能少。</li>
+        <li><code>for x in seq</code> ≈ 增强 for：直接遍历元素，不是 C 风格的 <code>for (i=0; ...)</code>（那种用 <code>range</code>）。</li>
+        <li><code>while</code> 同名；Agent loop 几乎总是 while，因为「几轮结束」由模型决定。</li>
+        <li><code>break</code> / <code>continue</code> 语义与 Java 相同。</li>
+      </ul>
+    </div>
+
+    <h2>概念展开</h2>
+    <h3>1. 分支：同一入口，不同出路</h3>
+    <p>顺序执行解决不了「工具叫什么名字 / 消息是 final 还是 tool_calls」。分支让程序在运行时选路：</p>
+    <pre>if name not in TOOLBOX:
+    return {"ok": False, "error": "..."}
+# 只有通过检查才会执行到真正调用</pre>
+    <p class="muted"><code>elif</code> 用于互斥的多路（先匹配先走）；一连串独立 <code>if</code> 可能连续命中多条——读 harness 时要分清作者意图。</p>
+
+    <h3>2. for：集合已知时遍历</h3>
+    <p>一轮模型回复里经常带 <strong>多个</strong> tool_calls。用 for 逐个执行（真实系统里也可能并行，但控制流仍是「对列表做一遍」）：</p>
+    <pre>for call in msg["tool_calls"]:
+    out = run_tool(call["name"], call["arguments"])</pre>
+
+    <h3>3. while：圈数未知 + 必须能停</h3>
+    <p>写死 <code>for _ in range(2)</code> 太脆：模型可能一轮就 final，也可能工具来回十几轮。典型写法：</p>
+    <pre>while turn &lt; max_turns:
+    msg = model(...)
+    if msg["type"] == "final":
+        break
+    ...
+    turn += 1</pre>
+    <ul>
+      <li><strong>正常出口</strong>：收到 final → <code>break</code></li>
+      <li><strong>安全带</strong>：<code>max_turns</code> 触顶，防止死循环烧钱/挂死</li>
+    </ul>
+
+    <h2>主代码逐段导读</h2>
+    <p>打开并对照运行：
+      <a href="../playground/python/0003-control-flow/mini_agent_loop.py"><code>playground/python/0003-control-flow/mini_agent_loop.py</code></a>
+    </p>
+    <div class="box steps">
+      <ol>
+        <li>激活 venv 后运行：
+          <pre>cd d:\agent-learning\playground\python
+.\.venv\Scripts\Activate.ps1
+python 0003-control-flow\mini_agent_loop.py</pre>
+        </li>
+        <li><strong><code>TOOLBOX</code></strong>：名字 → 函数。Harness 里「工具注册表」就是这种思想。</li>
+        <li><strong><code>run_tool</code></strong>：先 <code>if name not in</code> 防未知工具；再用 <code>try/except TypeError</code> 接参数错误。读时问：若删掉未知工具分支，坏请求会怎样？</li>
+        <li><strong><code>fake_model</code></strong>：按 <code>turn</code> 返回剧本。真实世界这里是 LLM API；我们用列表模拟，只为练控制流。</li>
+        <li><strong><code>agent_loop</code></strong>：
+          <ul>
+            <li><code>while turn &lt; max_turns</code>：外环</li>
+            <li><code>if type == "final"</code>：打印并 <code>break</code></li>
+            <li><code>if type == "tool_calls"</code>：内层 <code>for</code> 调工具，然后 <code>turn += 1</code> + <code>continue</code></li>
+            <li>其它 type：防御性打印后 <code>break</code></li>
+            <li><code>while ... else</code>：循环<strong>没有</strong>被 break 才执行（本课触顶时才会看到）——这是 Python 特有语法，Java 没有直接对应</li>
+          </ul>
+        </li>
+      </ol>
+    </div>
+
+    <h2>常见坑</h2>
+    <div class="box">
+      <ul>
+        <li><strong>缩进混用 Tab/空格</strong> → 诡异语法错。本仓脚本已统一空格。</li>
+        <li><strong>忘记在工具分支里 <code>turn += 1</code></strong> → 同一 turn 死循环（假模型会一直返回同一句）。</li>
+        <li><strong>只有 while、没有 max_turns</strong> → 模型若从不 final，进程不结束（真 harness 还会叠加超时/费用熔断）。</li>
+        <li><strong>把 for 当 while 用</strong>：圈数其实不固定时，硬写 <code>range(N)</code> 会截断或空转。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。max_turns 是 harness 的安全带；final 是正常出口。"
+      data-bad="轮数不固定：模型可能 1 轮结束，也可能工具来回很多次。">
+      <p>真实 Agent 为什么几乎总用 while + max_turns，而不是写死 for _ in range(2)？</p>
+      <button data-correct="false">因为 while 比 for 跑得更快</button>
+      <button data-correct="true">轮数取决于模型何时给出 final；必须能早停，也必须能触顶防死循环</button>
+      <button data-correct="false">因为 Python 不允许 for 里调用函数</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。工具层把错误结构化，上层 loop 才能决策。"
+      data-bad="若直接抛未捕获异常，整次 agent 调用可能直接中断。">
+      <p><code>run_tool</code> 里对「未知工具名」单独 return error，主要是为了？</p>
+      <button data-correct="false">让 Python 跑分更高</button>
+      <button data-correct="true">把失败变成可观察结果，loop 能继续或上报，而不是进程直接崩掉</button>
+      <button data-correct="false">替换掉 max_turns 的作用</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>主阅读地图</h2>
+    <div class="box">
+      <p><strong>必读（抓语法）</strong></p>
+      <ul>
+        <li><a href="../python-100Days/Day01-20/05.分支结构.md">Day05</a>：<code>if/elif/else</code>、缩进与冒号；BMI 例题扫一眼即可</li>
+        <li><a href="../python-100Days/Day01-20/06.循环结构.md">Day06</a>：<code>for</code> + <code>range</code>、<code>while</code>、<code>break</code>/<code>continue</code>；「每秒 hello」长例可略</li>
+      </ul>
+      <p class="muted"><strong>可跳</strong>：纯趣味练习、与本课 loop 无关的大题。读完回到 <code>mini_agent_loop.py</code> 再过一遍导读清单。</p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能指着 <code>agent_loop</code> 讲清：何时 <code>break</code>、何时 <code>turn += 1</code></li>
+      <li>能口述：未知 tool 为什么要走 error 分支（而不是让异常冒泡打死进程——本课选择了前者）</li>
+      <li>能用一句话对 Java 同事解释：这和「while + switch(消息类型)」是同一类结构</li>
+    </ul>
+
+    <h2>速查</h2>
+    <p>
+      <a href="../reference/python-phase0.html">Python 阶段 0 速查</a>（控制流）·
+      <a href="../reference/agent-stack.html">Agent / Harness 用语</a> ·
+      <a href="../GLOSSARY.md">GLOSSARY.md</a> ·
+      <a href="../reference/index.html">索引</a>
+    </p>
+
+    <div data-lesson-id-footer="0003"></div>
+
+    <footer>
+      读完/跑完贴「过了」或问题。下一课：函数与模块（把 <code>run_tool</code> / <code>agent_loop</code> 拆成可复用单元）——会按本课同样的「稍详细」标准写。
+    </footer>
+  </main>
+  <script src="../assets/curriculum.js"></script>
+  <script src="../assets/lesson-nav.js"></script>
+  <script src="../assets/quiz.js"></script>
+</body>
+</html>

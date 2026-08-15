@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0002 · 变量与类型（读 Agent 代码用）</title>
+  <link rel="stylesheet" href="../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0002"></div>
+    <h1>变量与类型（读 Agent 代码用）</h1>
+    <p class="mission">
+      Agent 日志、工具参数、配置项全是「带类型的数据」。今天练的是：命名变量、认出 <code>int/str/bool/list/dict</code>，并用 f-string 打印——后面读 North / RAG 代码时处处用到。
+    </p>
+
+    <h2>最小知识</h2>
+    <div class="box">
+      <ul>
+        <li><strong>变量</strong> = 给一块内存里的数据取名；可改值。</li>
+        <li>常用类型：<code>int</code> <code>float</code> <code>str</code> <code>bool</code>；后面立刻会碰到 <code>list</code>（有序）和 <code>dict</code>（键值）。</li>
+        <li>动态类型：同一变量可以先后指向不同类型（Java 里你会皱眉；Python 里常见）。读代码时用 <code>type(x)</code> / <code>isinstance(x, dict)</code> 自查。</li>
+        <li>f-string：<code>f"model={name} temp={temp}"</code>，调试 Agent 配置最快。</li>
+      </ul>
+    </div>
+
+    <h2>动手（代码已备好，你负责读 + 跑）</h2>
+    <div class="box steps">
+      <ol>
+        <li>激活 venv：
+          <pre>cd d:\agent-learning\playground\python
+.\.venv\Scripts\Activate.ps1</pre>
+        </li>
+        <li>打开并阅读：
+          <ul>
+            <li><a href="../playground/python/0002-vars/tool_call.py"><code>playground/python/0002-vars/tool_call.py</code></a></li>
+            <li><a href="../playground/python/0002-vars/top_k_pitfall.py"><code>playground/python/0002-vars/top_k_pitfall.py</code></a>（类型坑对照）</li>
+          </ul>
+        </li>
+        <li>运行：
+          <pre>python 0002-vars\tool_call.py
+python 0002-vars\top_k_pitfall.py</pre>
+        </li>
+      </ol>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。模型返回的 tool_calls 解析后几乎总是 list[dict]。"
+      data-bad="Agent 运行时靠结构化字段分支；纯字符串拼接会立刻失控。">
+      <p>工具调用 JSON 进了 Python 后，最常见的承载类型是？</p>
+      <button data-correct="false">仅用 str 全程拼接，不要结构化</button>
+      <button data-correct="true">dict（再配合 list），用键取出 name / arguments</button>
+      <button data-correct="false">必须先写成 Java 的 class 才能用</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>主阅读</h2>
+    <p>
+      <a href="../python-100Days/Day01-20/03.Python语言中的变量.md">Python-100-Days · Day03 变量</a>
+      ——重点看「变量和类型」「变量命名」；二进制长文可跳。
+    </p>
+    <p class="muted">运算符整章（Day04）有余力再扫；本课不阻塞。</p>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li><code>tool_call.py</code> 跑通，能打印 tool name 与 query</li>
+      <li>能说出 <code>list</code> 与 <code>dict</code> 各适合什么</li>
+      <li>能解释：为何把 <code>top_k</code> 弄成字符串会埋雷</li>
+    </ul>
+
+    <h2>速查</h2>
+    <p><a href="../reference/python-phase0.html">Python 阶段 0 速查</a>（类型 / dict）· <a href="../reference/agent-stack.html">Agent 用语</a> · <a href="../reference/index.html">索引</a></p>
+
+    <div data-lesson-id-footer="0002"></div>
+
+    <footer>
+      跑通或卡住，把输出贴回来。下一课：分支与循环（Agent 的 tool loop 就是循环 + 条件）。
+    </footer>
+  </main>
+  <script src="../assets/curriculum.js"></script>
+  <script src="../assets/lesson-nav.js"></script>
+  <script src="../assets/quiz.js"></script>
+</body>
+</html>
