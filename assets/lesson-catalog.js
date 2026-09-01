@@ -13,7 +13,12 @@
     (byPhase[l.phase] ||= []).push(l);
   });
 
-  const phaseLabel = { "0": "阶段 0 · Python 重装", "1": "阶段 1 · 心智模型" };
+  const phaseLabel = {
+    "0": "阶段 0 · Python 地基（lessons/phase-0/）",
+    "1": "阶段 1 · 心智模型（lessons/phase-1/）",
+    "2": "阶段 2 · 最小 harness",
+    "3": "阶段 3 · 上下文与记忆",
+  };
 
   let html = "";
   Object.keys(byPhase)

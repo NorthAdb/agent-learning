@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0017 · Agent 公式</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0017"></div>
+    <h1>Agent 公式：LLM + 上下文 + 工具</h1>
+    <p class="mission">
+      使命要求你能用一句话说清 <strong>Agent = LLM + 上下文 + 工具</strong>，并知道 Harness 落在哪一侧。
+      本课只钉公式本身：三块各是什么、环境为什么在外面、缺一块或路径写死分别叫什么。
+      Harness 展开和循环机制留给 0018 / 0019。不调模型，不跑 North <code>code.py</code>。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      对应 <a href="../../AI-Agents-in-Depth-md/">《AI Agents in Depth》</a> 第 1 章 §1.1 开头
+      （公式、大脑/眼睛/手脚、Agent 与 Environment 的边界）。
+      读完本页即可过关，不必整章翻书。
+    </p>
+    <h3>本课新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>去哪看</th></tr>
+      <tr>
+        <td>公式 LLM + 上下文 + 工具</td>
+        <td>最小工程实现；加号是拼零件</td>
+        <td>
+          <a href="../../AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md">书 第01章</a>
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:11">L11</a>
+          §1.1 标题
+        </td>
+      </tr>
+      <tr>
+        <td>大脑 / 眼睛 / 手脚</td>
+        <td>LLM / 上下文 / 工具的比喻</td>
+        <td>同一节，公式段落下几句（打开 L11 往下读）</td>
+      </tr>
+      <tr>
+        <td><strong>Environment</strong></td>
+        <td>外部世界；不在公式加号右边</td>
+        <td>§1.1 同一段「不包含 Environment」；观察/动作边界见
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:36">§1.1.1 L36</a>
+        </td>
+      </tr>
+      <tr>
+        <td><strong>工作流</strong></td>
+        <td>路径由代码写死</td>
+        <td>
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:369">§1.2.4.1 L369</a>
+          （本课只作边界；0018 再叠 harness）
+        </td>
+      </tr>
+    </table>
+    <table>
+      <tr><th>来源要点</th><th>本课</th></tr>
+      <tr><td>Agent = LLM + 上下文 + 工具；加号 = 工程组合</td><td><span class="tag">已内化</span>讲解 1</td></tr>
+      <tr><td>大脑 / 眼睛 / 手脚；Environment 不在公式里</td><td><span class="tag">已内化</span>讲解 1–2</td></tr>
+      <tr><td>没进上下文的观察，对模型等于不存在</td><td><span class="tag">已内化</span>讲解 2</td></tr>
+      <tr><td>三案：缺大脑 / 缺眼睛 / 缺手脚</td><td><span class="tag">已内化</span>讲解 3</td></tr>
+      <tr><td>工作流 vs 自主 Agent：下一步谁决定</td><td><span class="tag">已内化</span>讲解 4（边界，不讲框架）</td></tr>
+      <tr><td>§1.1.1 Manus / OpenClaw 产品史</td><td><span class="tag">跳过</span>只留一句「扩眼睛和手脚」</td></tr>
+      <tr><td>§1.1.2 工具五类、§1.1.4 上下文五组件、消融实验</td><td><span class="tag">跳过</span>0019 才会碰到轨迹</td></tr>
+      <tr><td>§1.1.5 ReAct；North 最小循环图</td><td><span class="tag">下一课方向</span>0019</td></tr>
+      <tr><td>§1.2 Harness 五要素；L01 能力鸿沟</td><td><span class="tag">见后课</span>0018 公式叠放；<a href="./0020-fail-check-harness.html">0020 失败归因</a></td></tr>
+      <tr><td>§1.2.4 框架对照表（LangChain 等）</td><td><span class="tag">跳过</span>使命明确不做封装层</td></tr>
+    </table>
+
+    <h2>为什么要学？（动机）</h2>
+    <p>
+      你日常已经在用 Cursor / Claude Code。阶段 0 练的是「读得动 Python」。
+      从现在起，主技能换成<strong>心智模型</strong>：看到一个系统，能指出大脑、眼睛、手脚分别在哪，
+      以及你以后要造的 harness 先落在哪两块上。
+    </p>
+    <p class="muted">
+      课 0003 用 while 画过一个假 loop——那是控制流预习。
+      本课先回答「循环里转的是哪三块」，0019 再把 while 重新解释成 ReAct。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>本课概念</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr>
+        <td>LLM</td>
+        <td>你调的一个「决策服务」</td>
+        <td>没有你能 step-through 的业务源码；策略在权重里，不在 if-else 树里</td>
+      </tr>
+      <tr>
+        <td>上下文</td>
+        <td>一次请求带上的 DTO + 会话状态 + 配置</td>
+        <td>模型<strong>只</strong>根据这次请求里的文本做决定；仓库里有文件不等于它看见了</td>
+      </tr>
+      <tr>
+        <td>工具</td>
+        <td>注入的 Repository / HTTP client / 文件 API</td>
+        <td>调不调、调哪个、传什么，默认由模型选，不是 Controller 里写死的调用顺序</td>
+      </tr>
+      <tr>
+        <td>Environment</td>
+        <td>真实 DB、磁盘、对端服务</td>
+        <td>在 Agent <strong>外面</strong>；公式不包含它</td>
+      </tr>
+      <tr>
+        <td>工作流</td>
+        <td>写死的状态机 / 责任链</td>
+        <td>每步可以调 LLM，但「下一步去哪」由代码决定</td>
+      </tr>
+      <tr>
+        <td>自主 Agent</td>
+        <td>while + 策略服务选下一动作</td>
+        <td>退出条件仍要你设（final / 触顶），见课 0003 的 <code>max_turns</code></td>
+      </tr>
+    </table>
+
+    <h2>系统讲解</h2>
+
+    <h3>1. 公式：三块零件，加号不是奖励</h3>
+
+    <h4>1.1 它是什么？</h4>
+    <p>
+      书给出最小工程公式：<strong>Agent = LLM + 上下文 + 工具</strong>。
+      这里的加号表示把三块工程组件拼在一起，<strong>不是</strong>强化学习里把奖励加起来。
+      更直白的说法：Agent = 大脑 + 眼睛 + 手脚。
+    </p>
+    <p class="src">
+      原文：
+      <a href="../../AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md">第01章.md</a>
+      · <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:11">§1.1 L11</a>
+    </p>
+    <pre>Agent = LLM（大脑）+ 上下文（眼睛）+ 工具（手脚）
+Agent  ↔  Environment（环境：公式外面）</pre>
+    <table>
+      <tr><th>零件</th><th>一句话</th></tr>
+      <tr>
+        <td><strong>LLM</strong></td>
+        <td>决策内核：理解意图、规划、判断「要不要调工具 / 调哪个 / 传什么」。</td>
+      </tr>
+      <tr>
+        <td><strong>上下文</strong></td>
+        <td>这一次决策能看到的全部信息。不限于用户刚打的那句——观察、记忆、工具说明书都可以在里面。</td>
+      </tr>
+      <tr>
+        <td><strong>工具</strong></td>
+        <td>感知或改变外部世界的接口：读文件、跑命令、搜网页、调 HTTP……没有它只能「纸上谈兵」。</td>
+      </tr>
+    </table>
+    <p class="muted">
+      书还强调：这个公式只描述 Agent <strong>边界之内</strong>的实现。
+      你与之交互的文件系统、网络、用户机器，叫 <strong>Environment（环境）</strong>，不写在加号右边。
+    </p>
+    <p class="src">
+      「没进上下文就像不存在」：书
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:36">§1.1.1 L36</a> 起。
+    </p>
+
+    <h4>1.2 解决什么问题？</h4>
+    <p>
+      没有这张图，很容易把三件不同的事混成一个词「Agent」：
+      模型厂商的 API、你写的循环代码、真实世界里的文件和测试。
+      拆开以后才能回答使命里的第二句：Harness 落在「上下文 + 工具」这一侧
+      （再加约束 / 验证 / 纠正是 0018 的事）。
+    </p>
+
+    <h4>1.3 小例</h4>
+    <p>用户说：「看看 <code>app.py</code> 里有没有 TODO，有就改掉并跑测试。」</p>
+    <table>
+      <tr><th>零件</th><th>这一次分别是什么</th></tr>
+      <tr><td>LLM</td><td>决定：先读文件，再改，再跑 <code>pytest</code>，而不是直接回复「好的我改了」</td></tr>
+      <tr><td>上下文</td><td>用户这句话 + 工具清单 + 稍后读到的 <code>app.py</code> 正文 + 测试输出</td></tr>
+      <tr><td>工具</td><td><code>read</code> / <code>edit</code> / <code>bash</code>（或你们项目里的等价物）</td></tr>
+      <tr><td>环境</td><td>磁盘上的真实 <code>app.py</code> 和测试进程；它们不在模型权重里</td></tr>
+    </table>
+
+    <h3>2. 环境在外面：看不见 = 不存在</h3>
+    <p>
+      经典图景是闭环：环境给出<strong>观察</strong> → Agent 选<strong>行动</strong> → 环境改变 → 新观察。
+      Harness 干的第一件事，就是把观察<strong>转成上下文</strong>，再把模型选出的行动<strong>转成工具调用</strong>。
+    </p>
+    <p>
+      硬规则（书 §1.1.1）：<strong>没有通过观察通道进入上下文的信息，对模型来说就像不存在</strong>。
+      仓库里有 <code>README.md</code>、你脑子里有「我们用 SQLAlchemy 2.0」，都不算——除非写进这一次请求，
+      或做成模型能调的读文件 / 检索工具并真的调了。
+    </p>
+    <p>
+      对称的另一半：<strong>没有被动作接口允许的操作，模型再清楚也只能停留在文字建议上</strong>。
+      「我可以帮你删掉生产库」如果没有对应工具（或权限拦住了），它删不成。
+    </p>
+    <p class="muted">
+      所以模型固定时，提升任务表现的主杠杆常常是扩眼睛、扩手脚——把该看的数据送进上下文，
+      把该做的操作封成工具。产品案例（Manus 把浏览器和终端并进同一套接口）本课不展开，
+      记住这句杠杆就够。
+    </p>
+
+    <h3>3. 三案：缺一块就不是公式里的 Agent</h3>
+    <p>易混点按三种缺法写满，对照主脚本 ①②④。</p>
+    <table>
+      <tr><th>缺什么</th><th>表面上像什么</th><th>本仓库判定</th></tr>
+      <tr>
+        <td>缺 LLM</td>
+        <td>cron、shell 脚本、写死的爬虫</td>
+        <td>自动化，不是 Agent——没有决策内核</td>
+      </tr>
+      <tr>
+        <td>缺上下文</td>
+        <td>每次只喂一句新问题，不带历史、不读仓库</td>
+        <td>盲打。文件在磁盘上 ≠ 模型看见了</td>
+      </tr>
+      <tr>
+        <td>缺工具</td>
+        <td>把文档贴进 prompt 的问答窗</td>
+        <td>能看不能做：纸上谈兵</td>
+      </tr>
+    </table>
+    <p>
+      课 0003 的假模型之所以能「跑」，是因为脚本里<strong>已经</strong>有工具表和 while；
+      那是形状，还不是本课的判定清单。本课先会贴标签，0019 再回到循环。
+    </p>
+
+    <h3>4. 一条边界：工作流不是自主 Agent</h3>
+    <p>
+      三块零件都在，仍可能不是本仓库说的 Agent。
+      书把<strong>工作流</strong>定义为：执行路径由开发者预先写死，LLM 只在节点内部生成。
+      <strong>自主 Agent</strong>：下一步由模型根据环境反馈实时决定。
+    </p>
+    <p class="src">
+      原文：书
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:369">§1.2.4.1 L369</a>
+      工作流；自主 Agent
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:407">§1.2.4.2 L407</a>。
+    </p>
+    <table>
+      <tr><th></th><th>工作流</th><th>自主 Agent</th></tr>
+      <tr><td>下一步谁决定</td><td>代码（状态机 / 节点图）</td><td>模型</td></tr>
+      <tr><td>订机票</td><td>验证 → 搜索 → 付款 → 确认，顺序锁死</td><td>可先搜再发现要登录，再回头验证</td></tr>
+      <tr><td>失败时</td><td>常停在该节点或走预设错误边</td><td>模型可改策略（仍要有停止条件）</td></tr>
+    </table>
+    <p>
+      实践里可以混合：合规步骤用工作流，开放式排查用自主循环。
+      本课只要你能指出「下一步谁说了算」。不要把 n8n / LangGraph 节点图直接叫 Agent——
+      那是工作流（或混合），和使命里要造的 harness 不是同一件事。
+    </p>
+    <p class="muted">
+      预告（不必本课记住细节）：把三块转起来的机制叫 ReAct（想 → 做 → 看）。
+      代码负责执行工具、把结果追加进上下文；<strong>是否继续</strong>由模型决定。那是 0019。
+    </p>
+
+    <h2>主脚本导读</h2>
+    <p>
+      打开并运行
+      <a href="../../playground/phase-1/0017-agent-formula/classify.py"><code>playground/phase-1/0017-agent-formula/classify.py</code></a>。
+      四个说明书进 <code>verdict()</code>，对照上面讲解 3–4。
+    </p>
+    <table>
+      <tr><th>块</th><th>看什么</th><th>对应</th></tr>
+      <tr><td><code>Spec</code></td><td>四布尔/枚举：有没有三块零件，下一步谁挑</td><td>讲解 1、4</td></tr>
+      <tr><td><code>verdict</code></td><td>先查缺零件，再查 <code>who_picks_next</code></td><td>讲解 3–4</td></tr>
+      <tr><td>① 单次补全</td><td>有 LLM，无上下文、无工具 → 缺少眼睛、手脚</td><td>讲解 3</td></tr>
+      <tr><td>② 贴文档问答</td><td>有上下文，无工具</td><td>能看不能做</td></tr>
+      <tr><td>③ 四节点订票</td><td>三块都有，<code>who_picks_next="code"</code></td><td>工作流</td></tr>
+      <tr><td>④ coding agent</td><td>三块都有，<code>who_picks_next="model"</code></td><td>自主 Agent</td></tr>
+    </table>
+    <pre>cd d:\agent-learning\playground\phase-1\0017-agent-formula
+python classify.py
+# 无第三方包。也可用阶段 0 的 venv：
+# d:\agent-learning\playground\python\.venv\Scripts\python.exe classify.py</pre>
+    <p>期望：①② 判「不是 Agent」，③ 判「工作流」，④ 判「自主 Agent」。</p>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>把整个产品叫「模型」</strong>：模型只是大脑。Cursor / Claude Code 是模型 + harness。</li>
+        <li><strong>以为仓库在、模型就看见</strong>：没进上下文 = 不存在。要读，得有读文件工具并且真的调了。</li>
+        <li><strong>把聊天窗口当 Agent</strong>：只有 LLM（+一点历史）没有工具，改不了环境。</li>
+        <li><strong>把节点图当 Agent</strong>：路径写死在代码里，是工作流。</li>
+        <li><strong>把环境写进公式右边</strong>：环境是交互对象，不是第三块零件；第三块是工具（接口）。</li>
+        <li><strong>本课去翻 Ch1 后半 / 去跑 s01</strong>：过密。Harness、loop、失败归因按 0018–0020 来。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。加号是工程组合；环境不在公式里。"
+      data-bad="不是强化学习的奖励相加，也不是把环境算进 Agent 内部。">
+      <p>「Agent = LLM + 上下文 + 工具」里的加号表示？</p>
+      <button data-correct="true">工程上拼三块，环境不在公式里</button>
+      <button data-correct="false">训练时把奖励分数逐项地加起来</button>
+      <button data-correct="false">运行环境也算进公式右边那一项</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。有眼睛没手脚，只能纸上谈兵。"
+      data-bad="贴进提示词只增加上下文，没有工具仍改不了世界。">
+      <p>把文档贴进提示词、模型只生成文字、不调工具，算不算本课的 Agent？</p>
+      <button data-correct="true">不算，能看却不能改世界</button>
+      <button data-correct="false">算了，资料已经喂得足够</button>
+      <button data-correct="false">算了，文字输出就是工具</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。路径由代码写死，是工作流。"
+      data-bad="有 LLM 和工具仍可能是工作流；看下一步谁决定。">
+      <p>订机票写成四个固定节点，LLM 只在节点内填字段。这是？</p>
+      <button data-correct="true">工作流，下一步代码已经写死</button>
+      <button data-correct="false">自主的，下一步由模型自己选</button>
+      <button data-correct="false">聊天的，没有上下文也没工具</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。没进上下文的观察，对模型等于不存在。"
+      data-bad="权重里没有你的私有文件；工具也不会在没被调用时自动读。">
+      <p>仓库里有 README，但这次请求没读它、也没贴进提示词。对模型意味着？</p>
+      <button data-correct="true">等于不存在，它看不见</button>
+      <button data-correct="false">模型权重里已经有这份</button>
+      <button data-correct="false">工具会自动替它读进来</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能默写公式，并说明加号是工程组合、环境不在公式里。</li>
+      <li>能用大脑 / 眼睛 / 手脚各举一个 Cursor 式任务里的例子。</li>
+      <li>能讲清「没进上下文 = 不存在」；磁盘有文件不是观察。</li>
+      <li>能用三案区分缺 LLM / 缺上下文 / 缺工具；能把「路径写死」标成工作流。</li>
+      <li><code>classify.py</code> 跑通，四个判定和上面表格一致。</li>
+    </ul>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>主来源：本地书 <strong>第 1 章 §1.1</strong> 开头到「大脑 + 眼睛 + 手脚」那几段。后面的产品案例、五类工具先别读；ReAct 见 <a href="./0019-react-loop.html">0019</a>。</li>
+        <li>用语压缩：<a href="../../reference/phase-1/formula.html">阶段 1 公式速查</a> · <a href="../../GLOSSARY.md">GLOSSARY.md</a></li>
+        <li>形状预习（已过关）：<a href="../phase-0/0003-control-flow-agent-loop.html">0003 最小 loop</a>——本课不要求重跑。</li>
+      </ul>
+    </div>
+    <p>
+      <a href="./index.html">阶段 1 分册</a>
+      · <a href="../../reference/path.html">三份材料怎么配</a>
+    </p>
+    <div data-lesson-id-footer="0017"></div>
+    <footer>
+      不清楚的立刻问我。0017 过关后再开 0018（Agency vs Harness），不要提前跑 North s01。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

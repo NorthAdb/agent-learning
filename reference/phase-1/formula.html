@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>阶段 1 · 公式速查</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+  <link rel="stylesheet" href="../../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="../index.html">速查索引</a> · 课 0017 · 打印友好</p>
+    <h1>Agent 公式</h1>
+    <p class="mission">书 Ch1：加号是工程组合，不是强化学习里的「+」。环境不在公式里。</p>
+
+    <pre>Agent = LLM + 上下文 + 工具
+      = 大脑 + 眼睛 + 手脚
+
+Agent  ↔  Environment（环境在外面）</pre>
+
+    <table>
+      <tr><th>零件</th><th>比喻</th><th>干什么</th><th>缺了会怎样</th></tr>
+      <tr>
+        <td>LLM</td>
+        <td>大脑</td>
+        <td>理解意图、规划、决定下一步（含是否调工具）</td>
+        <td>只剩脚本 / cron，没有决策内核</td>
+      </tr>
+      <tr>
+        <td>上下文</td>
+        <td>眼睛</td>
+        <td>这一次决策能看到的全部信息（观察转成文本后的那一包）</td>
+        <td>仓库里有文件也等于看不见</td>
+      </tr>
+      <tr>
+        <td>工具</td>
+        <td>手脚</td>
+        <td>感知或改变外部世界的接口（读文件、跑命令、HTTP…）</td>
+        <td>只能纸上谈兵，改不了环境</td>
+      </tr>
+    </table>
+
+    <h2>三案 + 一条边界</h2>
+    <table>
+      <tr><th>有什么</th><th>谁决定下一步</th><th>本仓库怎么叫</th></tr>
+      <tr><td>只有 LLM（单次补全）</td><td>—</td><td>不是 Agent</td></tr>
+      <tr><td>LLM + 上下文，无工具</td><td>—</td><td>不是 Agent（能看不能做）</td></tr>
+      <tr><td>LLM + 工具，路径写死</td><td>代码</td><td>工作流，不是自主 Agent</td></tr>
+      <tr><td>LLM + 上下文 + 工具 + 循环</td><td>模型</td><td>自主 Agent</td></tr>
+    </table>
+
+    <h2>循环已展开</h2>
+    <ul>
+      <li>两套公式怎么叠、Agency vs Harness 见 <a href="./agency-harness.html">0018 速查</a>。</li>
+      <li>想 → 做 → 看，见 <a href="./react-loop.html">0019 循环速查</a>。课 0003 的 Python while 只是形状预习。</li>
+    </ul>
+
+    <p>
+      <a href="../../lessons/phase-1/0017-agent-formula.html">打开 0017</a>
+      · <a href="../agent-stack.html">用语速查</a>
+      · <a href="../../GLOSSARY.md">GLOSSARY</a>
+    </p>
+    <footer>术语冲突以 GLOSSARY.md 为准。</footer>
+  </main>
+</body>
+</html>

@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0018 · Agency vs Harness</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0018"></div>
+    <h1>Agency vs Harness：决策在模型，载具是外壳</h1>
+    <p class="mission">
+      使命要求你指出 <strong>Harness 落在哪一层</strong>。
+      0017 给了零件清单（LLM + 上下文 + 工具）。
+      本课叠上第二套公式：<strong>Agent = Model + Harness</strong>——谁做决策，谁提供世界。
+      不跑 North <code>code.py</code>；循环怎么转留给 0019。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      书 <strong>§1.2 开头</strong>（两个公式怎么叠、最小 vs 生产 Harness）+
+      North <code>README-zh.md</code> 前半（Agency 来自模型；载具公式）。
+      读完本页即可过关。
+    </p>
+    <p class="muted">
+      点带行号的链接（如 L273）会在 Cursor 里打开该行。
+      旁边的文件名是仓库里的 Markdown，也可以直接打开。
+      不要点「同上」——那不是链接。
+    </p>
+    <h3>本课新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>去哪看</th></tr>
+      <tr>
+        <td><strong>Agency</strong></td>
+        <td>感知、推理、行动的能力；来自训练，不是编排代码赋予的</td>
+        <td>
+          书 Ch1 <strong>没有</strong>这个词。<br>
+          <a href="../../learn-claude-code-north/README-zh.md">North README-zh.md</a>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:5">L5</a>
+          标题「Agency 来自模型」；定义在
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:9">L9</a>
+        </td>
+      </tr>
+      <tr>
+        <td><strong>Model</strong>（书）</td>
+        <td>把 0017 的 LLM 叫作 Model</td>
+        <td>
+          <a href="../../AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md">书 第01章</a>
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:261">L261</a>
+          §1.2；公式在
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:270">L270</a>
+        </td>
+      </tr>
+      <tr>
+        <td><strong>约束 / 验证 / 纠正</strong></td>
+        <td>生产 Harness 三保障</td>
+        <td>
+          <a href="../../AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md">书 第01章</a>
+          §1.2 正文
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:273">L273</a>
+          ；三保障表
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:277">L277</a>
+          ；伪代码
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:288">constrain L288</a>
+          /
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:290">verify L290</a>
+          /
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:291">correct L291</a>
+        </td>
+      </tr>
+      <tr>
+        <td><strong>提示词水管工</strong></td>
+        <td>用节点图 / if-else 冒充「做了 Agent」</td>
+        <td>
+          README
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:31">L31</a>
+          节「Agent 不是什么」；定性句
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:39">L39</a>
+        </td>
+      </tr>
+      <tr>
+        <td>North 五件套</td>
+        <td>Tools + Knowledge + Observation + Action + Permissions</td>
+        <td>
+          README
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:43">L43</a>
+          「心智转换」；公式块
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:54">L54</a>
+        </td>
+      </tr>
+    </table>
+    <table>
+      <tr><th>来源要点</th><th>本课</th></tr>
+      <tr><td>Agent = Model + Harness；与 0017 公式不是互相作废</td><td><span class="tag">已内化</span>讲解 1</td></tr>
+      <tr><td>Agency 来自训练；模型是驾驶者，harness 是载具</td><td><span class="tag">已内化</span>讲解 2</td></tr>
+      <tr><td>「我在开发 Agent」三案：训练 / 造载具 / 水管工</td><td><span class="tag">已内化</span>讲解 2</td></tr>
+      <tr><td>最小 Harness = 上下文管理 + 工具接口；生产 + 约束 / 验证 / 纠正</td><td><span class="tag">已内化</span>讲解 3</td></tr>
+      <tr><td>North 五件套与书的切法对照</td><td><span class="tag">已内化</span>讲解 4（一张表，不展开各章）</td></tr>
+      <tr><td>Atari / Dota / 绝悟等训练史</td><td><span class="tag">跳过</span>选读 README；记住「Agency 是练出来的」即可</td></tr>
+      <tr><td>§1.2.3 选型、§1.2.4 框架表、§1.2.5 护栏三层</td><td><span class="tag">跳过</span>使命不做封装层；护栏以后按章补</td></tr>
+      <tr><td>L02 五子系统（指令/工具/环境/状态/反馈）</td><td><span class="tag">跳过</span>阶段 2 动手前再开</td></tr>
+      <tr><td>ReAct / 最小循环图</td><td><span class="tag">见 0019</span> <a href="./0019-react-loop.html">最小 loop</a></td></tr>
+      <tr><td>L01 能力鸿沟</td><td><span class="tag">见 0020</span> <a href="./0020-fail-check-harness.html">失败先查 harness</a></td></tr>
+    </table>
+
+    <h2>为什么要学？（动机）</h2>
+    <p>
+      你已经会用 Cursor。缺的不是再记一个框架名字，而是分清：
+      <strong>智能在权重里</strong>，你要写的代码是<strong>让这匹马跑得起来的马具</strong>。
+      分不清，就会去堆节点图，还以为自己在「开发 Agent」。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>本课概念</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr>
+        <td>Agency / Model</td>
+        <td>你调的决策服务（规则在别人的二进制里）</td>
+        <td>你改不了它怎么想；只能换模型或（本仓库不做）后训练</td>
+      </tr>
+      <tr>
+        <td>Harness</td>
+        <td>你写的适配器、权限、重试、审计</td>
+        <td>组装上下文、执行工具、设边界；不代替模型做规划</td>
+      </tr>
+      <tr>
+        <td>约束</td>
+        <td>鉴权 / 沙箱 / 审批</td>
+        <td>拦的是「准不准做」，不是把调用顺序写死</td>
+      </tr>
+      <tr>
+        <td>验证</td>
+        <td>CI：测试不过就不合并</td>
+        <td>完成定义要能跑命令；不能只听「我做完了」</td>
+      </tr>
+      <tr>
+        <td>纠正</td>
+        <td>重试、补偿、回滚</td>
+        <td>本课只认名字；North 后半才展开</td>
+      </tr>
+      <tr>
+        <td>提示词水管工</td>
+        <td>巨型 if-else 假装专家在思考</td>
+        <td>LLM 被楔成文本补全节点；没有把决策交给模型</td>
+      </tr>
+    </table>
+
+    <h2>系统讲解</h2>
+
+    <h3>1. 两套公式怎么叠</h3>
+    <h4>1.1 它是什么？</h4>
+    <p>
+      书在 §1.2 把 LLM 称作 <strong>Model</strong>，把 Agent 边界内、模型之外的代码/配置/服务统称为 <strong>Harness</strong>。
+      写成：<strong>Agent = Model + Harness</strong>。
+    </p>
+    <p class="src">
+      原文：
+      <a href="../../AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md">第01章.md</a>
+      · <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:261">§1.2 L261</a>
+      · 公式 <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:270">L270</a>
+      · 「最小 Demo / 生产」<a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:273">L273</a>
+    </p>
+    <pre>0017  Agent = LLM + 上下文 + 工具
+0018  Agent = Model + Harness
+
+Model          = LLM（大脑，同一块）
+最小 Harness   = 上下文管理 + 工具接口
+生产 Harness   = 最小 + 约束 + 验证 + 纠正</pre>
+    <p>
+      不是换了一套分类把 0017 作废。
+      0017 回答「有哪三块零件」；本课回答「零件里谁做决策、谁提供世界」。
+      眼睛和手脚这一侧，就是最小 harness。
+    </p>
+    <p class="muted">
+      <strong>后训练</strong>：预训练之后继续用数据改权重（微调、强化学习等）。
+      那是在改 Agency。本书第八章才展开；本仓库地基阶段不做。
+    </p>
+
+    <h4>1.2 小例</h4>
+    <p>用户说：「看看 <code>app.py</code> 的 TODO，改掉并跑测试。」</p>
+    <table>
+      <tr><th>层</th><th>这一次谁干</th></tr>
+      <tr><td>Model</td><td>决定：先 read，再 edit，再 bash <code>pytest</code></td></tr>
+      <tr><td>最小 Harness</td><td>把工具说明书塞进上下文；真的读文件、改文件、跑测试；把输出追加回去</td></tr>
+      <tr><td>生产 Harness</td><td>危险命令要审批（约束）；pytest 不过不算完成（验证）；超时重试（纠正）</td></tr>
+      <tr><td>Environment</td><td>磁盘上的真实 <code>app.py</code>（仍在公式外，0017）</td></tr>
+    </table>
+
+    <h3>2. Agency 来自模型，不是来自编排</h3>
+    <h4>2.1 它是什么？</h4>
+    <p>
+      <strong>Agency</strong> 是英语里「能自己感知、推理、采取行动」的那种能力。
+      本课用的定义来自 North，不是书 Ch1——书里用「大脑 / LLM」，<strong>没有</strong>写 Agency 这个词。
+    </p>
+    <blockquote>
+      Agency -- 感知、推理、行动的能力 -- 来自模型训练，不是来自外部代码的编排。
+    </blockquote>
+    <p class="src">
+      原文就这一句，在
+      <a href="../../learn-claude-code-north/README-zh.md">learn-claude-code-north/README-zh.md</a>
+      · 标题 <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:5">L5「Agency 来自模型，Agent 产品 = 模型 + Harness」</a>
+      · 加粗定义 <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:9">L9</a>
+      · 再解释一遍 <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:11">L11 节「Agency 从哪来」</a>
+    </p>
+    <p>
+      拆开记三件事：
+    </p>
+    <ul>
+      <li><strong>是什么</strong>：感知环境、推理目标、采取行动的能力（不是某一个 Python 类名）。</li>
+      <li><strong>从哪来</strong>：模型训练（权重里），不是你写的 if-else / 节点图给它「赋予」的。</li>
+      <li><strong>和 Harness 的差别</strong>：模型是驾驶者（有 Agency）；harness 是载具（工具、上下文、权限）。同一句 L9：「模型是驾驶者，harness 是载具。」</li>
+    </ul>
+    <p>
+      <strong>提示词水管工</strong>（North 的贬义说法）：把 LLM API 用分支、节点图、提示词链串起来，
+      当作「构建了 Agent」。模型只在节点里当文本补全。
+      那是 0017 的工作流（或更碎的规则管道），不是把决策交给模型。
+    </p>
+    <p class="src">
+      原文：README
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:31">L31「Agent 不是什么」</a>
+      · 「不可能通过工程手段编码出 agency」在
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:39">L39</a>
+    </p>
+
+    <h4>2.2 三案：有人说「我在开发 Agent」</h4>
+    <table>
+      <tr><th>案</th><th>实际在做</th><th>判定</th></tr>
+      <tr>
+        <td>①</td>
+        <td>收集轨迹、微调 / RL，改权重</td>
+        <td>开发 Agency。DeepMind / OpenAI / Anthropic 的本义。本仓库不做</td>
+      </tr>
+      <tr>
+        <td>②</td>
+        <td>实现工具、拼上下文、管权限、跑验证</td>
+        <td>开发 Harness。你以后读 North s01–s20 就是这个</td>
+      </tr>
+      <tr>
+        <td>③</td>
+        <td>拖拽节点、硬编码路由、祈祷胶水涌现智能</td>
+        <td>不是。水管工 / 工作流，装不出 Agency</td>
+      </tr>
+    </table>
+    <p>
+      使命选的是 ②。阶段 2 起跑 <code>code.py</code>，不是去训模型，也不是去学 LangGraph。
+    </p>
+    <p class="src">
+      「我在开发 Agent」只能是训练或造 harness 这两种：README
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:43">L43–50</a>
+    </p>
+
+    <h3>3. 最小 vs 生产：约束、验证、纠正</h3>
+    <p>书：能跑的 Demo 只要 Model + 会拼上下文、会暴露工具的 Harness。可靠产品还要三层保障。</p>
+    <p class="src">
+      原文：书 §1.2
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:273">L273</a>
+      「最小 Demo 只需 Model 和能构造上下文、暴露工具的 Harness；生产系统还要…约束、验证和纠正」。
+      三保障表在
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:277">L277</a>。
+      伪代码：
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:288">constrain L288</a>
+      /
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:290">verify L290</a>
+      /
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:291">correct L291</a>。
+    </p>
+    <table>
+      <tr><th>词</th><th>是什么</th><th>干什么</th><th>别和谁混</th></tr>
+      <tr>
+        <td><strong>约束</strong></td>
+        <td>限定能做 / 不能做</td>
+        <td>权限、沙箱、金额上限、审批</td>
+        <td>不是把下一步写死（那是工作流）</td>
+      </tr>
+      <tr>
+        <td><strong>验证</strong></td>
+        <td>检查做得对不对</td>
+        <td>测试、lint、显式完成定义</td>
+        <td>不是模型口头说「完成了」</td>
+      </tr>
+      <tr>
+        <td><strong>纠正</strong></td>
+        <td>错了怎么补救</td>
+        <td>重试、回退、换工具</td>
+        <td>不是验证本身；细节以后按章补</td>
+      </tr>
+    </table>
+    <p>
+      三案（Harness 厚度）：
+      <strong>① 最小</strong>只拼上下文 + 跑工具；
+      <strong>② 生产</strong>加上三保障；
+      <strong>③ 假的</strong>只有一份超长 prompt——那不是 harness。
+    </p>
+
+    <h3>4. North 五件套：同一层载具的另一种切法</h3>
+    <p>
+      North 把编程 agent 的 harness 写成：
+      <strong>Tools + Knowledge + Observation + Action Interfaces + Permissions</strong>。
+      和书的「上下文管理 / 工具接口 / 约束…」描述同一层，不必背成两套产品。
+    </p>
+    <p class="src">
+      原文：README
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:54">L54–61</a>
+      公式块；工程师日常
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:69">L69</a>。
+    </p>
+    <table>
+      <tr><th>North</th><th>一句话</th><th>多半落在书的</th></tr>
+      <tr><td>Tools / Action</td><td>能调的动作；以及怎么把动作打到环境（CLI、API）</td><td>工具接口</td></tr>
+      <tr><td>Knowledge</td><td>文档、规范、风格指南（按需加载，别一次塞满）</td><td>上下文管理</td></tr>
+      <tr><td>Observation</td><td>git diff、错误日志、测试输出 → 转成上下文</td><td>上下文管理</td></tr>
+      <tr><td>Permissions</td><td>沙箱、审批、信任边界</td><td>约束</td></tr>
+    </table>
+    <p class="muted">
+      North 还列了 harness 工程师日常：实现工具、策划知识、管理上下文、控制权限。
+      「收集轨迹去训练下一代模型」是加分项，不是本阶段作业。
+    </p>
+
+    <h2>主脚本导读</h2>
+    <p>
+      打开并运行
+      <a href="../../playground/phase-1/0018-agency-vs-harness/label_jobs.py"><code>playground/phase-1/0018-agency-vs-harness/label_jobs.py</code></a>。
+      八件工作已贴好标签，对照讲解 1–3。
+    </p>
+    <table>
+      <tr><th>编号</th><th>看什么</th><th>标签</th></tr>
+      <tr><td>①</td><td>谁决定先 read 再 pytest</td><td>Agency / 模型</td></tr>
+      <tr><td>②③</td><td>追加正文、真跑 bash</td><td>最小 Harness</td></tr>
+      <tr><td>④⑤⑥</td><td>拦截危险命令 / 测试门禁 / 超时重试</td><td>生产：约束、验证、纠正</td></tr>
+      <tr><td>⑦</td><td>四节点订票</td><td>工作流（接 0017）</td></tr>
+      <tr><td>⑧</td><td>微调让模型更会选工具</td><td>训练 Agency（不做）</td></tr>
+    </table>
+    <pre>cd d:\agent-learning\playground\phase-1\0018-agency-vs-harness
+python label_jobs.py</pre>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>两套公式打架</strong>：不打架。0017 是零件；本课是驾驶者 vs 载具。</li>
+        <li><strong>把整个 Cursor 叫「模型」</strong>：模型只是大脑；循环、工具、权限是 harness。</li>
+        <li><strong>以为写了 AGENTS.md 就有完整 harness</strong>：那是指令的一部分；还要工具接口和治理。L02 以后再拆。</li>
+        <li><strong>用节点图「做出」Agency</strong>：编排不出感知—推理—行动；那是水管工。</li>
+        <li><strong>约束 = 写死步骤</strong>：约束是护栏；步骤由模型选（自主 Agent）。</li>
+        <li><strong>本课去跑 s01 / 去读 L01</strong>：过密。循环 0019，失败归因 0020。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。Agency 是训练出来的，不是 if-else 赋予的。"
+      data-bad="编排代码造不出感知—推理—行动；那是载具，不是驾驶者。">
+      <p>North 说的 Agency 从哪来？</p>
+      <button data-correct="true">来自模型训练，不是编排的</button>
+      <button data-correct="false">来自代码分支把智能写进去</button>
+      <button data-correct="false">来自把说明文档写得足够长</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。Model 就是 LLM；上下文加工具是最小 Harness。"
+      data-bad="第二套公式是同一实现的另一刀，并不作废 0017。">
+      <p>0017 公式和「Agent = Model + Harness」怎么叠？</p>
+      <button data-correct="true">大脑即模型，那两块最小载具</button>
+      <button data-correct="false">后一套分类把前一套整段作废</button>
+      <button data-correct="false">载具就是外面那一层运行环境</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。拦的是准不准做，不是把下一步写死。"
+      data-bad="写死「验证→搜索→付款」是工作流，不是约束。">
+      <p>拦截 <code>rm -rf /</code>、先问用户，属于？</p>
+      <button data-correct="true">约束：给驾驶者装上护栏了</button>
+      <button data-correct="false">工作流：下一步必须按节点</button>
+      <button data-correct="false">能力：模型自己改了权重了</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。本仓库造载具，不训练权重，也不靠节点图装智能。"
+      data-bad="微调是开发 Agency；节点图是水管工。">
+      <p>按使命，你接下来主要在做哪一件？</p>
+      <button data-correct="true">造载具，不去训练权重</button>
+      <button data-correct="false">先微调模型再去写循环</button>
+      <button data-correct="false">用节点图来模拟出智能</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能说出两套公式怎么叠：Model = LLM；最小 Harness = 上下文管理 + 工具接口。</li>
+      <li>能用自己的话回答「Agency 是什么」，并指出原文在 README-zh.md 第 9 行（书里没有这个词）。</li>
+      <li>能用三案区分：训练 / 造 harness / 水管工（含 0017 的工作流）。</li>
+      <li>能用一句话区分约束、验证、纠正；知道「只有超长 prompt ≠ harness」。</li>
+      <li><code>label_jobs.py</code> 跑通，八条标签能对上表。</li>
+    </ul>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>书 §1.2：<a href="../../AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md">第01章.md</a>
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:261">L261</a>
+          到「最小 Demo vs 生产」（<a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:273">L273</a>）。后面的选型、框架表、护栏三层先别读。</li>
+        <li>North <a href="../../learn-claude-code-north/README-zh.md">README-zh.md</a>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:5">L5</a>
+          「Agency 来自模型」到
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:69">L69</a>
+          「Harness 工程师到底在做什么」。训练史与宇宙愿景可略。</li>
+        <li>压缩：<a href="../../reference/phase-1/agency-harness.html">Agency / Harness 速查</a> ·
+          <a href="../../reference/phase-1/formula.html">公式速查</a></li>
+      </ul>
+    </div>
+    <p>
+      <a href="./index.html">阶段 1 分册</a>
+      · <a href="./0017-agent-formula.html">上一课 0017</a>
+    </p>
+    <div data-lesson-id-footer="0018"></div>
+    <footer>
+      不清楚的立刻问我。0018 已过关。下一课 0019（最小 loop），仍不要跑 North s01。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

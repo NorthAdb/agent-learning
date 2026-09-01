@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0004 · 函数与模块：拆开 Agent loop</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0004"></div>
+    <h1>函数与模块：拆开 Agent loop</h1>
+    <p class="mission">
+      上一课的 <code>mini_agent_loop.py</code> 把工具、假模型和 loop 塞进同一个文件。
+      真实 harness 不会这样：加一个 RAG 工具不该去改循环。
+      今天的<strong>主技能</strong>是 Python 的函数与模块；<strong>载体</strong>是把那个 loop 拆成可复用的几个 <code>.py</code>。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">对应 <a href="../../python-100Days/Day01-20/14.函数和模块.md">Python-100-Days · Day14</a>。读完本页即可过关，不必先翻原书。</p>
+    <table>
+      <tr><th>来源</th><th>本课怎么处理</th></tr>
+      <tr>
+        <td>Day14：<code>def</code> / <code>return</code>、位置与关键字参数、默认值、<code>*args</code> / <code>**kwargs</code>、<code>import</code></td>
+        <td><span class="tag">已内化</span>下面系统讲解 + 可运行小例</td>
+      </tr>
+      <tr>
+        <td>Day14：组合数 / 阶乘长引子</td>
+        <td><span class="tag">压缩</span>只保留结论：重复代码用函数消掉</td>
+      </tr>
+      <tr>
+        <td>Day14：<code>/</code> 强制位置参数、内置函数全家表</td>
+        <td><span class="tag">跳过</span>冷门；Agent 脚本里几乎用不到</td>
+      </tr>
+      <tr>
+        <td>Day07：素数 / 斐波那契 / 水仙花</td>
+        <td><span class="tag">跳过</span>纯算法趣味；控制流已在 <a href="./0003-control-flow-agent-loop.html">0003</a> 用 agent loop 练过</td>
+      </tr>
+      <tr>
+        <td>Day08–13：列表 / 元组 / 字符串 / 集合 / 字典深挖</td>
+        <td><span class="tag">下一课</span>RAG 要切文本、拼 dict；拆两课：0005 列表与元组（Day08–10）、0006 字符串·字典·集合（Day11–13）</td>
+      </tr>
+      <tr>
+        <td>Day15 趣味实战；Day16 高阶函数 / lambda / 偏函数</td>
+        <td><span class="tag">后续</span>类型标注本课点到；lambda 只对照 0003 的 TOOLBOX</td>
+      </tr>
+    </table>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>Python</th><th>Java 直觉</th></tr>
+      <tr><td><code>def rag_search(query, top_k=3)</code></td><td>方法；默认参数常用重载或 <code>Optional</code></td></tr>
+      <tr><td>忘写 <code>return</code> → 得到 <code>None</code></td><td><code>void</code> 没有返回值；引用类型才可能 <code>null</code></td></tr>
+      <tr><td><code>fn(**arguments)</code></td><td>没有等价语法；只能从 <code>Map</code> 里一个个 <code>get</code></td></tr>
+      <tr><td>一个 <code>.py</code> 文件就是一个模块</td><td>一个 public 类通常一个文件；包是目录</td></tr>
+      <tr><td><code>import tools</code> / <code>from tools import run_tool</code></td><td><code>import com.foo.Tools</code></td></tr>
+      <tr><td><code>if __name__ == "__main__"</code></td><td><code>public static void main</code>：入口，不是被引用时的副作用</td></tr>
+      <tr><td>函数是对象，可以放进 <code>dict</code></td><td>方法引用 / 函数式接口；不能直接当 Map 的值那么随便</td></tr>
+      <tr><td><code>def f(xs=[])</code></td><td>像类上的共享 <code>ArrayList</code> 字段，不是方法里每次 <code>new</code></td></tr>
+    </table>
+
+    <h2>系统讲解</h2>
+
+    <h3>1. 为什么要函数</h3>
+    <p>
+      Day14 用「求三次阶乘」开场：三段几乎一样的循环。
+      <a href="https://docs.python.org/3/tutorial/controlflow.html#defining-functions">Python 官方教程</a>
+      和教材的结论一样：把独立且会重复的逻辑封进函数，需要时<strong>调用</strong>而不是复制。
+      Agent 里同样：<code>run_tool</code> 每轮每个 tool_call 都要走一遍，必须是函数，不能把实现贴进 loop。
+    </p>
+    <pre>def fac(num):
+    result = 1
+    for n in range(2, num + 1):
+        result *= n
+    return result
+
+print(fac(7) // fac(3) // fac(4))  # 组合数 C(7,3) = 35</pre>
+    <p class="muted">已有现成实现就别自己造：标准库是 <code>from math import factorial</code>。Agent 侧同理——检索、HTTP、JSON 优先用库。</p>
+
+    <h3>2. 定义、返回值、<code>None</code></h3>
+    <p>
+      <code>def 名字(参数):</code> 下一行起缩进的块就是函数体。
+      <code>return x</code> 把值交回调用方并立刻结束函数。
+      没有 <code>return</code> 时，Python 返回 <code>None</code>（不是「没有值」这种 Java <code>void</code>，而是一个真对象）。
+      <strong>没有 return ≠ 函数体不执行。</strong>
+      调用 <code>log_only("hi")</code> 时，里面的 <code>print</code> 照常跑（这是副作用）；函数结束后才把 <code>None</code> 交回。
+      所以 <code>print("log_only ->", log_only(...))</code> 会先打印 <code>(logged)</code>，再打印 <code>log_only -> None</code>——外层 <code>print</code> 必须先把括号里的调用算完，才能打印那个返回值。
+    </p>
+    <pre>def wrap_observation(text: str) -&gt; dict:
+    return {"role": "tool", "content": text}
+
+def log_only(text: str) -&gt; None:
+    print("logged", text)   # 没有 return
+
+obs = wrap_observation("ok")   # dict
+x = log_only("hi")             # x is None</pre>
+    <p>
+      <code>text: str</code> 和 <code>-&gt; dict</code> 是<strong>类型标注</strong>：给读代码的人（和检查器）看，<strong>不改变运行结果</strong>。
+      <a href="../../python-100Days/Day01-20/15.函数应用实战.md">Day15</a> 会写更长；本课只要看见别慌。
+      0003 文件开头的 <code>from __future__ import annotations</code> 让这些标注延迟求值，现在当注释即可。
+    </p>
+
+    <h3>3. 位置参数、关键字参数、默认值</h3>
+    <p>调用时可以按位置从左到右传，也可以 <code>名字=值</code>。官方规则：<strong>关键字参数必须写在位置参数后面</strong>；带默认值的形参必须写在不带默认值的后面。</p>
+    <pre>def call_model(prompt, temperature=0.2, max_tokens=256):
+    return f"{prompt!r} t={temperature} n={max_tokens}"
+
+call_model("hi")                          # 后两个用默认值
+call_model("hi", 0.0)                     # 位置：temperature=0.0
+call_model("hi", temperature=0.0)         # 关键字：可读，顺序可换
+call_model(max_tokens=32, prompt="hi")    # 合法：关键字可乱序
+# call_model(temperature=0.0, "hi")       # 语法错：位置参数不能跟在关键字后面
+# def bad(max_turns=5, user):             # 语法错：默认值形参不能排在必填前面</pre>
+    <p>
+      Agent 配置里大量默认值：<code>agent_loop(max_turns=5)</code>、<code>rag_search(..., top_k=3)</code>。
+      模型省略某个字段时，函数仍能跑。
+    </p>
+
+    <h3>4. <code>*args</code> / <code>**kwargs</code>，以及调用时的 <code>**</code></h3>
+    <p>这是本课最要记住的一条，因为 0003 已经在用它。</p>
+    <table>
+      <tr><th>写法</th><th>出现位置</th><th>含义</th></tr>
+      <tr><td><code>*args</code></td><td>定义函数</td><td>多出来的<strong>位置</strong>参数收成一个 <code>tuple</code></td></tr>
+      <tr><td><code>**kwargs</code></td><td>定义函数</td><td>多出来的<strong>关键字</strong>参数收成一个 <code>dict</code></td></tr>
+      <tr><td><code>*seq</code></td><td>调用函数</td><td>把序列拆成位置参数</td></tr>
+      <tr><td><code>**mapping</code></td><td>调用函数</td><td>把 dict 拆成关键字参数</td></tr>
+    </table>
+    <pre>def rag_search(query, top_k=3):
+    return [{"query": query, "top_k": top_k}]
+
+arguments = {"query": "what is harness", "top_k": 2}
+
+# 两行完全等价（官方教程叫 “dictionaries can deliver keyword arguments”）
+rag_search(query="what is harness", top_k=2)
+rag_search(**arguments)</pre>
+    <p>
+      模型吐出的 tool call 几乎总是 <code>{"name": "...", "arguments": {...}}</code>。
+      harness 不知道每个工具要哪些字段，于是：查注册表得到函数，再 <code>fn(**arguments)</code>。
+      字段对不上会 <code>TypeError</code>——所以 <code>run_tool</code> 要接住它，变成可观察的 error，而不是把进程打死。
+    </p>
+    <p class="muted">
+      <code>def foo(*args, **kwargs)</code> 能吞任意参数，调试方便，作公共 API 时会把错误推迟到函数内部。
+      工具函数优先写出明确形参（<code>query</code>、<code>top_k</code>），让错误发生在调用那一刻。
+    </p>
+
+    <h3>5. 可变默认值：只创建一次</h3>
+    <p>
+      官方教程有一条警告：<strong>默认值在定义函数时求值一次</strong>，不是每次调用都新建。
+      默认值如果是 <code>list</code> / <code>dict</code>，多次调用会共用同一个对象——Java 里「每次 new ArrayList」的直觉在这里是错的。
+    </p>
+    <pre>def bad_collect(item, bucket=[]):
+    bucket.append(item)
+    return bucket
+
+bad_collect("a")  # ['a']
+bad_collect("b")  # ['a', 'b']  ← 不是 ['b']
+
+def good_collect(item, bucket=None):
+    if bucket is None:
+        bucket = []
+    bucket.append(item)
+    return bucket</pre>
+    <p>
+      <code>history=[]</code> 和上面的 <code>bucket=[]</code> 是<strong>同一条规则</strong>，不是 Agent 另有一套坑。
+      <code>[]</code> 在 <code>def</code> 被执行时创建一次；之后凡是没传这个参数的调用，拿到的都是<strong>同一个 list 对象</strong>。
+      Java 在方法里写 <code>new ArrayList&lt;&gt;()</code> 才是每次新建；Python 把可变对象写在默认参数上，更像给函数配了一个静态共享字段。
+    </p>
+    <pre>def agent_loop(user_msg, history=[]):
+    history.append(user_msg)
+    return history
+
+agent_loop("用户A：检索 harness")
+# ["用户A：检索 harness"]
+agent_loop("用户B：你好")
+# ["用户A：检索 harness", "用户B：你好"]  ← B 的会话里漏进了 A</pre>
+    <p>进程还活着，这个默认 list 就还在。重新跑一次 <code>python examples.py</code> 会重新定义函数，默认值会再创建一次；「漏」的范围是<strong>同一次运行里的多次调用</strong>，不是写进磁盘、也不是跨机器。</p>
+    <p>默认改成 <code>None</code>、进函数再 <code>[]</code>，两次没传 <code>history</code> 的调用就各拿一份新 list，A / B 不会串：</p>
+    <pre>def agent_loop(user_msg, history=None):
+    if history is None:
+        history = []          # 这次调用才新建
+    history.append(user_msg)
+    return history
+
+agent_loop("用户A：检索 harness")  # ["用户A：检索 harness"]
+agent_loop("用户B：你好")          # ["用户B：你好"]</pre>
+    <p>
+      <code>None</code> 只修「没传参数时误共用」。同一场对话要记上下文，必须<strong>自己拿着一份 list 反复传入</strong>——这时累加是刻意的：
+    </p>
+    <pre>session = []
+agent_loop("第一句", history=session)
+agent_loop("第二句", history=session)  # session == ["第一句", "第二句"]</pre>
+    <p class="muted">
+      工具缓存同理：<code>def get_tool(name, cache={})</code> 会让所有调用共用一本 dict。
+      做成进程内缓存可以是故意的；当成「这一次请求的临时表」就会在请求之间漏数据。可变对象默认用 <code>None</code>，进函数再创建；要共享就显式传入或放到模块级变量上，别靠默认参数暗共用。
+    </p>
+
+    <h3>6. 模块：一个 <code>.py</code> 就是一个命名空间</h3>
+    <p>
+      <a href="https://docs.python.org/3/tutorial/modules.html">官方 Modules 章</a>：模块是包含定义的文件，文件名去掉 <code>.py</code> 就是模块名。
+      <code>tools.py</code> 里的 <code>run_tool</code>、<code>TOOLBOX</code> 都活在名叫 <code>tools</code> 的命名空间里。
+      <code>tools</code> 是<strong>模块</strong>（整个 <code>.py</code> 文件加载后的那个对象），不是函数，也不是函数列表。
+      它比 <code>run_tool</code> 大：抽屉里现在有 <code>read_file</code>、<code>rag_search</code>、<code>shell</code>、<code>TOOLBOX</code>、<code>run_tool</code>。
+      <code>run_tool</code> 只是其中<strong>一个</strong>函数。
+      <code>import</code> 不是「复制一份代码进来」，而是：加载那个文件（每个进程只加载一次），再决定<strong>在你当前这个文件里出现哪些名字</strong>。
+    </p>
+    <p>下面四行加载的都是同一份 <code>tools.py</code>。差别只在「写完这行之后，你能用哪个名字去摸 <code>run_tool</code>」。</p>
+    <table>
+      <tr><th>写法</th><th>当前文件多了谁</th><th>怎么调用</th><th>当前文件没有谁</th></tr>
+      <tr>
+        <td><code>import tools</code></td>
+        <td>模块名 <code>tools</code></td>
+        <td><code>tools.run_tool(...)</code></td>
+        <td>短名 <code>run_tool</code>（直接写会 <code>NameError</code>）</td>
+      </tr>
+      <tr>
+        <td><code>from tools import run_tool</code></td>
+        <td>函数名 <code>run_tool</code></td>
+        <td><code>run_tool(...)</code></td>
+        <td>模块名 <code>tools</code>（不能写 <code>tools.TOOLBOX</code>）</td>
+      </tr>
+      <tr>
+        <td><code>from tools import run_tool as exec_tool</code></td>
+        <td>别名 <code>exec_tool</code></td>
+        <td><code>exec_tool(...)</code></td>
+        <td><code>tools</code> 和 <code>run_tool</code></td>
+      </tr>
+      <tr>
+        <td><code>import tools as t</code></td>
+        <td>别名 <code>t</code></td>
+        <td><code>t.run_tool(...)</code></td>
+        <td>原模块名 <code>tools</code></td>
+      </tr>
+    </table>
+    <p>
+      本课主脚本用的是第二种：<code>loop.py</code> 里 <code>from tools import run_tool</code>，所以函数体里直接 <code>run_tool(name, args)</code>。
+      <code>run.py</code> 同理：<code>from loop import agent_loop</code>，然后 <code>agent_loop()</code>。
+      若改成 <code>import tools</code>，loop 里每一处都要写成 <code>tools.run_tool</code>——功能一样，只是名字带前缀，两个模块都有 <code>foo</code> 时不容易撞车。
+    </p>
+    <p>和 Java 对照：</p>
+    <ul>
+      <li><code>import tools</code> ≈ <code>import com.foo.Tools;</code>，用时写 <code>Tools.run()</code></li>
+      <li><code>from tools import run_tool</code> ≈ static import，用时直接 <code>run_tool()</code></li>
+      <li><code>as</code> 是给名字换短称；Java 没有同等语法，Python 里用来避免撞名或缩短长模块名</li>
+    </ul>
+    <ul>
+      <li>后写的 <code>from b import foo</code> 会覆盖先写的 <code>from a import foo</code>。两个都要留，用 <code>as</code> 起不同名，或改回 <code>a.foo</code> / <code>b.foo</code>。</li>
+      <li><code>from tools import *</code> 官方不推荐：你不知道污染了哪些名字。本课练习禁止用。</li>
+      <li>解释器对每个模块只加载一次；改了 <code>tools.py</code> 要重新运行脚本（或重启 REPL），不是再 <code>import</code> 一次就会刷新。</li>
+    </ul>
+    <p>跑对照（四个函数各自一块局部名字，互不污染）：
+      <a href="../../playground/python/0004-functions-modules/import_styles.py"><code>import_styles.py</code></a>
+    </p>
+    <pre>python 0004-functions-modules\import_styles.py</pre>
+    <p>盯住每段的两个 True/False：写法1 只有 <code>tools</code>；写法2 只有 <code>run_tool</code>。四种调用打印的 error 内容相同，因为摸的是同一份 <code>run_tool</code>。</p>
+    <p>
+      模块里的 <code>__name__</code>：被 import 时是模块名（如 <code>"tools"</code>）；作为脚本直接运行时是 <code>"__main__"</code>。
+      所以入口写成：
+    </p>
+    <pre>if __name__ == "__main__":
+    agent_loop()</pre>
+    <p>直接 <code>python run.py</code> 会开转；别人 <code>import run</code> 只拿到函数，不会自动跑 loop。0003 已经这样写了，现在你知道它在防什么。</p>
+    <p class="muted">目录 + <code>__init__.py</code> 才叫包（package）。本课先平铺几个模块；包的结构以后拆更大项目再用。</p>
+
+    <h2>先跑小例</h2>
+    <div class="box steps">
+      <ol>
+        <li>激活 venv：
+          <pre>cd d:\agent-learning\playground\python
+.\.venv\Scripts\Activate.ps1</pre>
+        </li>
+        <li>阅读并运行：
+          <a href="../../playground/python/0004-functions-modules/examples.py"><code>playground/python/0004-functions-modules/examples.py</code></a>
+          <pre>python 0004-functions-modules\examples.py</pre>
+        </li>
+        <li>盯住例 3 的两行输出必须一样。例 4：<code>bad 2nd</code> 必须带着 <code>a</code>；<code>leaky B</code> 必须带着用户 A；<code>safe B</code> 只有用户 B；<code>same session 2</code> 才应累加两句。</li>
+        <li>再跑 <a href="../../playground/python/0004-functions-modules/import_styles.py"><code>import_styles.py</code></a>，对照第 6 节那张表：
+          <pre>python 0004-functions-modules\import_styles.py</pre>
+          写法1：<code>tools=True</code>、<code>run_tool=False</code>；写法2 正好反过来。
+        </li>
+      </ol>
+    </div>
+
+    <h2>主脚本导读（拆开的 harness）</h2>
+    <p>上一课一个文件；本课四份，职责对齐以后要读的 North / 开源 agent：</p>
+    <table>
+      <tr><th>文件</th><th>职责</th></tr>
+      <tr><td><a href="../../playground/python/0004-functions-modules/tools.py"><code>tools.py</code></a></td><td>工具函数 + 注册表 + <code>run_tool</code></td></tr>
+      <tr><td><a href="../../playground/python/0004-functions-modules/model.py"><code>model.py</code></a></td><td>假模型剧本</td></tr>
+      <tr><td><a href="../../playground/python/0004-functions-modules/loop.py"><code>loop.py</code></a></td><td>只做 while / if / for</td></tr>
+      <tr><td><a href="../../playground/python/0004-functions-modules/run.py"><code>run.py</code></a></td><td>入口：<code>if __name__ == "__main__"</code></td></tr>
+    </table>
+    <div class="box steps">
+      <ol>
+        <li>跑入口（输出应与 0003 同形：两轮 tool，然后 FINAL）：
+          <pre>python 0004-functions-modules\run.py</pre>
+        </li>
+        <li>再单独跑工具冒烟。因为 <code>tools.py</code> 底部有 <code>if __name__ == "__main__"</code>，直接运行会测 <code>run_tool</code>；被 <code>loop.py</code> import 时这段<strong>不会</strong>执行：
+          <pre>python 0004-functions-modules\tools.py</pre>
+        </li>
+        <li><strong>0003 用 lambda 当工具，本课改成具名函数</strong>。
+          lambda 是一次性匿名函数（Day16 才会系统讲）。注册表需要稳定、可测试、带文档的工具时，具名 <code>def</code> 更合适。
+          <code>TOOLBOX["rag_search"]</code> 存的是<strong>函数对象</strong>，不是调用结果——注意没有后面的 <code>()</code>。
+        </li>
+        <li><strong><code>loop.py</code></strong> 顶部：
+          <pre>from model import fake_model
+from tools import run_tool</pre>
+          Python 把「被运行脚本所在目录」放进模块搜索路径，所以这四个文件互相 import 时，你从 <code>playground\python</code> 跑 <code>python 0004-functions-modules\run.py</code> 也找得到它们。
+        </li>
+        <li>读 <code>run_tool</code> 时对照例 3：<code>TOOLBOX[name](**arguments)</code> 就是把模型的 dict 展开。删掉 <code>**</code> 变成 <code>TOOLBOX[name](arguments)</code>，工具函数会收到一个 dict 当 <code>query</code>，立刻 TypeError。</li>
+      </ol>
+    </div>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>调用写成了定义</strong>：<code>TOOLBOX["rag_search"]</code> 是函数；<code>TOOLBOX["rag_search"]()</code> 才是调用。注册表里必须存前者。</li>
+        <li><strong>漏掉 <code>**</code></strong>：<code>fn(arguments)</code> 把整个 dict 塞进第一个形参；<code>fn(**arguments)</code> 才按键名对上。</li>
+        <li><strong>可变默认值</strong>：<code>def f(xs=[])</code> 与 <code>history=[]</code> 是同一对象被反复 <code>append</code>。独立对话用 <code>None</code> 再新建；同一场对话显式传入同一份 list。详见第 5 节。</li>
+        <li><strong>同名覆盖</strong>：<code>from a import foo</code> 再 <code>from b import foo</code>，只剩 <code>b.foo</code>。用 <code>as</code> 或 <code>a.foo</code>。</li>
+        <li><strong>改了模块但 REPL 没刷新</strong>：模块只加载一次。练习场请直接重新 <code>python run.py</code>，别在半开的交互里 <code>import</code> 完再改文件。</li>
+        <li><strong>和 Java 易混</strong>：Python 参数没有「按类型重载」；同名后定义覆盖前定义。默认参数也不是每次调用 <code>new</code>。</li>
+        <li class="muted">命名关键字（形参列表里的光杆 <code>*</code>）本课跳过；以后在库函数签名里见到「必须写 <code>k=...</code>」再认。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。** 按键名展开；这是 tool call 能接到任意工具函数的原因。"
+      data-bad="对照例 3：少了 ** 就变成「整个 dict 当第一个位置参数」。">
+      <p><code>run_tool</code> 里 <code>TOOLBOX[name](**arguments)</code> 的 <code>**</code> 在做什么？</p>
+      <button data-correct="true">把 arguments 这个 dict 拆成关键字参数传进去</button>
+      <button data-correct="false">把 arguments 这个 dict 拆成位置参数传进去</button>
+      <button data-correct="false">把 arguments 这个 list 拆成关键字参数传进去</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。这让模块既能当脚本跑，又能被 import 而不产生副作用。"
+      data-bad="被 import 时 __name__ 是模块名，不会等于 __main__。">
+      <p>为什么 <code>tools.py</code> 的冒烟测试要写在 <code>if __name__ == "__main__"</code> 里？</p>
+      <button data-correct="true">直接运行本文件才执行，被 import 时不跑</button>
+      <button data-correct="false">被 import 时才会执行，直接运行本文件不跑</button>
+      <button data-correct="false">无论运行还是 import 都执行，用来导入模块</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。这是语法规则，不是风格问题。"
+      data-bad="带默认值的必须排在后面；否则定义阶段就 SyntaxError。">
+      <p><code>def run(max_turns=5, user):</code> 为什么不能通过？</p>
+      <button data-correct="true">有默认值的形参必须放在没有默认值的后面</button>
+      <button data-correct="false">有默认值的形参必须放在没有默认值的前面</button>
+      <button data-correct="false">有默认值的形参不能和位置参数一起出现</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。默认 list 在 def 时创建一次；没传 history 就反复用它。"
+      data-bad="None 才会每次新建；history=[] 和 bad_collect 是同一个共享对象。">
+      <p>两次独立对话都调用 <code>agent_loop("…")</code> 且都不传 <code>history</code>。默认写成 <code>history=[]</code> 会怎样？</p>
+      <button data-correct="true">两次调用共用定义时那个 list，B 里会看到 A</button>
+      <button data-correct="false">两次调用各自新建一个 list，B 里不会看到 A</button>
+      <button data-correct="false">两次调用共用调用时那个 list，B 里会看到 A</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。import 决定当前文件多了哪些名字；tools.py 只加载一次。"
+      data-bad="四种写法加载的是同一份模块，差别只在你能用哪个名字去调用。">
+      <p><code>loop.py</code> 写了 <code>from tools import run_tool</code> 之后，为什么不能写 <code>tools.TOOLBOX</code>？</p>
+      <button data-correct="true">当前文件只有 run_tool 这个名字，没有 tools</button>
+      <button data-correct="false">当前文件只有 tools 这个名字，没有 run_tool</button>
+      <button data-correct="false">当前文件两个名字都有，只是 TOOLBOX 不可见</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li><code>examples.py</code> 跑通；能解释例 4 为什么脏，以及 <code>history=[]</code> 与它是同一机制</li>
+      <li>能区分三种情况：默认 <code>[]</code> 串会话、默认 <code>None</code> 隔离、显式传入同一份 list 才累加</li>
+      <li><code>run.py</code> 跑通，输出形态与 0003 一致</li>
+      <li>能指着 <code>tools.py</code> 讲清：具名函数如何进 <code>TOOLBOX</code>，以及 <code>**</code> 如何对接模型的 dict</li>
+      <li>能说出 <code>import tools</code> 与 <code>from tools import run_tool</code> 在当前文件里各多了哪个名字</li>
+      <li>能用一句话对 Java 同事说：<code>if __name__ == "__main__"</code> ≈「只有这个类当启动类时才跑 main」</li>
+    </ul>
+
+    <h2>选读</h2>
+    <div class="box">
+      <p><strong>权威（本课规则的出处）</strong></p>
+      <ul>
+        <li><a href="https://docs.python.org/3/tutorial/controlflow.html#defining-functions">Python Tutorial · Defining Functions</a>：默认值只求值一次、<code>**kwargs</code>、调用时 <code>**</code> 展开</li>
+        <li><a href="https://docs.python.org/3/tutorial/modules.html">Python Tutorial · Modules</a>：模块、<code>__name__</code>、<code>import</code> / <code>from</code> / <code>as</code></li>
+      </ul>
+      <p><strong>中文教材（若还想看原书例题；默认不必打开）</strong></p>
+      <ul>
+        <li><a href="../../python-100Days/Day01-20/14.函数和模块.md">Day14 函数和模块</a>：三角形判断、摇色子、<code>*args</code> 求和</li>
+      </ul>
+    </div>
+
+    <h2>速查</h2>
+    <p>
+      <a href="../../reference/python-phase0.html">Python 阶段 0 速查</a>（函数 / 模块）·
+      <a href="../../reference/agent-stack.html">Agent / Harness 用语</a> ·
+      <a href="../../GLOSSARY.md">GLOSSARY.md</a> ·
+      <a href="../../reference/index.html">索引</a>
+    </p>
+
+    <div data-lesson-id-footer="0004"></div>
+
+    <footer>
+      不清楚的立刻问我。跑完或卡住，把输出贴回来。
+      下一课：列表与元组（0005，对齐 Day08–10）；再下一课字符串·字典·集合（0006，对齐 Day11–13）。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

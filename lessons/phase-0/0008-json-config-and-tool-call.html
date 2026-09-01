@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0008 · JSON：配置与 tool call 持久化</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0008"></div>
+    <h1>JSON：把 Agent 配置与 tool call 落成可交换的文本</h1>
+    <p class="mission">0006 在内存里解析嵌套 <code>dict</code>；0007 能安全读写文本文件。真实 Agent 还差一环：配置、tool call、运行状态往往以 <strong>JSON</strong> 在进程间、磁盘上、模型输出里流动。本课主技能是标准库 <code>json</code>；载体是「RAG 配置落盘 + tool_call 往返校验」。读完应能不翻文档完成读写与类型归一化。</p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">对应能力来自 <a href="https://docs.python.org/3/library/json.html">Python 官方 · json</a>（100-Days 未单独成章，本课以官方为准）。读完本页即可过关。</p>
+    <table>
+      <tr><th>来源要点</th><th>本课处理</th></tr>
+      <tr><td>JSON 是什么、与 Python dict/list 的关系</td><td><span class="tag">已内化</span>讲解 1–2</td></tr>
+      <tr><td><code>dumps</code> / <code>loads</code>（字符串通道）</td><td><span class="tag">已内化</span>讲解 3–4</td></tr>
+      <tr><td><code>dump</code> / <code>load</code>（文件通道）</td><td><span class="tag">已内化</span>讲解 5；接 0007 路径与异常范式</td></tr>
+      <tr><td>类型对照表、<code>ensure_ascii</code>、<code>indent</code>、<code>sort_keys</code></td><td><span class="tag">已内化</span>讲解 2、6</td></tr>
+      <tr><td><code>JSONDecodeError</code> 与边界策略</td><td><span class="tag">已内化</span>讲解 7–8</td></tr>
+      <tr><td>自定义 <code>JSONEncoder</code> / <code>object_hook</code>、命令行 <code>python -m json</code></td><td><span class="tag">跳过</span>阶段 0 够用标准四函数；选读官方即可</td></tr>
+      <tr><td>HTTP / <code>requests</code> 收发 JSON</td><td><span class="tag">下一课方向</span>本课只把「对象 ↔ 文本 ↔ 文件」打穿</td></tr>
+    </table>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>Python</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr><td><code>json.loads(s)</code></td><td>Jackson / Gson <code>readValue</code></td><td>Python 默认得到 <code>dict</code>/<code>list</code>，不是强类型 DTO</td></tr>
+      <tr><td><code>json.dumps(obj)</code></td><td><code>writeValueAsString</code></td><td>键在 JSON 里永远是字符串；非 str 键会被强制转成字符串</td></tr>
+      <tr><td><code>true</code>/<code>false</code>/<code>null</code></td><td><code>true</code>/<code>false</code>/<code>null</code></td><td>进 Python 变成 <code>True</code>/<code>False</code>/<code>None</code>（大小写不同）</td></tr>
+      <tr><td><code>JSONDecodeError</code></td><td>parse 失败异常</td><td>带 <code>lineno</code>/<code>colno</code>，便于定位坏 JSON</td></tr>
+      <tr><td>无 schema 强制</td><td>常有 POJO / record</td><td>边界必须自己 <code>isinstance</code> + 字段校验（延续 0006）</td></tr>
+    </table>
+
+    <h2>系统讲解</h2>
+
+    <h3>1. JSON 是「文本协议」，dict 是「内存结构」</h3>
+    <p>JSON（JavaScript Object Notation）是一种<strong>文本</strong>数据交换格式：磁盘上是一段 UTF-8 字符串，HTTP body 里也是字符串，模型有时也会输出一段 JSON 字符串。Python 的 <code>dict</code>/<code>list</code> 活在内存里，不能直接写进文件或发给别的进程——需要先<strong>编码</strong>成 JSON 文本；读回来再<strong>解码</strong>成 Python 对象。</p>
+    <pre># 内存里（Python）
+call = {"name": "rag_search", "arguments": {"top_k": 3}}
+
+# 文本里（JSON）—— 注意 true/false/null 与引号规则
+# {"name": "rag_search", "arguments": {"top_k": 3}}</pre>
+    <p>口诀：<strong>dict 给程序用，JSON 给边界用</strong>（文件、网络、模型输出）。官方模块文档：<a href="https://docs.python.org/3/library/json.html">json — JSON encoder and decoder</a>。</p>
+
+    <h3>2. 类型对照表（必须背）</h3>
+    <p>编解码时类型会按固定表转换。搞错这一表，后面所有「top_k 怎么变成 int」都会晕。</p>
+    <table>
+      <tr><th>JSON</th><th>Python（解码后）</th><th>注意</th></tr>
+      <tr><td>object <code>{...}</code></td><td><code>dict</code></td><td>键在 JSON 里必须是双引号字符串</td></tr>
+      <tr><td>array <code>[...]</code></td><td><code>list</code></td><td>元组编码进 JSON 也会变成 array，解码回来是 list</td></tr>
+      <tr><td>string</td><td><code>str</code></td><td>只用双引号，单引号非法</td></tr>
+      <tr><td>number</td><td><code>int</code> 或 <code>float</code></td><td><code>3</code> → int；<code>3.0</code> → float</td></tr>
+      <tr><td><code>true</code> / <code>false</code></td><td><code>True</code> / <code>False</code></td><td>大小写敏感；JSON 里不能写 Python 的 True</td></tr>
+      <tr><td><code>null</code></td><td><code>None</code></td><td>不是字符串 <code>"null"</code></td></tr>
+    </table>
+    <pre>import json
+
+text = '{"ok": true, "n": 3, "msg": null}'
+data = json.loads(text)
+print(data["ok"] is True)   # True
+print(data["n"] == 3)       # True
+print(data["msg"] is None)  # True</pre>
+
+    <h3>3. 四个函数：先分清「字符串」还是「文件」</h3>
+    <p>这是本课最重要的易混点，写满三种用法：</p>
+    <table>
+      <tr><th>场景</th><th>API</th><th>方向</th><th>典型用途</th></tr>
+      <tr><td>内存字符串</td><td><code>json.dumps(obj)</code></td><td>对象 → <code>str</code></td><td>拼 HTTP body、打印、交给模型看</td></tr>
+      <tr><td>内存字符串</td><td><code>json.loads(s)</code></td><td><code>str</code> → 对象</td><td>解析模型输出、解析响应 body</td></tr>
+      <tr><td>磁盘文件</td><td><code>json.dump(obj, file)</code></td><td>对象 → 文件</td><td>写配置、写运行状态</td></tr>
+      <tr><td>磁盘文件</td><td><code>json.load(file)</code></td><td>文件 → 对象</td><td>读配置、读缓存</td></tr>
+    </table>
+    <p>记忆法：名字带 <strong>s</strong> 的（dumps/loads）走 <strong>s</strong>tring；不带 s 的（dump/load）走文件对象。不要把 <code>loads</code> 喂给文件路径字符串却期望它去读盘——它只会把这个路径字符串本身当成「待解析的 JSON 文本」，几乎一定失败。</p>
+
+    <h3>4. dumps / loads：字符串通道详解</h3>
+    <pre>import json
+
+payload = {
+    "name": "rag_search",
+    "arguments": {"query": "harness", "top_k": 3},
+}
+
+text = json.dumps(payload, ensure_ascii=False)
+print(type(text), text)          # &lt;class 'str'&gt; ...
+
+again = json.loads(text)
+print(again["name"])             # rag_search
+print(type(again["arguments"]))  # &lt;class 'dict'&gt;</pre>
+    <p><code>dumps</code> 的常用关键字参数：</p>
+    <table>
+      <tr><th>参数</th><th>默认</th><th>作用</th></tr>
+      <tr><td><code>ensure_ascii</code></td><td><code>True</code></td><td><code>True</code> 时非 ASCII（如中文）会变成 <code>\uXXXX</code>；人读配置请用 <code>False</code></td></tr>
+      <tr><td><code>indent</code></td><td><code>None</code></td><td>设为 <code>2</code> 或 <code>4</code> 会美化换行缩进；调试友好，文件略大</td></tr>
+      <tr><td><code>sort_keys</code></td><td><code>False</code></td><td><code>True</code> 时按键名排序，便于 diff / 测试快照</td></tr>
+    </table>
+    <pre># 默认 ensure_ascii=True：中文被转义（机器无关，但人难看）
+json.dumps({"q": "检索"}, ensure_ascii=True)
+# '{"q": "\\u68c0\\u7d22"}'
+
+# 配置文件推荐：
+json.dumps({"q": "检索"}, ensure_ascii=False, indent=2)</pre>
+
+    <h3>5. dump / load：文件通道（接 0007）</h3>
+    <pre>from pathlib import Path
+import json
+
+path = Path(__file__).parent / "agent_config.json"
+
+with open(path, "r", encoding="utf-8") as file:
+    config = json.load(file)          # 文件 → dict
+
+config["max_turns"] = 10
+
+with open(path, "w", encoding="utf-8") as file:
+    json.dump(config, file, ensure_ascii=False, indent=2)
+    file.write("\n")                  # 可选：末尾换行，对 git diff 更友好</pre>
+    <p>路径仍然用 <code>Path(__file__).parent</code>（0007 三案）。文本模式 + <code>encoding="utf-8"</code> 与 JSON 文本配套。</p>
+    <p>等价写法（小文件也可以）：</p>
+    <pre>text = path.read_text(encoding="utf-8")
+config = json.loads(text)
+
+path.write_text(
+    json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+    encoding="utf-8",
+)</pre>
+    <p><code>dump(file)</code> 与 <code>write_text(dumps(...))</code> 都能落盘；前者少一次大字符串拼接，习惯上配置读写更常见 <code>dump</code>/<code>load</code>。</p>
+
+    <h3>6. 数字三案：JSON 数字 / 字符串数字 / 缺键</h3>
+    <p>外部世界（模型、前端、手写配置）经常把数字写成字符串。必须分清三种输入，再统一成内部 <code>int</code>：</p>
+    <table>
+      <tr><th>输入 JSON 片段</th><th><code>data.get("top_k", 3)</code> 得到什么</th><th>正确归一化</th></tr>
+      <tr><td><code>{"top_k": 3}</code></td><td><code>int</code> 3</td><td><code>int(...)</code> 仍安全</td></tr>
+      <tr><td><code>{"top_k": "3"}</code></td><td><code>str</code> <code>"3"</code></td><td>必须 <code>int(...)</code>，否则切片/循环会错</td></tr>
+      <tr><td><code>{}</code></td><td>默认值 3（int）</td><td><code>int(data.get("top_k", 3))</code></td></tr>
+    </table>
+    <pre>def normalize_top_k(data: dict) -&gt; int:
+    return int(data.get("top_k", 3))
+
+print(normalize_top_k(json.loads('{"top_k": 3}')))
+print(normalize_top_k(json.loads('{"top_k": "3"}')))
+print(normalize_top_k(json.loads('{}')))</pre>
+    <p>这和 0002/0006 的提醒同一条线：<strong>边界把类型收干净，业务层假设类型稳定</strong>。</p>
+
+    <h3>7. 什么叫「合法 JSON」：常见非法写法</h3>
+    <table>
+      <tr><th>非法例子</th><th>为什么挂</th></tr>
+      <tr><td><code>{'a': 1}</code></td><td>键和字符串必须用双引号，不能用单引号</td></tr>
+      <tr><td><code>{"a": 1,}</code></td><td>尾逗号不允许（Python dict 字面量可以，JSON 不行）</td></tr>
+      <tr><td><code>{a: 1}</code></td><td>键必须是字符串</td></tr>
+      <tr><td><code>{"ok": True}</code></td><td>要用 <code>true</code>，不是 Python 的 <code>True</code></td></tr>
+      <tr><td><code>{"x": None}</code></td><td>要用 <code>null</code></td></tr>
+    </table>
+    <p>解析失败抛 <code>json.JSONDecodeError</code>（是 <code>ValueError</code> 的子类）。它带 <code>lineno</code>、<code>colno</code>、<code>pos</code>，适合日志定位。</p>
+
+    <h3>8. 异常标准范式怎么套在 JSON 上</h3>
+    <p>直接复用 0007 心法：窄 try、具体 except、边界改语义。</p>
+    <pre>import json
+from pathlib import Path
+
+def load_config(path: Path) -&gt; dict:
+    try:
+        with open(path, "r", encoding="utf-8") as file:
+            data = json.load(file)
+    except FileNotFoundError as error:
+        raise FileNotFoundError(f"配置文件不存在: {path}") from error
+    except json.JSONDecodeError as error:
+        raise ValueError(f"配置不是合法 JSON: {path}") from error
+
+    if not isinstance(data, dict):
+        raise TypeError("配置根节点必须是对象(dict)")
+    return data</pre>
+    <ul>
+      <li><strong>局部恢复：</strong>可选配置缺失 → 用内置默认 dict（要在文档里写清）。</li>
+      <li><strong>转换后上抛：</strong>必选配置坏了 → <code>ValueError("配置不是合法 JSON")</code>。</li>
+      <li><strong>不捕获：</strong>更底层的纯 <code>json.loads</code> 小函数可以不管，交给边界。</li>
+    </ul>
+    <p>解析成功后仍要做<strong>结构校验</strong>：JSON 只保证语法，不保证有 <code>name</code> 字段或 <code>arguments</code> 是对象。</p>
+
+    <h3>9. 键永远是字符串：往返可能变样</h3>
+    <pre>original = {1: "int-key"}
+text = json.dumps(original)
+back = json.loads(text)
+print(back)          # {'1': 'int-key'}  —— 键变成了字符串 '1'
+print(original == back)  # False</pre>
+    <p>官方明确：JSON 对象的键只能是 string；编码时非 str 键会被转成字符串，再解码就回不来。Agent 配置与 tool_call 请<strong>从头使用字符串键</strong>。</p>
+
+    <h3>10. 和 0006 tool_call 怎么接起来</h3>
+    <p>0006 假定你已经有一个 Python <code>dict</code>。本课补上「dict 从哪来」：</p>
+    <pre>raw = '{"name":"rag_search","arguments":{"query":"x","top_k":"2"}}'
+call = json.loads(raw)                 # str → dict
+name = call["name"]
+args = call.get("arguments", {})
+top_k = int(args.get("top_k", 3))      # 字符串数字归一化</pre>
+    <p>完整链路：<strong>JSON 文本 → loads/load → dict → 校验白名单 → 类型归一化 → 执行工具</strong>。主脚本 <code>parse_tool_call_json.py</code> 把这条链跑通。</p>
+
+    <h2>主脚本导读</h2>
+    <div class="box steps">
+      <ol>
+        <li><a href="../../playground/python/0008-json/examples.py"><code>examples.py</code></a>：类型映射、<code>dumps</code> vs <code>dump</code>、数字三案、非法 JSON 的转换上抛。</li>
+        <li><a href="../../playground/python/0008-json/persist_config.py"><code>persist_config.py</code></a>：读 <code>agent_config.json</code>，抽出 model / max_turns / rag / tools；写 <code>runtime_state.json</code> 演示状态落盘。</li>
+        <li><a href="../../playground/python/0008-json/parse_tool_call_json.py"><code>parse_tool_call_json.py</code></a>：从文件与从模型字符串两条路径解析 tool_call，再 <code>validate_call</code> + <code>normalize_rag_args</code>。</li>
+        <li>打开 <code>agent_config.json</code> / <code>sample_tool_call.json</code>，对照「磁盘上的文本」和「脚本里的 dict」。</li>
+      </ol>
+    </div>
+
+    <h2>先跑起来</h2>
+    <div class="box steps">
+      <ol>
+        <li><pre>cd D:\agent-learning\playground\python
+.\.venv\Scripts\Activate.ps1</pre></li>
+        <li><pre>python 0008-json\examples.py
+python 0008-json\persist_config.py
+python 0008-json\parse_tool_call_json.py</pre></li>
+        <li>打开新生成的 <code>runtime_state.json</code>、<code>roundtrip.json</code>，确认中文与缩进可读。</li>
+        <li>（可选）把 <code>sample_tool_call.json</code> 里某个逗号改成尾逗号，再跑解析脚本，观察 <code>ValueError</code> 业务消息。</li>
+      </ol>
+    </div>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>loads 不是读文件：</strong><code>json.loads("agent_config.json")</code> 会把文件名当 JSON 文本解析。</li>
+        <li><strong>True / true：</strong>手写 JSON 文件时写 Python 布尔会直接语法错误。</li>
+        <li><strong>尾逗号：</strong>Python 允许，JSON 不允许。</li>
+        <li><strong>ensure_ascii 默认 True：</strong>中文配置变 <code>\u</code> 转义；人读文件请 <code>False</code>。</li>
+        <li><strong>数字字符串：</strong>外部 <code>"3"</code> 不是 int；边界统一 <code>int(...)</code>。</li>
+        <li><strong>根类型：</strong>配置与 tool_call 通常要求根是 object；若根是 array，先 <code>isinstance(..., dict)</code> 挡掉。</li>
+        <li><strong>多次 dump 到同一文件：</strong>JSON 不是「多帧协议」，反复 <code>dump</code> 追加会得到非法拼接；应一次写完整对象，或写 JSON Lines（本课不展开）。</li>
+        <li><strong>不可序列化对象：</strong><code>set</code>、<code>datetime</code>、<code>Path</code> 不能直接 dumps，需先转成 list/str；否则 <code>TypeError</code>。</li>
+        <li><strong>Java 易混：</strong>这里没有编译期 DTO，校验是你的责任。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz data-ok="对。带 s 的 API 走字符串；不带 s 的走文件对象。" data-bad="loads 解析的是 JSON 文本，不会按路径去读盘。"><p><code>json.loads</code> 与 <code>json.load</code> 的差别是？</p>
+      <button data-correct="true">前者吃字符串，后者吃文件对象</button>
+      <button data-correct="false">前者吃文件对象，后者吃字符串</button>
+      <button data-correct="false">二者完全等价只是别名</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。JSON true 解码成 Python True。" data-bad="JSON 字面量是小写 true/false/null，不是 Python 拼写。"><p><code>json.loads('{"ok": true}')["ok"]</code> 的值是？</p>
+      <button data-correct="true">True</button>
+      <button data-correct="false">true</button>
+      <button data-correct="false">"true"</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。人读中文配置应关闭 ASCII 转义。" data-bad="True 会把中文变成 \\u 转义，不利于阅读。"><p>写入可读中文配置时，<code>ensure_ascii</code> 应设为？</p>
+      <button data-correct="true">False</button>
+      <button data-correct="false">True</button>
+      <button data-correct="false">None</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。外部字符串数字必须在边界转成 int。" data-bad="get 默认值解决不了值是 str 的问题。"><p>为何写 <code>int(args.get("top_k", 3))</code>？</p>
+      <button data-correct="true">把可能的字符串数字收成整数</button>
+      <button data-correct="false">把整数编码成 JSON 文本</button>
+      <button data-correct="false">把字典转换成列表结构</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。JSON 不允许对象尾逗号。" data-bad="Python dict 允许尾逗号，JSON 规范不允许。"><p>下列哪段不是合法 JSON？</p>
+      <button data-correct="true">{"a": 1,}</button>
+      <button data-correct="false">{"a": 1}</button>
+      <button data-correct="false">[1, 2]</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。坏 JSON 应在边界改成业务错误并保留原因链。" data-bad="局部恢复适合可选资源；裸 except 会吞掉真正的 bug。"><p>必选 tool_call JSON 解析失败时，更合适的策略是？</p>
+      <button data-correct="true">转换后上抛 ValueError</button>
+      <button data-correct="false">静默返回空字典继续</button>
+      <button data-correct="false">使用裸 except 忽略</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。非 str 键编码后再解码会变成字符串键。" data-bad="JSON 对象键只能是 string，往返不保证恒等。"><p><code>json.loads(json.dumps({1: "x"}))</code> 的键是？</p>
+      <button data-correct="true">字符串 "1"</button>
+      <button data-correct="false">整数 1</button>
+      <button data-correct="false">布尔 True</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。dump 写入文件对象；dumps 生成字符串。" data-bad="load/loads 是解码方向，不是编码。"><p>把配置写进已打开的文本文件，应调用？</p>
+      <button data-correct="true">json.dump</button>
+      <button data-correct="false">json.dumps</button>
+      <button data-correct="false">json.loads</button>
+      <p class="feedback"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能口述：JSON 是文本协议，dict/list 是内存结构；边界用 JSON，程序内用 Python 对象。</li>
+      <li>能默写类型对照：<code>true/false/null</code> ↔ <code>True/False/None</code>；object/array ↔ dict/list。</li>
+      <li>能区分四函数：<code>dumps/loads</code>（字符串）与 <code>dump/load</code>（文件），并说明为何不能 <code>loads(路径)</code> 当读文件。</li>
+      <li>能解释 <code>ensure_ascii</code> / <code>indent</code>；会用 UTF-8 + 脚本目录路径读写配置。</li>
+      <li>能处理数字三案，并在边界做 <code>isinstance</code> + 白名单校验。</li>
+      <li>能把 <code>JSONDecodeError</code> 套进异常标准范式（转换后上抛）。</li>
+      <li>三个脚本运行通过；能按「文本 ↔ 对象 ↔ 校验 ↔ 落盘」讲解主流程。</li>
+    </ul>
+
+    <h2>选读与速查</h2>
+    <div class="box">
+      <p><strong>权威出处</strong></p>
+      <ul>
+        <li><a href="https://docs.python.org/3/library/json.html">Python 官方：json</a>（本课主来源）</li>
+        <li><a href="https://datatracker.ietf.org/doc/html/rfc8259">RFC 8259 · The JavaScript Object Notation (JSON) Data Interchange Format</a></li>
+      </ul>
+      <p><strong>本地衔接</strong></p>
+      <ul>
+        <li><a href="./0006-strings-sets-dicts.html">0006 字符串 / 集合 / 字典</a>：内存里的 tool_call 校验</li>
+        <li><a href="./0007-files-and-exceptions.html">0007 文件与异常</a>：路径三案 + 异常标准范式</li>
+      </ul>
+    </div>
+    <p><a href="../../reference/python-phase0.html#json">Python 阶段 0 速查：JSON</a> · <a href="../../GLOSSARY.md">GLOSSARY.md</a> · <a href="../../reference/index.html">速查索引</a></p>
+    <div data-lesson-id-footer="0008"></div>
+    <footer>不清楚的立刻问我。跑完或卡住，把输出贴回来。下一课：<a href="./0009-type-hints-reading-agent-code.html">0009 类型标注</a>。</footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

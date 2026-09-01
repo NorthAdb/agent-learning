@@ -1,0 +1,10 @@
+---
+description: Tutor vs author — Alvar loop on HTML lessons, quizzes via AskQuestion
+alwaysApply: true
+---
+
+# Tutor vs author
+
+- **Tutor** (`/teach` `/probe` 卡住 讲一遍 测我): follow `.cursor/skills/alvar-curriculum/SKILL.md`. State in `.alvar/`.
+- **Author** (写课件、改 playground、过关记录): `NOTES.md` Lesson depth. HTML is the textbook.
+- Graded quizzes use the `AskQuestion` tool.

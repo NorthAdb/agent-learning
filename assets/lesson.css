@@ -53,6 +53,56 @@ h2 {
   font-weight: 600;
 }
 
+h3 {
+  font-size: 1.02rem;
+  margin: 1.35rem 0 0.45rem;
+  font-weight: 600;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.9rem;
+  margin: 0.75rem 0 1.1rem;
+}
+
+th, td {
+  border: 1px solid var(--line);
+  padding: 0.45rem 0.55rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: #efeae2;
+  font-weight: 600;
+}
+
+.tag {
+  display: inline-block;
+  font-family: "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.75rem;
+  color: var(--accent);
+  border: 1px solid var(--line);
+  padding: 0.1rem 0.4rem;
+  margin-right: 0.25rem;
+}
+
+.src {
+  font-family: "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin: 0.25rem 0 0.9rem;
+}
+
+blockquote {
+  margin: 0.75rem 0;
+  padding: 0.5rem 0 0.5rem 1rem;
+  border-left: 3px solid var(--line);
+  color: var(--ink);
+}
+
 p, li { color: var(--ink); }
 .muted { color: var(--muted); }
 

@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0006 · 字符串、集合与字典</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0006"></div>
+    <h1>字符串、集合与字典：切文本与解析 tool call</h1>
+    <p class="mission">0005 处理了检索结果列表：过滤、排序、截断。现在要完成下一段真实 RAG 工作：把原始文本切成稳定的上下文块，把用户 query 清洗成可检索字符串，再把模型返回的嵌套 tool call 解析成可执行的结构。主技能是 Python 的 <code>str</code>、<code>set</code>、<code>dict</code>；Agent/RAG 是载体，不替代语法本身。</p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">对应 Python-100-Days · Day11（字符串）、Day12（集合）、Day13（字典）。读完本页即可过关，不必先翻原书。</p>
+    <table><tr><th>来源要点</th><th>本课处理</th></tr>
+      <tr><td>字符串创建、转义、原始字符串、拼接/重复、成员、索引/切片</td><td><span class="tag">已内化</span>例 1–3；正则和 Unicode 编码只做边界说明</td></tr>
+      <tr><td>字符串方法：大小写、查找、判断、格式化、修剪、替换、拆分、合并</td><td><span class="tag">已内化</span>例 4–6；重点放在 query 与 prompt</td></tr>
+      <tr><td>集合创建、成员、增删、交并差、对称差、生成式</td><td><span class="tag">已内化</span>例 7；排序和可哈希边界写清</td></tr>
+      <tr><td>字典创建、访问、增改查删、遍历、生成式、嵌套结构</td><td><span class="tag">已内化</span>例 8–10；主脚本解析 tool call</td></tr>
+      <tr><td>正则表达式、bytes 编解码、股票/词频趣味题</td><td><span class="tag">跳过</span>当前 Agent/RAG 主线不需要，留作选读</td></tr>
+    </table>
+
+    <h2>和 Java 怎么对照</h2>
+    <table><tr><th>Python</th><th>Java 直觉</th><th>容易错的地方</th></tr>
+      <tr><td><code>str</code> 不可变</td><td><code>String</code> 不可变</td><td><code>replace</code> 返回新值，原变量不会被原地改</td></tr>
+      <tr><td><code>text.split(",")</code></td><td><code>String.split</code></td><td>Python 返回 list；空分隔和正则语义也不同</td></tr>
+      <tr><td><code>"\n".join(lines)</code></td><td><code>String.join("\n", lines)</code></td><td>Python 是“分隔符调用 join”，不是 list 调用</td></tr>
+      <tr><td><code>set</code></td><td><code>Set</code></td><td>无索引；需要稳定输出时显式 <code>sorted</code></td></tr>
+      <tr><td><code>d.get(k, default)</code></td><td><code>Map.getOrDefault</code></td><td>default 只在键不存在时使用，不会覆盖值为 None 的键</td></tr>
+      <tr><td><code>d[k]</code></td><td>常见 Map 访问</td><td>Python 缺键抛 <code>KeyError</code>，不是静默返回 None</td></tr>
+      <tr><td><code>{k: v for k, v in d.items()}</code></td><td>Stream + <code>Collectors.toMap</code></td><td>生成式生成新 dict，不修改原 dict</td></tr>
+    </table>
+
+    <h2>系统讲解</h2>
+    <h3>1. 字符串是不可变的有序序列</h3>
+    <p>字符串支持列表熟悉的 <code>len</code>、索引、切片、<code>in</code>，但不能通过索引修改字符。任何“修改”都会创建新字符串。</p>
+    <pre>query = "harness"
+query[0]          # 'h'
+query[-1]         # 's'
+query[1:4]        # 'arn'
+"ness" in query   # True
+# query[0] = "H"  # TypeError: str 不可变
+query = "H" + query[1:]  # 重新绑定到一个新字符串</pre>
+    <p>这和 Java <code>String</code> 的核心直觉一致。原始字符串 <code>r"C:\\new"</code> 适合 Windows 路径或正则模式；普通字符串里的 <code>\n</code>、<code>\t</code> 会被解释成换行和制表符。</p>
+
+    <h3>2. 清洗：strip、replace、大小写与判断</h3>
+    <pre>raw = "  RAG：先检索，再生成。  "
+clean = raw.strip().replace("：", ":")
+print(repr(clean))          # 'RAG:先检索，再生成。'
+print(clean.lower())         # 英文大小写归一化
+print(clean.startswith("RAG"))
+print("query".isalnum())     # True，全部字符都是字母
+print(clean.find("RAG"))      # 找不到返回 -1
+print(clean.index("RAG"))     # 找不到会抛 ValueError</pre>
+    <p><code>startswith(prefix)</code> 返回布尔值，判断字符串是否以指定前缀开头；对应的 <code>endswith(suffix)</code> 判断结尾。它们不会修改原字符串，也可以接收元组来一次检查多个候选：</p>
+    <pre>name = "rag_search"
+name.startswith("rag_")             # True
+name.startswith(("rag_", "read_"))  # True，命中任意一个前缀
+name.endswith(("_search", "_file")) # True</pre>
+    <p><code>isalnum()</code> 是“is alphanumeric”的缩写：只有当字符串<strong>非空且每个字符都是字母或数字</strong>时才返回 <code>True</code>。空字符串、空格、下划线、连字符、中文标点都会让它返回 <code>False</code>；中文汉字本身属于 Unicode 字母，因此 <code>"知识".isalnum()</code> 会是 <code>True</code>。</p>
+    <pre>"query".isalnum()       # True
+"query2".isalnum()      # True
+"query_2".isalnum()     # False，下划线不是字母或数字
+"".isalnum()            # False，空字符串不算
+"知识".isalnum()         # True，汉字属于 Unicode 字母
+"RAG: docs".isalnum()   # False，含冒号和空格</pre>
+    <p>在 Agent 代码里，<code>startswith</code> 适合做轻量路由（例如判断工具名是否属于 <code>rag_</code> 命名空间）；<code>isalnum</code> 适合做简单标识符检查，但<strong>不能替代完整协议校验</strong>——真实的工具名通常允许下划线，所以应使用白名单或更明确的规则。<code>strip</code> 默认去两端空白，也可以传字符集合，如 <code>"~hi~".strip("~")</code>。<code>find</code> 和 <code>index</code> 的失败行为不同：用户输入搜索通常用 <code>find</code>，协议字段必须存在时才考虑直接索引或显式抛错。</p>
+
+    <h3>3. split、splitlines、join：RAG 文本的三步</h3>
+    <p><strong>先记输入输出：</strong><code>str.split</code> 和 <code>str.splitlines</code> 都是“一个字符串 → 一个列表”；<code>join</code> 是“一个分隔符 + 一个字符串列表 → 一个字符串”。它们不是三个相似方法，而是文本管线中相反方向的两个动作。</p>
+    <table><tr><th>写法</th><th>做什么</th><th>典型结果</th><th>RAG 用途</th></tr>
+      <tr><td><code>text.split(",")</code></td><td>按指定分隔符切</td><td><code>"a,b" → ["a", "b"]</code></td><td>CSV、标签、协议字段</td></tr>
+      <tr><td><code>text.split()</code></td><td>按任意连续空白切，自动丢两端空白</td><td><code>" a  b " → ["a", "b"]</code></td><td>压缩 query 中的多余空格</td></tr>
+      <tr><td><code>text.splitlines()</code></td><td>按换行边界切，不保留换行符</td><td><code>"a\\n\\nb" → ["a", "", "b"]</code></td><td>逐行清洗、保留空行语义</td></tr>
+      <tr><td><code>"\\n".join(lines)</code></td><td>用换行把多条字符串合成一段</td><td><code>["a", "b"] → "a\\nb"</code></td><td>生成上下文块或 prompt</td></tr>
+    </table>
+    <p>为什么不总用 <code>split("\\n")</code>？<code>splitlines()</code> 对不同换行风格（<code>\\n</code>、<code>\\r\\n</code>）更稳，而且语义就是“按行拆”。如果你需要保留空行，就不要立刻写 <code>if line.strip()</code>；如果空行只是噪声，才过滤它。</p>
+    <pre>text = "标题\n\n第一段。\r\n第二段。"
+print(text.split("\n"))       # 可能留下 '\r'，不适合作为跨平台按行处理
+print(text.splitlines())       # ['标题', '', '第一段。', '第二段。']
+
+raw_lines = text.splitlines()
+kept_lines = [line.strip() for line in raw_lines if line.strip()]
+print(kept_lines)              # ['标题', '第一段。', '第二段。']</pre>
+    <p>这就是之前那条列表生成式的完整语义：先拆行，再逐行清洗；<code>if line.strip()</code> 过滤清洗后为空的行；前面的 <code>line.strip()</code> 把保留下来的行变干净。等价的普通循环是：</p>
+    <pre>lines = []
+for line in text.splitlines():
+    cleaned = line.strip()
+    if cleaned:
+        lines.append(cleaned)</pre>
+    <p>RAG 中常见的第一版组装：</p>
+    <pre>numbered = [f"[{i}] {line}" for i, line in enumerate(kept_lines, start=1)]
+context = "\n".join(numbered)
+print(context)
+# [1] 标题
+# [2] 第一段。
+# [3] 第二段。</pre>
+    <p>编号不是装饰：它让模型回答时可以引用来源，也让调试时能知道哪一块进入了 prompt。换行符是“块与块之间的边界”；如果需要更强的视觉分隔，可以用 <code>"\n\n".join(blocks)</code>，但要意识到这会增加 prompt token。</p>
+
+    <h4>3.1 split 的两个重要边界</h4>
+    <p><strong>不传分隔符</strong>和<strong>传空格分隔符</strong>不是一回事：</p>
+    <pre>query = "  Java   Agent  "
+query.split()       # ['Java', 'Agent']：连续空白合并，首尾空白丢弃
+query.split(" ")    # ['', '', 'Java', '', '', 'Agent', '', '']：每个字面空格都参与切分</pre>
+    <p>清洗用户 query 时通常用 <code>split()</code> 再 <code>join</code> 回单空格：</p>
+    <pre>normalized = " ".join(query.split())
+print(normalized)    # Java Agent</pre>
+    <p><code>maxsplit</code> 用于“只拆前几刀，剩余内容原样保留”。例如工具协议中，冒号前是动作名，后面可能仍有冒号：</p>
+    <pre>wire = "tool:read_file:C:\\docs\\agent.txt"
+head, body = wire.split(":", 1)
+print(head)          # tool
+print(body)          # read_file:C:\\docs\\agent.txt</pre>
+    <p>如果写成不带 <code>1</code> 的 <code>split(":")</code>，就会得到 4 段，调用方还要猜哪几段属于 body；协议解析通常应明确限制切分次数。</p>
+
+    <h4>3.2 从“按行”到“按段落”：更像 RAG 的 chunk</h4>
+    <p>逐行不是唯一切法。知识库通常希望一个 chunk 保留完整小段，而不是把一句话和下一句拆散。可以先按空行切段，再清洗每段：</p>
+    <pre>document = "标题\n\n第一段的第一句。\n第一段的第二句。\n\n第二段。"
+paragraphs = [
+    " ".join(block.split())
+    for block in document.split("\n\n")
+    if block.strip()
+]
+print(paragraphs)
+# ['标题', '第一段的第一句。 第一段的第二句。', '第二段。']</pre>
+    <p>这里有两层处理：</p>
+    <ol><li><code>document.split("\n\n")</code> 按空行保留段落边界。</li><li><code>" ".join(block.split())</code> 把段落内部的换行、多个空格压成单空格，但不把不同段落混在一起。</li></ol>
+    <p>这仍然是“最小 chunker”，不等于生产级分块：真实系统还要考虑最大 token 数、重叠窗口、标题继承和代码块保护。但它已经展示了 RAG 中一个关键设计：<strong>分隔符选择会改变检索单元的语义</strong>。</p>
+
+    <h4>3.3 join 的边界：类型、空列表和嵌套列表</h4>
+    <pre>" | ".join(["rag", "tool"])  # 'rag | tool'
+" | ".join([])               # ''，空列表得到空字符串
+# " | ".join(["rag", 3])     # TypeError，3 不是 str
+" | ".join(map(str, ["rag", 3]))  # 'rag | 3'</pre>
+    <p><code>join</code> 不会递归处理嵌套列表；如果候选结果是 <code>list[dict]</code>，要先取出每个 dict 的文本字段，再 join：</p>
+    <pre>hits = [{"text": "Tool 是动作"}, {"text": "RAG 先检索"}]
+context = "\n".join(hit["text"] for hit in hits)
+print(context)</pre>
+    <p>这个生成器表达式避免先额外创建一个文本列表；在小数据上两者都可以，读代码时先关注“每个 hit 取 text，再用换行合并”的数据流。</p>
+
+    <h4>3.4 反向理解：为什么 prompt 组装要可观察</h4>
+    <p>不要直接写一行不可读的字符串拼接。把 <code>blocks</code>、<code>numbered</code>、<code>context</code> 分开，才能在日志中检查：哪些候选进入了上下文、空块是否被过滤、编号是否稳定、最终长度是否超限。一个可读的组装函数：</p>
+    <pre>def build_context(snippets: list[str], max_blocks: int = 3) -> str:
+    blocks = [s.strip() for s in snippets if s.strip()]
+    blocks = blocks[:max_blocks]
+    numbered = [f"[{i}] {block}" for i, block in enumerate(blocks, 1)]
+    return "\n\n".join(numbered) or "（无相关资料）"</pre>
+    <p>这段函数把 0005 的列表截断、0006 的字符串清洗与合并串起来了：先过滤空块，再限制数量，最后组装；空结果有明确占位。它就是从“会用 API”走向“能写 RAG 处理代码”的一步。</p>
+    <p><code>split</code>、<code>splitlines</code>、<code>join</code> 的共同点是都不修改原字符串；它们返回新对象。这个不可变性规则仍然有效。</p>
+
+    <h3>4. f-string：把结构化值写进 prompt</h3>
+    <pre>tool = "rag_search"
+top_k = 3
+score = 0.9173
+message = f"tool={tool} top_k={top_k} score={score:.2f}"
+prompt = f"请依据资料回答：\n{context}\n\n问题：{clean}"
+print(message)
+print(prompt)</pre>
+    <p>f-string 的花括号里可以放表达式，格式说明写在冒号后。不要把用户输入直接当作 f-string 模板执行；模板是代码，用户内容只是值。</p>
+
+    <h3>5. 字符串方法不会改变原值</h3>
+    <pre>name = "  Alice  "
+name.strip()
+print(repr(name))            # 仍是 '  Alice  '
+name = name.strip()          # 想保留结果，必须接回
+name = name.replace("Alice", "Bob")</pre>
+    <p>这是 0004 可变默认值、0005 列表原地方法之后的另一组边界：列表有 <code>sort()</code> 这种原地方法，字符串没有原地修改；字符串方法几乎都返回新值。</p>
+
+    <h3>6. 集合：表达“唯一成员”和集合关系</h3>
+    <pre>seen = {"rag", "tool", "rag", "memory"}
+requested = {"rag", "eval", "tool"}
+print(seen)                  # 重复 rag 只保留一份，顺序不承诺
+print("rag" in seen)         # 成员判断
+print(seen & requested)       # 交集：两边都有
+print(requested - seen)       # 差集：请求但尚未具备
+print(seen | requested)       # 并集：合并
+print(seen ^ requested)       # 对称差：只在一边出现</pre>
+    <p><code>set()</code> 才是空集合，<code>{}</code> 是空字典。集合元素必须可哈希：<code>"rag"</code>、整数、元组通常可以；list、dict、set 不可以。集合适合“有没有”，不适合“第几个”。</p>
+    <pre>ids = ["d-01", "d-01", "d-03"]
+unique_ids = set(ids)         # 去重
+stable_ids = sorted(unique_ids) # 需要展示/测试稳定时再排序</pre>
+
+    <h3>7. 集合的增删与生成式</h3>
+    <pre>tools = {"read_file"}
+tools.add("rag_search")
+tools.update({"final", "read_file"}) # 重复添加没有效果
+tools.discard("missing")             # 不存在也不抛异常
+tools.remove("final")                 # 不存在会抛 KeyError
+
+numeric = {n * n for n in range(6) if n % 2 == 0}
+print(numeric)                        # {0, 4, 16}</pre>
+    <p>不知道元素是否存在时，<code>discard</code> 比 <code>remove</code> 更宽容；协议校验需要强制发现错误时才用 <code>remove</code> 或显式判断。</p>
+
+    <h3>8. 字典：tool call 的外形</h3>
+    <pre>call = {
+    "name": "rag_search",
+    "arguments": {"query": "permission", "top_k": "3"},
+}
+
+    name = call["name"]                 # 必填协议字段
+    args = call.get("arguments", {})    # 可选字段给默认空 dict
+    query = args.get("query", "")
+    top_k = int(args.get("top_k", 3))   # 外部 JSON 可能给字符串 "3"
+    print(name, query, top_k)</pre>
+    <p>逐行读它：</p>
+    <ol>
+      <li><code>call</code> 是外层 dict。它有两个键：<code>name</code> 的值是字符串，<code>arguments</code> 的值又是一个 dict。</li>
+      <li><code>name = call["name"]</code> 取必填字段。协议规定没有工具名就无法执行，所以缺失时让 <code>KeyError</code> 暴露出来，比悄悄使用一个假工具名更安全。</li>
+      <li><code>args = call.get("arguments", {})</code> 取可选字段。如果调用没有参数，得到一个新的空 dict，后面仍可以调用 <code>args.get(...)</code>。</li>
+      <li><code>query = args.get("query", "")</code> 取可选 query。缺失时用空字符串；这表示“当前代码允许没有 query”，并不代表所有工具协议都应该允许它。</li>
+      <li><code>top_k = int(args.get("top_k", 3))</code> 先取值，再转成整数。这里输入可能是 JSON 风格的字符串 <code>"3"</code>，但列表切片需要整数，所以在边界处归一化。</li>
+      <li><code>print</code> 输出的是 <code>rag_search permission 3</code>；最后一个 <code>3</code> 的类型是 <code>int</code>，不是字符串。</li>
+    </ol>
+    <pre># 这段数据的形状可以画成：
+call                      # dict
+├── "name"       -> "rag_search"       # str
+└── "arguments"  -> args                # dict
+    ├── "query"  -> "permission"       # str
+    └── "top_k"  -> "3"                 # str，转换后才是 int 3</pre>
+    <p>必填与可选的选择规则可以这样记：</p>
+    <pre>call["name"]                    # 缺失就是协议错误：抛 KeyError
+call.get("arguments", {})       # 缺失可以按“无参数”处理
+args.get("top_k", 3)             # 缺失使用业务默认值
+int(args.get("top_k", 3))        # 外部类型转换成内部稳定类型</pre>
+    <p>如果输入不可信，实际执行前还要处理转换失败：</p>
+    <pre>raw_top_k = args.get("top_k", 3)
+try:
+    top_k = int(raw_top_k)
+except (TypeError, ValueError):
+    raise ValueError(f"top_k must be an integer, got {raw_top_k!r}")</pre>
+    <p>这和 Java 后端接收 JSON DTO 的思路相同：先在边界层解析、校验、转换，再把类型稳定的对象交给业务层。字典键必须是可哈希对象，通常用字符串。<code>d[k] = v</code> 既能新增也能覆盖；<code>del d[k]</code> 删除必存在键；<code>pop(k, default)</code> 可取出并删除。读代码时先判断每个字段是必填还是可选，再选择 <code>[]</code> 或 <code>get</code>。</p>
+
+    <h3>9. items、keys、values 与嵌套访问</h3>
+    <p>字典保存的是<strong>键 → 值</strong>的映射。遍历时，先问自己“我需要哪一侧”：只要键用 <code>keys()</code>，只要值用 <code>values()</code>，两侧都要用 <code>items()</code>。</p>
+    <pre>counts = {"tool": 3, "model": 1, "error": 1}
+
+print(counts.keys())    # dict_keys(['tool', 'model', 'error'])
+print(counts.values())  # dict_values([3, 1, 1])
+print(counts.items())   # dict_items([('tool', 3), ('model', 1), ('error', 1)])</pre>
+    <p>这三个方法返回的是“字典视图”对象，不是普通 list。它们可以直接遍历；如果确实需要列表，再显式写 <code>list(counts.items())</code>。<code>items()</code> 的每个元素是一个二元组 <code>(key, value)</code>，所以 <code>for kind, count in ...</code> 是元组解包：</p>
+    <pre>for kind, count in counts.items():
+    print(f"事件 {kind} 出现 {count} 次")
+
+for kind in counts.keys():
+    print("只关心名字:", kind)
+
+for count in counts.values():
+    print("只关心次数:", count)</pre>
+    <p>不要把 <code>items</code> 当成“字典的一个字段”；它是一个<strong>方法</strong>，必须写括号。下面两句含义不同：</p>
+    <pre>counts.items      # 方法对象，还没有执行
+counts.items()    # 调用方法，得到可遍历的 (key, value) 视图</pre>
+    <p>有了 <code>items()</code>，字典生成式就很好读：</p>
+    <pre>hot = {kind: count for kind, count in counts.items() if count >= 2}
+print(hot)                         # {'tool': 3}</pre>
+    <p>它的普通循环等价写法是：</p>
+    <pre>hot = {}
+for kind, count in counts.items():
+    if count >= 2:
+        hot[kind] = count</pre>
+    <p>嵌套访问则是“每一层容器做一次访问”。下面的 <code>call</code> 是外层 dict，<code>arguments</code> 的值是内层 dict：</p>
+    <pre>call = {
+    "name": "rag_search",
+    "arguments": {"query": "permission", "top_k": "3"},
+}
+
+arguments = call["arguments"]       # 第 1 层：外层 dict 取出内层 dict
+query = arguments["query"]          # 第 2 层：内层 dict 取出 query
+
+# 一行写法等价于上面两步：
+query_again = call["arguments"]["query"]</pre>
+    <p>读嵌套表达式时不要跳步：先确认 <code>call["arguments"]</code> 的类型是 dict，再继续取 <code>["query"]</code>。如果中间某层缺失，直接索引会抛 <code>KeyError</code>；可选结构可以分层使用 <code>get</code>：</p>
+    <pre>arguments = call.get("arguments", {})
+query = arguments.get("query", "")
+top_k = int(arguments.get("top_k", 3))</pre>
+    <p>在 tool call 代码里，<code>items()</code> 常用于记录参数、筛选字段或遍历多条配置；<code>keys()</code> 常用于检查是否包含某个字段；<code>values()</code> 常用于统计或判断所有值。生产代码通常先在边界函数中校验嵌套结构，再把稳定数据交给执行层。</p>
+
+    <h3>10. get、setdefault、pop：三个相近但不同的动作</h3>
+    <pre>d = {"name": "rag_search"}
+print(d.get("timeout", 10))       # 只读：缺失时返回 10，d 不变
+d.setdefault("headers", {})      # 缺失才写入默认值
+removed = d.pop("headers")        # 取出并删除
+print(removed, d)</pre>
+    <p><code>get</code> 不写入，<code>setdefault</code> 可能写入，<code>pop</code> 会删除并返回值。三者不能凭名字互换；尤其不要为了“读一下”使用 <code>setdefault</code>，否则会悄悄改变状态。</p>
+
+    <h2>先跑小例</h2>
+    <div class="box steps"><ol>
+      <li>进入练习目录：<pre>cd D:\agent-learning\playground\python
+.\.venv\Scripts\Activate.ps1</pre></li>
+      <li>运行 <a href="../../playground/python/0006-strings-sets-dicts/examples.py"><code>examples.py</code></a>：<pre>python 0006-strings-sets-dicts\examples.py</pre></li>
+      <li>重点观察：例 1 的 raw 没变；例 2 的空行被过滤；例 3 的集合输出顺序不应当被当作契约；例 4 的 <code>"3"</code> 经过 <code>int</code> 才成为数字。</li>
+    </ol></div>
+
+    <h2>主脚本导读：parse_tool_call.py</h2>
+    <div class="box steps"><ol>
+      <li><code>KNOWN_TOOLS</code> 是 set：校验工具名是否在白名单中，避免任意字符串直接进入执行层。</li>
+      <li><code>clean_query</code> 用 <code>strip</code> + <code>split</code> + <code>join</code> 把连续空白压成单空格。这里 <code>split()</code> 不传分隔符，表示按任意连续空白切。</li>
+      <li><code>build_prompt</code> 用列表生成式生成编号行，再用换行符 <code>join</code> 合并。空 snippets 时给出明确占位文本，而不是生成空 prompt。</li>
+      <li><code>validate_call</code> 先用 <code>get</code> 读取 name 和 arguments，再检查白名单与类型；错误在边界暴露，不让执行函数收到半结构化数据。</li>
+      <li><code>main</code> 最后才把 top_k 转成 int。外部 JSON 的类型在边界归一化，是 Java 后端 DTO 校验的 Python 版本。</li>
+    </ol></div>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box"><ul>
+      <li><strong>字符串赋值不等于修改：</strong><code>text.strip()</code> 不接回变量，原 text 不变。</li>
+      <li><strong>split / join 方向：</strong><code>text.split()</code> 是 str → list；<code>"sep".join(lines)</code> 是 list[str] → str。</li>
+      <li><strong>join 类型：</strong><code>"-".join([1, 2])</code> 抛 TypeError，先 <code>map(str, values) map(函数, 可迭代对象) 可迭代对象转换为迭代器，然后依次调用函数，返回一个迭代器</code>。</li>
+      <li><strong>find / index：</strong>find 找不到返回 -1；index 找不到抛 ValueError。不要把两者当同一个 API。</li>
+      <li><strong>set 无序：</strong>不要依赖打印顺序或索引；稳定展示使用 <code>sorted</code>。</li>
+      <li><strong>空容器：</strong><code>{}</code> 是 dict；空 set 是 <code>set()</code>。</li>
+      <li><strong>dict.get 的 None：</strong><code>d.get("x")</code> 可能得到 None；若 None 本身是合法值，不能用 <code>or default</code> 偷换语义。</li>
+      <li><strong>外部类型：</strong>JSON 的 <code>"3"</code>、<code>"false"</code> 都是字符串；不要只看打印结果，要检查 <code>type</code> 并显式转换。</li>
+      <li><strong>修改中的遍历：</strong>不要在遍历 dict/set 的同时增删元素；先收集待修改项，再统一更新。</li>
+    </ul></div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz data-ok="对。str 不可变，strip 返回新字符串。" data-bad="字符串方法不会原地改字符串；要保存结果必须重新绑定。"><p>执行 <code>s = '  x  '; s.strip()</code> 后，s 是什么？</p><button data-correct="true">仍是 '  x  '</button><button data-correct="false">变成 'x'</button><button data-correct="false">变成 ['x']</button><p class="feedback"></p></div>
+    <div class="quiz" data-quiz data-ok="对。split 把一段字符串拆成 list。" data-bad="join 才是合并；split 的返回值是 list。"><p><code>'a,b'.split(',')</code> 返回什么？</p><button data-correct="true">['a', 'b']</button><button data-correct="false">'a,b'</button><button data-correct="false">{'a', 'b'}</button><p class="feedback"></p></div>
+    <div class="quiz" data-quiz data-ok="对。join 的调用者是分隔符，元素必须是字符串。" data-bad="不要写 lines.join；Python 的 join 在分隔符字符串上调用。"><p>把 <code>['a', 'b']</code> 合成两行文本，正确写法是？</p><button data-correct="true">'\n'.join(lines)</button><button data-correct="false">lines.join('\n')</button><button data-correct="false">'\n'.split(lines)</button><p class="feedback"></p></div>
+    <div class="quiz" data-quiz data-ok="对。集合去重且无索引；需要顺序时显式排序。" data-bad="set 不是 list，不能按位置读取，也不承诺插入顺序。"><p>下列关于 set 的说法正确的是？</p><button data-correct="true">它适合成员判断和去重，不适合索引</button><button data-correct="false">它会按插入顺序保存重复值</button><button data-correct="false">空集合字面量是 {}</button><p class="feedback"></p></div>
+    <div class="quiz" data-quiz data-ok="对。& 表示交集，结果是两组都有的元素。" data-bad="差集是 -；交集 & 只保留两边共同出现的元素。"><p><code>{'rag', 'tool'} & {'tool', 'eval'}</code> 是什么？</p><button data-correct="true">{'tool'}</button><button data-correct="false">{'rag', 'tool', 'eval'}</button><button data-correct="false">{'rag'}</button><p class="feedback"></p></div>
+    <div class="quiz" data-quiz data-ok="对。get 在缺键时给默认值，不会因缺键抛 KeyError。" data-bad="直接索引 d['top_k'] 才会在缺键时抛 KeyError；get 可给默认。"><p><code>{}.get('top_k', 3)</code> 的结果是？</p><button data-correct="true">3</button><button data-correct="false">None 并抛 KeyError</button><button data-correct="false">'3'</button><p class="feedback"></p></div>
+    <div class="quiz" data-quiz data-ok="对。setdefault 可能写入默认值，get 只读。" data-bad="setdefault 和 get 的关键差异是：前者在缺失时会把默认值写进字典。"><p>哪一个动作会在键缺失时修改字典？</p><button data-correct="true">d.setdefault('headers', {})</button><button data-correct="false">d.get('headers', {})</button><button data-correct="false">'headers' in d</button><p class="feedback"></p></div>
+    <div class="quiz" data-quiz data-ok="对。外部 JSON 的数字可能是字符串，边界处应显式转换。" data-bad="'3' 是 str，不是 int；切片或数值比较前要转换。"><p>为什么要写 <code>int(args.get('top_k', 3))</code>？</p><button data-correct="true">把字符串数字归一化为整数</button><button data-correct="false">把整数编码成 bytes</button><button data-correct="false">让字典变成列表</button><p class="feedback"></p></div>
+
+    <h2>过关标准</h2>
+    <ul><li>不看资料，能解释字符串不可变、split/join 方向和 find/index 差异。</li><li>能用 set 表示“已见工具 / 缺少能力”，说清交集、差集、无序和可哈希。</li><li>能读懂至少两层嵌套 dict，判断字段应使用 []、get、setdefault 还是 pop。</li><li>两个脚本运行通过，并能按“清洗 → 组装 → 白名单校验 → 类型归一化”讲解主流程。</li><li>完成上面 8 道检索题后，能指出每个错误选项违反了哪条规则。</li></ul>
+
+    <h2>选读与速查</h2>
+    <div class="box"><p><strong>权威出处</strong></p><ul><li><a href="https://docs.python.org/3/library/stdtypes.html#text-sequence-type-str">Python 官方 str 文档</a></li><li><a href="https://docs.python.org/3/tutorial/datastructures.html#sets">Python 官方集合教程</a></li><li><a href="https://docs.python.org/3/tutorial/datastructures.html#dictionaries">Python 官方字典教程</a></li></ul><p><strong>本地选读</strong></p><ul><li><a href="../../python-100Days/Day01-20/11.常用数据结构之字符串.md">Day11 字符串</a></li><li><a href="../../python-100Days/Day01-20/12.常用数据结构之集合.md">Day12 集合</a></li><li><a href="../../python-100Days/Day01-20/13.常用数据结构之字典.md">Day13 字典</a></li></ul></div>
+    <p><a href="../../reference/python-phase0.html">Python 阶段 0 速查</a> · <a href="../../GLOSSARY.md">GLOSSARY.md</a> · <a href="../../reference/index.html">速查索引</a></p>
+    <div data-lesson-id-footer="0006"></div>
+    <footer>不清楚的立刻问我。跑完或卡住，把输出贴回来。下一课：文件读写与异常（0007）——把知识库安全加载进 Agent。</footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script><script src="../../assets/lesson-nav.js"></script><script src="../../assets/quiz.js"></script>
+</body>
+</html>

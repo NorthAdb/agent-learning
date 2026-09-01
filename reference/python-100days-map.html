@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Python-100-Days 对照</title>
+  <link rel="stylesheet" href="../assets/lesson.css" />
+  <link rel="stylesheet" href="../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="./index.html">速查索引</a> · 对齐 <a href="../NOTES.md">NOTES.md</a></p>
+    <h1>Python-100-Days 当作课本，学了多少</h1>
+    <p class="mission">
+      100-Days 是 Python <strong>范围地图 / 课本</strong>，不是要读完 100 天。
+      课件 HTML 才是主教材：对应 Day 的要点写进课里，默认不必翻回原书。
+      冷门、纯趣味、和读 Agent 脚本无关的默认跳过。进 North 前按全套 <code>s01–s20/code.py</code> 补语法（0013–0016），不按 100 天把 Django / 爬虫 / 机器学习排进来。
+    </p>
+
+    <h2>Day01–20 语言基础</h2>
+    <table>
+      <tr><th>Day</th><th>主题</th><th>本仓库</th></tr>
+      <tr><td>01</td><td>初识 Python</td><td>0001 扫过；编年史跳过</td></tr>
+      <tr><td>02</td><td>第一个程序</td><td>0001 已内化</td></tr>
+      <tr><td>03</td><td>变量</td><td>0002 已内化</td></tr>
+      <tr><td>04</td><td>运算符</td><td>0002 选读；不阻塞</td></tr>
+      <tr><td>05–06</td><td>分支 / 循环</td><td>0003 已内化</td></tr>
+      <tr><td>07</td><td>分支循环趣味实战</td><td>跳过（素数等）</td></tr>
+      <tr><td>08–10</td><td>列表 / 元组</td><td>0005 已内化</td></tr>
+      <tr><td>11–13</td><td>字符串 / 集合 / 字典</td><td>0006 已内化</td></tr>
+      <tr><td>14</td><td>函数和模块</td><td>0004 已内化</td></tr>
+      <tr><td>15</td><td>函数应用实战</td><td>跳过（趣味题）</td></tr>
+      <tr><td>16</td><td>函数进阶（高阶 / lambda）</td><td>0005 用过 <code>key=lambda</code>；不单开</td></tr>
+      <tr><td>17</td><td>装饰器 / 递归</td><td>0012 认 <code>@dataclass</code>；0013 认 <code>@property</code> / static / classmethod；自己写通用装饰器仍不排</td></tr>
+      <tr><td>18</td><td>面向对象入门</td><td>0012 已内化</td></tr>
+      <tr><td>19</td><td>面向对象进阶</td><td>0013 已内化</td></tr>
+      <tr><td>20</td><td>面向对象应用</td><td>跳过（扑克牌长例）</td></tr>
+    </table>
+
+    <h2>Day21 之后（按需，不排课表）</h2>
+    <table>
+      <tr><th>Day</th><th>主题</th><th>本仓库</th></tr>
+      <tr><td>21</td><td>文件与异常</td><td>0007 已内化</td></tr>
+      <tr><td>22</td><td>序列化</td><td>0008 JSON 覆盖 Agent 所需；pickle 跳过</td></tr>
+      <tr><td>23–29</td><td>CSV / Excel / Word / PDF / 图 / 邮件</td><td>跳过</td></tr>
+      <tr><td>30</td><td>正则</td><td>0015 只内化 North 用到的 search / group / DOTALL / compile</td></tr>
+      <tr><td>31</td><td>语言进阶</td><td>不整章；getattr/subprocess 见 0014</td></tr>
+      <tr><td>32–35</td><td>前端 / Linux</td><td>跳过</td></tr>
+      <tr><td>36–45</td><td>MySQL / SQL</td><td>你已有 Java 侧；Python 接入见到再补</td></tr>
+      <tr><td>46–60</td><td>Django</td><td>跳过（不当主线）</td></tr>
+      <tr><td>61–65</td><td>爬虫；Day63 含并发</td><td>爬虫跳过；线程（非 async）见 0016；North 未用 async</td></tr>
+      <tr><td>66–90</td><td>数据分析 / 机器学习</td><td>跳过</td></tr>
+      <tr><td>91–100</td><td>工程杂项 / 面试</td><td>跳过</td></tr>
+    </table>
+
+    <h2>课件里有、100-Days 没有独立章的</h2>
+    <ul>
+      <li>0009 类型标注 → 官方 typing</li>
+      <li>0010 requests → 官方 Quickstart</li>
+      <li>0011 venv / pip → 官方 venv + pip User Guide</li>
+      <li>0014 getattr / subprocess / glob → 官方库文档（North s01–s02）</li>
+      <li>0015 re / ast.literal_eval → 官方；YAML 仅扫一眼</li>
+      <li>0016 threading / datetime / asdict → 官方（North s12–s14）</li>
+    </ul>
+
+    <p><a href="../lessons/phase-0/index.html">阶段 0 课件分册</a> · <a href="./python-phase0.html">阶段 0 速查</a></p>
+    <footer>原书在 <code>python-100Days/</code>。冲突以课件 + GLOSSARY 为准。</footer>
+  </main>
+</body>
+</html>

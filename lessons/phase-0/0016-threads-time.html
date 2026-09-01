@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0016 · 线程、锁与 datetime</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0016"></div>
+    <h1>后台线程、锁、时间：s13 / s14 的 Python</h1>
+    <p class="mission">
+      North s13 用 <code>threading.Thread(daemon=True)</code> 跑慢命令，用 <code>Lock</code> 保护共享 dict；
+      s12+ 用 <code>asdict</code> 把 Task 写成 JSON；s14 用 <code>datetime.now()</code> 对 cron。
+      主技能：<strong>线程 + 锁 + datetime + asdict + global</strong>。不调模型。
+      阶段 0 最后一课：补齐后半 North 会碰到的「后台跑 + 记时间 + 落盘」。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      <a href="https://docs.python.org/3/library/threading.html">threading</a>、
+      <a href="https://docs.python.org/3/library/datetime.html">datetime</a>、
+      <a href="https://docs.python.org/3/library/dataclasses.html#dataclasses.asdict">asdict</a>。
+      Day63 并发长文不整章搬。North <strong>没有</strong> <code>async</code>/<code>await</code>，本课不补。
+    </p>
+    <table>
+      <tr><th>要点</th><th>本课</th></tr>
+      <tr><td><code>Thread(target=, args=, daemon=True)</code> / <code>start</code> / <code>join</code></td><td><span class="tag">已内化</span>讲解 1</td></tr>
+      <tr><td><code>Lock</code> + <code>with lock:</code>；锁内外怎么分</td><td><span class="tag">已内化</span>讲解 2</td></tr>
+      <tr><td><code>datetime.now</code> / <code>timedelta</code> / <code>strftime</code> / <code>isoformat</code></td><td><span class="tag">已内化</span>讲解 3</td></tr>
+      <tr><td><code>asdict</code> 把 dataclass 变 dict</td><td><span class="tag">已内化</span>讲解 4</td></tr>
+      <tr><td><code>global</code> 三案（赋值 / 只读 / 改对象内部）</td><td><span class="tag">已内化</span>讲解 5</td></tr>
+      <tr><td>进程 / asyncio / 线程池调优</td><td><span class="tag">跳过</span>North 用不到 async；ThreadPool 仅 s15 一处，见到再认</td></tr>
+    </table>
+
+    <h2>为什么要学？（动机）</h2>
+    <p>
+      前半 Agent loop 是「一问一答一工具」同步往前走。后半要处理：
+      <strong>慢命令别堵死主 loop</strong>、<strong>多线程别把共享表写坏</strong>、
+      <strong>定时/调度要知道现在几点</strong>、<strong>Task 要能写成 JSON 文件</strong>。
+    </p>
+    <table>
+      <tr><th>工具</th><th>解决什么问题</th><th>North</th></tr>
+      <tr>
+        <td><code>threading.Thread</code></td>
+        <td>主 loop 继续想下一步，慢 bash 丢到后台跑</td>
+        <td>s13 后台任务</td>
+      </tr>
+      <tr>
+        <td><code>Lock</code></td>
+        <td>多线程同时改同一个 dict 会损坏数据</td>
+        <td>s13 <code>background_lock</code></td>
+      </tr>
+      <tr>
+        <td><code>datetime</code></td>
+        <td>取当前时间、做时间差、判断「这一分钟该不该触发」</td>
+        <td>s14 cron</td>
+      </tr>
+      <tr>
+        <td><code>asdict</code></td>
+        <td>dataclass 实例 → 普通 dict，才能 <code>json.dumps</code></td>
+        <td>s12 <code>save_task</code></td>
+      </tr>
+      <tr>
+        <td><code>global</code></td>
+        <td>函数里给模块级计数器重新赋值</td>
+        <td>s13 <code>_bg_counter</code></td>
+      </tr>
+    </table>
+    <p class="muted">本课<strong>不是</strong> async。North 全程同步 + 偶尔开线程。</p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>Python</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr><td><code>threading.Thread</code></td><td><code>new Thread(runnable).start()</code></td><td><code>target</code> 传函数对象，不要加 <code>()</code></td></tr>
+      <tr><td><code>daemon=True</code></td><td>近似 daemon 线程</td><td>主进程退出时后台线程被丢掉，不保证干完</td></tr>
+      <tr><td><code>with lock:</code></td><td><code>synchronized</code> / try-finally unlock</td><td>退出 with 自动放锁；临界区保持短</td></tr>
+      <tr><td><code>datetime.now()</code></td><td><code>LocalDateTime.now()</code></td><td>本课认 now / timedelta / strftime / isoformat</td></tr>
+      <tr><td><code>asdict(task)</code></td><td>record → Map 再 JSON</td><td>接 0008 <code>json.dumps</code></td></tr>
+      <tr><td><code>global x</code></td><td>没有完全同款（偏模块作用域）</td><td>只在「函数里重新赋值模块级名」时需要</td></tr>
+    </table>
+
+    <h2>系统讲解</h2>
+
+    <h3>1. 线程：主 loop 不等慢命令</h3>
+
+    <h4>1.1 它是什么？</h4>
+    <p>
+      <strong>线程（thread）</strong>：同一进程里另一条执行线。
+      默认你写的代码只在<strong>主线程</strong>里从上到下跑；
+      <code>Thread(...).start()</code> 再开一条线，可以和主线程<strong>并行</strong>干活。
+    </p>
+    <p class="muted">
+      本课说的「并行」是「主线程不必干等后台结束」——足够读懂 North s13。
+      不展开 GIL / CPU 密集等进阶话题。
+    </p>
+
+    <h4>1.2 解决什么问题？</h4>
+    <p>
+      s13：有的 bash 可能超过几十秒。若在主 loop 里同步 <code>subprocess.run</code> 死等，
+      模型没法继续规划、用户也像卡住。
+      做法：把慢活丢进后台线程，主 loop <strong>立刻</strong>返回「已派发」，稍后查结果表。
+    </p>
+
+    <h4>1.3 拆开读：创建线程那一行</h4>
+    <pre>import threading
+import time
+
+def worker(task_id: str, delay: float) -> None:
+    time.sleep(delay)
+    print(task_id, "done")
+
+t = threading.Thread(target=worker, args=("bg_1", 0.15), daemon=True)
+t.start()          # 立刻返回，不等 worker 结束
+print("主线程继续") # 此时 worker 可能还在 sleep
+t.join(timeout=2)  # 可选：最多等 2 秒再往下</pre>
+    <table>
+      <tr><th>片段</th><th>含义</th></tr>
+      <tr>
+        <td><code>threading.Thread(...)</code></td>
+        <td>造一个线程对象；此时<strong>还没跑</strong> worker</td>
+      </tr>
+      <tr>
+        <td><code>target=worker</code></td>
+        <td>后台要执行的函数<strong>对象</strong>（0004：函数名不带括号 = 对象本身）</td>
+      </tr>
+      <tr>
+        <td><code>args=("bg_1", 0.15)</code></td>
+        <td>
+          传给 <code>worker</code> 的<strong>位置参数</strong>（按顺序对上函数形参，不靠名字）：
+          第 1 个 → <code>task_id</code>，第 2 个 → <code>delay</code>。
+          必须是<strong>元组</strong>
+        </td>
+      </tr>
+      <tr>
+        <td><code>daemon=True</code></td>
+        <td>守护线程：主程序结束时，这类线程会被直接丢掉</td>
+      </tr>
+      <tr>
+        <td><code>t.start()</code></td>
+        <td>真正启动；<strong>立即返回</strong>，不等 worker 跑完</td>
+      </tr>
+      <tr>
+        <td><code>t.join(timeout=2)</code></td>
+        <td>主线程在这里等：worker 结束，或最多等 2 秒</td>
+      </tr>
+    </table>
+
+    <h4>1.4 关键参数与三案</h4>
+    <table>
+      <tr><th>点</th><th>含义</th><th>坑</th></tr>
+      <tr>
+        <td><code>target=worker</code></td>
+        <td>函数对象</td>
+        <td><code>target=worker()</code> 会<strong>先在主线程跑完</strong>，后台啥也没有</td>
+      </tr>
+      <tr>
+        <td><code>args=(...)</code></td>
+        <td>位置参数元组</td>
+        <td>单元素别忘逗号：<code>("bg_1",)</code>；写成 <code>("bg_1")</code> 只是字符串</td>
+      </tr>
+      <tr>
+        <td><code>daemon=True</code></td>
+        <td>主退出即丢</td>
+        <td>不保证退出前把活干完；Agent 进程常驻时通常够用</td>
+      </tr>
+      <tr>
+        <td><code>start()</code></td>
+        <td>启动并立即返回</td>
+        <td>不要以为 start 会等到结束</td>
+      </tr>
+      <tr>
+        <td><code>join(timeout=...)</code></td>
+        <td>可选：等它结束（或等到超时）</td>
+        <td>教学/脚本里用来「等结果出现」；s13 主 loop 通常不 join，而是查结果表</td>
+      </tr>
+    </table>
+    <p><strong>target 三案（必背）：</strong></p>
+    <table>
+      <tr><th>案</th><th>写法</th><th>结果</th></tr>
+      <tr>
+        <td>① 正确</td>
+        <td><code>Thread(target=worker, args=("bg_1",))</code></td>
+        <td>后台线程里调用 <code>worker("bg_1")</code> ✅</td>
+      </tr>
+      <tr>
+        <td>② 多了括号</td>
+        <td><code>Thread(target=worker())</code></td>
+        <td>主线程立刻跑完 worker，target 收到的往往是 <code>None</code> ❌</td>
+      </tr>
+      <tr>
+        <td>③ 传了字符串</td>
+        <td><code>Thread(target="worker")</code></td>
+        <td>字符串不可调用 → 启动时报错 ❌</td>
+      </tr>
+    </table>
+    <p>
+      时间线直觉：<code>start()</code> 之后主线程和 worker <strong>同时往前走</strong>；
+      若马上 <code>print(results)</code>，往往还是空的——worker 还在 sleep。
+      要「等结果」，用 <code>join</code>，或像主脚本那样稍后再查共享表。
+    </p>
+
+    <h3>2. 锁：共享 dict 的安全带</h3>
+
+    <h4>2.1 它是什么？解决什么？</h4>
+    <p>
+      两个线程同时改同一个 dict：可能一个读到一半、另一个改完了，
+      甚至损坏 dict 内部结构（偶发、难复现的 bug）。
+    </p>
+    <p>
+      <strong>Lock（锁）</strong>：同一时刻只让<strong>一个</strong>线程进入
+      <code>with lock:</code> 包住的那段代码（叫<strong>临界区</strong>）。
+      别的线程要进同一把锁，必须等当前线程退出 <code>with</code>。
+    </p>
+    <pre>lock = threading.Lock()
+results: dict[str, str] = {}
+
+def worker(task_id: str, delay: float) -> None:
+    time.sleep(delay)          # 睡在锁外！别堵住别人
+    with lock:
+        results[task_id] = f"done after {delay}s"  # 读改共享状态放里面</pre>
+    <p>
+      <code>with lock:</code> 进入时抢锁，离开时（含异常）自动放锁——
+      比手写 <code>lock.acquire()</code> / <code>lock.release()</code> 更不容易漏放。
+    </p>
+
+    <h4>2.2 锁内 vs 锁外（拆开主脚本）</h4>
+    <table>
+      <tr><th>放哪</th><th>例子</th><th>为什么</th></tr>
+      <tr>
+        <td>锁<strong>外</strong></td>
+        <td><code>time.sleep(delay)</code>、跑 bash、调网络</td>
+        <td>慢活占着锁 → 别的线程全堵死</td>
+      </tr>
+      <tr>
+        <td>锁<strong>内</strong></td>
+        <td>读/写 <code>jobs</code> / <code>results</code>、改 <code>status</code></td>
+        <td>共享状态的读和写要成一组，避免半截状态</td>
+      </tr>
+    </table>
+    <p>s13 / 本课主脚本：sleep 在锁外；改 <code>jobs[job_id]</code> 在锁内。</p>
+
+    <h4>2.3 三案</h4>
+    <table>
+      <tr><th>案</th><th>情况</th><th>做法</th></tr>
+      <tr><td>①</td><td>只读、无线程共享</td><td>不必加锁</td></tr>
+      <tr><td>②</td><td>多线程读写同一 dict</td><td><code>with lock:</code> 包住相关读和写</td></tr>
+      <tr><td>③</td><td>锁里再调可能抢<strong>同一把</strong>锁的函数</td><td>死锁风险；临界区短、别嵌套同一把锁</td></tr>
+    </table>
+    <p class="muted">
+      本课锁是<strong>不可重入</strong>的普通 <code>Lock</code>（同一线程也不能二次 acquire 同一把）。
+      North s13 用的也是这种；见到 <code>RLock</code> 再说。
+    </p>
+
+    <h3>3. datetime：现在几点、过了多久</h3>
+
+    <h4>3.1 它是什么？</h4>
+    <p>
+      <code>datetime</code> 是标准库模块，处理日期和时间。
+      常见导入：<code>from datetime import datetime, timedelta</code>
+      （注意：模块名和类名都叫 datetime，所以常常「from 模块 import 类」）。
+    </p>
+    <p>本课认四个动作：</p>
+    <table>
+      <tr><th>写法</th><th>做什么</th><th>得到什么</th></tr>
+      <tr>
+        <td><code>datetime.now()</code></td>
+        <td>取本地「现在」</td>
+        <td><code>datetime</code> 对象（有年/月/日/时/分/秒…）</td>
+      </tr>
+      <tr>
+        <td><code>timedelta(minutes=1)</code></td>
+        <td>表示一段时间长度</td>
+        <td>可与 now 做加减：<code>now + timedelta(...)</code></td>
+      </tr>
+      <tr>
+        <td><code>now.strftime("%Y-%m-%d %H:%M:%S")</code></td>
+        <td>按你指定的格式变成字符串</td>
+        <td>适合打印、日志</td>
+      </tr>
+      <tr>
+        <td><code>now.isoformat(timespec="seconds")</code></td>
+        <td>按 ISO 标准格式变成字符串</td>
+        <td>适合进 JSON / 落盘（主脚本 <code>started_at</code>）</td>
+      </tr>
+    </table>
+    <pre>from datetime import datetime, timedelta
+
+now = datetime.now()
+now.strftime("%Y-%m-%d %H:%M:%S")           # 如 2026-08-31 11:05:03
+(now + timedelta(minutes=1)).strftime("%H:%M:%S")
+now.isoformat(timespec="seconds")           # 如 2026-08-31T11:05:03</pre>
+
+    <h4>3.2 <code>strftime</code> vs <code>isoformat</code></h4>
+    <table>
+      <tr><th></th><th><code>strftime</code></th><th><code>isoformat</code></th></tr>
+      <tr>
+        <td>格式谁定</td>
+        <td>你用 <code>%Y</code> <code>%m</code> 等自己拼</td>
+        <td>标准 ISO 8601（中间有 <code>T</code>）</td>
+      </tr>
+      <tr>
+        <td>常见用途</td>
+        <td>给人看的日志</td>
+        <td>给程序存的字段（JSON）</td>
+      </tr>
+      <tr>
+        <td>本课主脚本</td>
+        <td>例 2 演示打印</td>
+        <td><code>Job.started_at</code> 用 isoformat</td>
+      </tr>
+    </table>
+    <p class="muted">
+      <code>timespec="seconds"</code>：精度到秒，不要毫秒尾巴——字段更干净。
+    </p>
+
+    <h4>3.3 解决什么问题？</h4>
+    <p>
+      s14 cron：用 <code>datetime.now()</code> 判断「这一分钟该不该触发」。
+      后台任务也要记录 <code>started_at</code>，方便以后排查「几点派发的」。
+      本课<strong>不</strong>实现 cron 五段表达式，只认取时、做差、变成字符串。
+    </p>
+
+    <h3>4. <code>asdict</code>：dataclass → 可 JSON 的 dict</h3>
+
+    <h4>4.1 它是什么？解决什么？</h4>
+    <p>
+      0012 的 <code>@dataclass</code> 实例是<strong>自定义对象</strong>，
+      <strong>不能</strong>直接 <code>json.dumps(task)</code>（0008 的 dumps 只认 dict / list / 数字 / 字符串 / bool / None）。
+    </p>
+    <p>
+      <code>from dataclasses import asdict</code> 后，
+      <code>asdict(task)</code> 把实例变成<strong>普通 dict</strong>（键是字段名，值是字段值），再 dumps。
+      s12 <code>save_task</code> 就是这一句。
+    </p>
+    <pre>from dataclasses import asdict, dataclass
+import json
+
+@dataclass
+class Task:
+    id: str
+    status: str
+    owner: str | None = None
+
+task = Task("task_1", "pending")
+d = asdict(task)
+# → {"id": "task_1", "status": "pending", "owner": None}
+
+json.dumps(d)          # ✅
+# json.dumps(task)     # ❌ TypeError：不是 JSON 原生类型</pre>
+
+    <h4>4.2 和主脚本怎么接</h4>
+    <p>
+      <code>snapshot()</code> 在锁内对每个 <code>Job</code> 做 <code>asdict</code>，
+      得到 <code>list[dict]</code>——外面可以安心打印或以后 dumps，
+      且遍历时不会和 worker 改表打架。
+    </p>
+
+    <h3>5. <code>global</code>：函数里改模块级名字</h3>
+
+    <h4>5.1 它是什么？</h4>
+    <p>
+      写在 <code>.py</code> 文件顶层的变量（如 <code>_counter = 0</code>）叫<strong>模块级</strong>变量。
+      函数里若只是<strong>读取</strong>它，或只改它指向的<strong>对象内部</strong>（list.append、dict[k]=），
+      一般不用声明。
+    </p>
+    <p>
+      但若函数里要给这个名字<strong>重新赋值</strong>（<code>_counter = ...</code> 或 <code>_counter += 1</code>），
+      Python 会默认当成「函数局部变量」。要改外面那个模块级名，必须写：
+    </p>
+    <pre>def _next_id() -> str:
+    global _counter   # 声明：下面的 _counter 指模块级那个
+    _counter += 1
+    return f"bg_{_counter:04d}"</pre>
+
+    <h4>5.2 三案（必背）</h4>
+    <table>
+      <tr><th>案</th><th>函数里做什么</th><th>要不要 <code>global</code></th></tr>
+      <tr>
+        <td>① 重新赋值</td>
+        <td><code>_counter += 1</code> / <code>_counter = 5</code></td>
+        <td><strong>要</strong> <code>global _counter</code></td>
+      </tr>
+      <tr>
+        <td>② 只读</td>
+        <td><code>print(_counter)</code> / <code>return _counter</code></td>
+        <td>不必</td>
+      </tr>
+      <tr>
+        <td>③ 改对象内部</td>
+        <td><code>jobs[id] = ...</code> / <code>lst.append(...)</code></td>
+        <td>不必（名字还是指向同一个 dict/list）</td>
+      </tr>
+    </table>
+    <p>
+      s13 <code>global _bg_counter</code> 同款。
+      和实例属性 <code>self.x</code> <strong>不是一回事</strong>：类方法里改 <code>self.x</code> 从不写 global。
+    </p>
+
+    <h2>主脚本导读</h2>
+    <p>
+      先跑 <a href="../../playground/python/0016-threads-time/examples.py"><code>examples.py</code></a>，
+      再读并跑 <a href="../../playground/python/0016-threads-time/background_jobs.py"><code>background_jobs.py</code></a>：
+      最小后台任务表（s13 缩影）。
+    </p>
+    <table>
+      <tr><th>块</th><th>看什么</th><th>对应</th></tr>
+      <tr><td><code>Job</code> dataclass</td><td>id / status / started_at / output</td><td>讲解 3、4</td></tr>
+      <tr><td><code>jobs</code> + <code>lock</code> + <code>_counter</code></td><td>共享表；计数器用 global</td><td>讲解 2、5</td></tr>
+      <tr><td><code>start_job</code></td><td>锁内登记 running → <code>Thread(...).start()</code> 立刻返回</td><td>讲解 1–2</td></tr>
+      <tr><td>嵌套 <code>worker</code></td><td>sleep 在锁外；完成后锁内改 status / output</td><td>讲解 1–2</td></tr>
+      <tr><td><code>snapshot</code></td><td>锁内 <code>asdict</code>，避免遍历时被改</td><td>讲解 2、4</td></tr>
+      <tr><td><code>main</code></td><td>派发两个任务 → 立刻 snapshot（多 running）→ sleep → 再 snapshot（completed）</td><td>整课串起来</td></tr>
+    </table>
+    <pre>cd d:\agent-learning\playground\python
+.\.venv\Scripts\Activate.ps1
+python 0016-threads-time\examples.py
+python 0016-threads-time\background_jobs.py
+# 期望：immediate 多为 running；later 为 completed</pre>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong><code>Thread(target=worker())</code></strong>：多了括号，立刻在主线程跑完。</li>
+        <li><strong><code>args=("bg_1")</code></strong>：少了逗号，不是单元素元组。</li>
+        <li><strong>不加锁改共享 dict</strong>：数据损坏 / 偶发诡异 bug。</li>
+        <li><strong>在锁里做网络 / 长时间 sleep</strong>：堵住别的线程；慢活放锁外。</li>
+        <li><strong>以为 daemon 会在退出前干完</strong>：不会，主进程走了它就丢。</li>
+        <li><strong>直接 <code>json.dumps(dataclass实例)</code></strong>：先 <code>asdict</code>。</li>
+        <li><strong>函数里 <code>_counter += 1</code> 忘了 global</strong>：UnboundLocalError 或改错成局部变量。</li>
+        <li><strong>把线程当成 async</strong>：North 全程同步 + 线程；本课不引入 await。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。target 要函数对象；加括号变成先调用。"
+      data-bad="args 是位置参数元组，不是 target 本身。">
+      <p>启动后台线程时 <code>target=</code> 该传什么？</p>
+      <button data-correct="true">函数对象不要立刻调用</button>
+      <button data-correct="false">函数结果也就是返回值</button>
+      <button data-correct="false">函数名称组成的字符串</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。多线程读写同一 dict 需要锁；慢活放锁外。"
+      data-bad="单线程只读不必锁；嵌套同一锁有死锁风险。">
+      <p>两个后台线程都要改同一个 <code>jobs</code> dict，该？</p>
+      <button data-correct="true">用 <code>with lock:</code> 保护读写</button>
+      <button data-correct="false">绝对不能加锁</button>
+      <button data-correct="false">改成 async 才能改 dict</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。asdict 得到普通 dict，才能 json.dumps。"
+      data-bad="dataclass 实例不是 JSON 原生类型。">
+      <p>把 <code>Task</code> 实例写入 JSON 文件，应先？</p>
+      <button data-correct="true">转成普通字典再编码</button>
+      <button data-correct="false">直接把实例丢进编码</button>
+      <button data-correct="false">先转成线程再去编码</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。重新赋值模块级名才要 global；改 dict 内部不必。"
+      data-bad="改 jobs[k]= 不必 global；只读也不必。">
+      <p>函数里要写 <code>_counter += 1</code>（模块级计数器），该？</p>
+      <button data-correct="true">先写 <code>global _counter</code></button>
+      <button data-correct="false">改任何共享状态都必须 global</button>
+      <button data-correct="false">只能用线程，不能用 global</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能一句话说清 Thread / Lock / datetime / asdict / global 各解决什么问题。</li>
+      <li>能讲清 start 立即返回、join 才等、daemon 随主进程结束；target 三案（对象 / 多括号 / 字符串）。</li>
+      <li>能说明锁保护哪块共享状态；锁内改状态、锁外 sleep；三案（不必锁 / 必须锁 / 死锁）。</li>
+      <li>能区分 strftime（给人看）与 isoformat（给程序存）；能用 asdict 接上 0008 JSON。</li>
+      <li>能说清 global 三案（赋值要 / 只读不必 / 改对象内部不必）。</li>
+      <li>两个脚本跑通；<code>background_jobs.py</code> 第二次 snapshot 应为 completed。</li>
+    </ul>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>官方 threading / datetime / asdict。</li>
+        <li>对照 North s13 <code>start_background_task</code>；s12 <code>asdict(task)</code>；s14 cron 里的 <code>datetime.now()</code>。</li>
+      </ul>
+    </div>
+    <p><a href="../../reference/python-phase0.html#threads">阶段 0 速查：线程与时间</a></p>
+    <div data-lesson-id-footer="0016"></div>
+    <footer>
+      不清楚的立刻问我。0016 过关后，阶段 0 收完，下一课进入阶段 1 心智模型。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

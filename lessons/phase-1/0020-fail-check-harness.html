@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0020 · 失败先查 harness</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0020"></div>
+    <h1>失败先查 harness：能力鸿沟与验证缺口</h1>
+    <p class="mission">
+      使命最后一条成功标准：
+      <strong>遇到失败时先查 harness（规则、工具、验证、上下文），而不是先怪模型</strong>。
+      0017–0019 钉了零件、载具、循环。本课钉失败时往哪看。不跑 North <code>code.py</code>。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      卫星讲义
+      <a href="https://walkinglabs.github.io/learn-harness-engineering/zh/lectures/lecture-01-why-capable-agents-still-fail/">Learn Harness Engineering 第一讲</a>
+      （能力鸿沟、Harness 诱导失败、验证缺口、诊断循环、完成定义、五层归因）。
+      网页<strong>没有行号</strong>，出处用标题锚点。读完本页即可过关，不必做讲义里的 P01。
+    </p>
+    <p class="muted">
+      点带行号的链接会在 Cursor 里打开该行（仓库文件）。
+      点「L01 · 某节」会打开讲义对应标题。
+    </p>
+    <h3>本课新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>去哪看</th></tr>
+      <tr>
+        <td><strong>能力鸿沟</strong></td>
+        <td>基准测试好看，真实任务差一截</td>
+        <td>
+          书 / North <strong>没有</strong>这个词。<br>
+          <a href="https://walkinglabs.github.io/learn-harness-engineering/zh/lectures/lecture-01-why-capable-agents-still-fail/#关键名词解释">L01 · 关键名词解释</a>
+        </td>
+      </tr>
+      <tr>
+        <td><strong>Harness 诱导失败</strong></td>
+        <td>模型能力够，执行环境有结构性缺陷所以失败</td>
+        <td>
+          同一节「关键名词解释」；对照实验在
+          <a href="https://walkinglabs.github.io/learn-harness-engineering/zh/lectures/lecture-01-why-capable-agents-still-fail/#同一匹马-两种命运">L01 · 同一匹马，两种命运</a>
+        </td>
+      </tr>
+      <tr>
+        <td><strong>验证缺口</strong></td>
+        <td>它说「做完了」和实际正确性之间的偏差</td>
+        <td>
+          L01 · 关键名词解释。叠 0018 的「验证」：书
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:273">L273</a>
+          /
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:290">verify L290</a>
+        </td>
+      </tr>
+      <tr>
+        <td><strong>完成定义</strong></td>
+        <td>一组能用命令验证的完成条件；没有它，agent 会自己编一个</td>
+        <td>
+          L01 · 关键名词解释；写法示例在
+          <a href="https://walkinglabs.github.io/learn-harness-engineering/zh/lectures/lecture-01-why-capable-agents-still-fail/#遇到失败-先修-harness">L01 · 遇到失败，先修 harness</a>
+        </td>
+      </tr>
+      <tr>
+        <td><strong>诊断循环</strong></td>
+        <td>执行 → 失败 → 定位到某一层 → 修补那一层 → 再执行</td>
+        <td>L01 · 关键名词解释；做法同一节「遇到失败，先修 harness」</td>
+      </tr>
+      <tr>
+        <td>五层归因</td>
+        <td>任务规范 / 上下文 / 环境 / 验证 / 状态</td>
+        <td>
+          <a href="https://walkinglabs.github.io/learn-harness-engineering/zh/lectures/lecture-01-why-capable-agents-still-fail/#遇到失败-先修-harness">L01 · 遇到失败，先修 harness</a>
+          。<strong>不是</strong> L02 的五子系统（本阶段不讲）。
+        </td>
+      </tr>
+    </table>
+    <table>
+      <tr><th>来源要点</th><th>本课</th></tr>
+      <tr><td>失败先查 harness，不要先换更贵的模型</td><td><span class="tag">已内化</span>讲解 1；使命 L10</td></tr>
+      <tr><td>能力鸿沟：基准 ≠ 真实任务</td><td><span class="tag">已内化</span>讲解 1</td></tr>
+      <tr><td>同一匹马两种命运：换的是马具</td><td><span class="tag">已内化</span>讲解 1（不展开三 agent 架构）</td></tr>
+      <tr><td>五种常见卡点 → 五层归因</td><td><span class="tag">已内化</span>讲解 2–3</td></tr>
+      <tr><td>验证缺口与完成定义；AGENTS.md 投入产出比高</td><td><span class="tag">已内化</span>讲解 4</td></tr>
+      <tr><td>诊断循环：失败是 harness 信号</td><td><span class="tag">已内化</span>讲解 5</td></tr>
+      <tr><td>Anthropic 三 agent / OpenAI 百万行实验细节</td><td><span class="tag">跳过</span>记住「模型没变、变的是环境」</td></tr>
+      <tr><td>讲义练习 P01、验证缺口测量作业</td><td><span class="tag">跳过</span>不当主作业；本课用脚本代替</td></tr>
+      <tr><td>L02 五子系统（指令/工具/环境/状态/反馈）</td><td><span class="tag">跳过</span>阶段 2 动手前再开</td></tr>
+      <tr><td>跑 North s01 <code>code.py</code></td><td><span class="tag">下一阶段</span>0020 过关后才开始</td></tr>
+    </table>
+
+    <h2>为什么要学？（动机）</h2>
+    <p>
+      Cursor 里任务黄了，第一反应常常是「换个更强的模型」。
+      使命不许你停在这句。
+      先问：规则写清了吗、工具和环境够不够、有没有验证、上下文里有没有约定。
+    </p>
+    <p class="src">
+      原文：
+      <a href="../../MISSION.md">MISSION.md</a>
+      <a href="cursor://file/d:/agent-learning/MISSION.md:10">L10</a>
+      「遇到失败时先查 harness……而不是先怪模型」。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>本课概念</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr>
+        <td>完成定义</td>
+        <td>CI 门禁：测试 / Checkstyle / 编译必须绿</td>
+        <td>Agent 没有门禁就会口头宣布完成</td>
+      </tr>
+      <tr>
+        <td>验证缺口</td>
+        <td>开发说做完了，流水线一跑就红</td>
+        <td>不是「模型爱撒谎」的人格问题，是缺自动检查</td>
+      </tr>
+      <tr>
+        <td>诊断循环</td>
+        <td>事故复盘：定位层 → 修 → 再发</td>
+        <td>归因到 harness 某一层，不是「再催一下模型」</td>
+      </tr>
+      <tr>
+        <td>能力鸿沟</td>
+        <td>压测分数好看、生产成功率差</td>
+        <td>差往往来自真实环境缺规格和验证，不是分数造假</td>
+      </tr>
+      <tr>
+        <td>五层归因</td>
+        <td>排查清单（需求 / 配置 / 环境 / 测试 / 会话）</td>
+        <td>不是 Spring 分层，也不是 L02 那套子系统名字</td>
+      </tr>
+    </table>
+
+    <h2>系统讲解</h2>
+
+    <h3>1. 模型强，不等于这次靠得住</h3>
+    <p>
+      <strong>能力鸿沟</strong>：模型在基准测试（讲义举 SWE-bench Verified 约 50–60%）上的表现，
+      和你把日常糊需求丢过去时的表现，中间有很大落差。
+      基准题有明确描述和现成测试；你的任务常常没有。
+    </p>
+    <p>
+      大多数人的第一反应是换更贵的模型。讲义说先别掏钱包。
+    </p>
+    <blockquote>
+      如果同一个模型在类似的结构良好的任务中能成功，那优先假设是 harness 的问题。
+    </blockquote>
+    <p class="src">
+      能力鸿沟定义：
+      <a href="https://walkinglabs.github.io/learn-harness-engineering/zh/lectures/lecture-01-why-capable-agents-still-fail/#关键名词解释">L01 · 关键名词解释</a>。
+      先修 harness：
+      <a href="https://walkinglabs.github.io/learn-harness-engineering/zh/lectures/lecture-01-why-capable-agents-still-fail/#遇到失败-先修-harness">L01 · 遇到失败，先修 harness</a>。
+    </p>
+    <p>
+      Anthropic 对照：同一句 prompt、同一个 Opus，裸跑游戏核心起不来；配上完整 harness 就能玩。
+      <strong>马没换，换的是马具。</strong>
+      这叫 <strong>Harness 诱导失败</strong>：能力够，环境结构有洞。
+    </p>
+    <p class="src">
+      <a href="https://walkinglabs.github.io/learn-harness-engineering/zh/lectures/lecture-01-why-capable-agents-still-fail/#同一匹马-两种命运">L01 · 同一匹马，两种命运</a>
+      。planner / generator / evaluator 怎么搭，本课不展开。
+    </p>
+    <p>
+      三案（该不该换模型）：
+    </p>
+    <table>
+      <tr><th>案</th><th>信号</th><th>怎么做</th></tr>
+      <tr>
+        <td>①</td>
+        <td>同类任务、规格清楚时这个模型做成过</td>
+        <td>先修 harness。本课主路径</td>
+      </tr>
+      <tr>
+        <td>②</td>
+        <td>它说做完了，<code>pytest</code> / lint 没过</td>
+        <td>验证缺口。补完成定义，不是换大脑</td>
+      </tr>
+      <tr>
+        <td>③</td>
+        <td>规格、测试、环境都齐了，这类题它一直做不到</td>
+        <td>才考虑换模型。地基阶段几乎不走这条</td>
+      </tr>
+    </table>
+
+    <h3>2. Agent 到底卡在哪：五种卡点</h3>
+    <p>讲义把常见失败收成五类。本课每类对应五层归因里的一层。</p>
+    <table>
+      <tr><th>卡点</th><th>一句话</th><th>落哪层</th></tr>
+      <tr>
+        <td>需求模糊</td>
+        <td>「加个搜索」等于没说：搜什么、要不要分页</td>
+        <td>任务规范</td>
+      </tr>
+      <tr>
+        <td>隐性约定</td>
+        <td>SQLAlchemy 2.0 只在 Slack 里；模型没见过</td>
+        <td>上下文供给（接 0017：没进上下文 = 不存在）</td>
+      </tr>
+      <tr>
+        <td>环境缺口</td>
+        <td>依赖缺、版本不对，窗口耗在 <code>pip install</code></td>
+        <td>执行环境</td>
+      </tr>
+      <tr>
+        <td>缺少验证</td>
+        <td>没测试 / 没告诉它验证命令，它自己觉得做完了</td>
+        <td>验证反馈（验证缺口）</td>
+      </tr>
+      <tr>
+        <td>跨会话丢失</td>
+        <td>新对话又从探索仓库开始；长任务特别容易死</td>
+        <td>状态管理</td>
+      </tr>
+    </table>
+    <p class="src">
+      五种卡点：
+      <a href="https://walkinglabs.github.io/learn-harness-engineering/zh/lectures/lecture-01-why-capable-agents-still-fail/#agent-到底卡在哪">L01 · agent 到底卡在哪</a>。
+      「上下文焦虑」（窗口快满就赶工跳过验证）同节一带而过，本课不单列术语。
+    </p>
+
+    <h3>3. 五层归因：失败清单，不是第二套架构</h3>
+    <p>
+      每次失败问：是任务没说清、上下文不够、环境没配好、验证手段缺失，还是上个会话接不上？
+      五层名字：<strong>任务规范、上下文供给、执行环境、验证反馈、状态管理</strong>。
+    </p>
+    <p>
+      和 L02 的「指令 / 工具 / 环境 / 状态 / 反馈」<strong>不是同一张表</strong>。
+      本课这张是<strong>出了问题往哪查</strong>；L02 是 harness 由哪些子系统组成，阶段 2 再开。
+    </p>
+    <p class="src">
+      五层原文：
+      <a href="https://walkinglabs.github.io/learn-harness-engineering/zh/lectures/lecture-01-why-capable-agents-still-fail/#遇到失败-先修-harness">L01 · 遇到失败，先修 harness</a>。
+      L02 暂缓：计划写在阶段 1 的「故意不讲」里。
+    </p>
+
+    <h3>4. 验证缺口：口嗨完成不算完成</h3>
+    <p>
+      <strong>验证缺口</strong>：agent 对自己输出的信心，和实际对不对之间的偏差。
+      最常见：它说「做完了」，测试是红的。
+      这不是 0019 的「无 tool call 就停」出错——停是对的；错在停之前<strong>没有一道独立的验证门</strong>。
+    </p>
+    <p>
+      <strong>完成定义</strong>：一组可以用命令验证的条件。没有它，agent 会自己编一个「看起来合理就算完」。
+    </p>
+    <pre>完成标准（讲义示例，缩过）：
+- 新增 GET /api/search?q=xxx
+- 支持分页，默认 20 条
+- 新代码通过 pytest
+- 类型检查通过</pre>
+    <p>
+      叠回 0018：生产 Harness 的「验证」就是把完成定义变成门禁。
+      约束是拦危险操作；验证是检查做得对不对。不要混。
+    </p>
+    <p class="src">
+      完成定义与示例：
+      <a href="https://walkinglabs.github.io/learn-harness-engineering/zh/lectures/lecture-01-why-capable-agents-still-fail/#遇到失败-先修-harness">L01 · 遇到失败，先修 harness</a>。
+      书：生产系统要验证，
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:273">L273</a>。
+    </p>
+    <p>
+      讲义还说：仓库根目录放 <code>AGENTS.md</code>（技术栈、约定、验证命令）往往是投入产出比最高的第一步。
+      本课不要求你从空白写一份；阶段 2 对着 North 仓库再看现成的。
+    </p>
+
+    <h3>5. 诊断循环：失败是信号，不是「模型又傻了」</h3>
+    <p>
+      <strong>诊断循环</strong>：执行 → 观察失败 → 定位到某一层 → 修补那一层 → 再执行。
+      不要停在「再跑一遍碰运气」。记一笔：成功没有、失败落在哪层——几轮就能看出瓶颈。
+    </p>
+    <p class="src">
+      定义在「关键名词解释」；操作在「遇到失败，先修 harness」。
+      接地气例子（一句话需求 vs 加了 AGENTS.md + 验证命令）：
+      <a href="https://walkinglabs.github.io/learn-harness-engineering/zh/lectures/lecture-01-why-capable-agents-still-fail/#一个更接地气的例子">L01 · 一个更接地气的例子</a>。
+    </p>
+
+    <h2>主脚本导读</h2>
+    <p>
+      打开并运行
+      <a href="../../playground/phase-1/0020-fail-check-harness/blame_fail.py"><code>playground/phase-1/0020-fail-check-harness/blame_fail.py</code></a>。
+      六条失败已经标好层，对照讲解 2–4。
+    </p>
+    <table>
+      <tr><th>编号</th><th>看什么</th><th>层</th></tr>
+      <tr><td>①</td><td>「加个搜索」</td><td>任务规范</td></tr>
+      <tr><td>②</td><td>约定只在 Slack</td><td>上下文供给</td></tr>
+      <tr><td>③</td><td>修环境耗窗口</td><td>执行环境</td></tr>
+      <tr><td>④</td><td>口嗨完成、测试红</td><td>验证反馈</td></tr>
+      <tr><td>⑤</td><td>新会话重探仓库</td><td>状态管理</td></tr>
+      <tr><td>⑥</td><td>昨天规格清楚就做成了</td><td>先修 harness（仍落规范侧）</td></tr>
+    </table>
+    <pre>cd d:\agent-learning\playground\phase-1\0020-fail-check-harness
+python blame_fail.py</pre>
+    <p class="muted">无第三方包。解释器可用阶段 0 的 <code>playground/python/.venv</code>。</p>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>能力鸿沟 = 这模型不行</strong>：鸿沟说的是基准 vs 真实任务；真实任务差，常常缺的是 harness。</li>
+        <li><strong>验证缺口 = 模型爱撒谎</strong>：缺的是可跑的完成定义，不是人格鉴定。</li>
+        <li><strong>五层 = L02 五子系统</strong>：一张是归因清单，一张是架构；本阶段只认清单。</li>
+        <li><strong>先把 prompt 写到三千字</strong>：讲义优先完成定义和 <code>AGENTS.md</code>，不是再堆一段祈福。</li>
+        <li><strong>去做 P01 / 去读 L02 / 去跑 s01</strong>：过密。P01 不当主作业；L02 和 <code>code.py</code> 等阶段 2。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。口嗨完成不是完成；先补验证门禁。"
+      data-bad="测试红不是换模型的理由，是验证层缺席。">
+      <p>Agent 说做完了，<code>pytest</code> 是红的。先怎样？</p>
+      <button data-correct="true">查验证层和完成定义</button>
+      <button data-correct="false">立刻换成更贵的模型</button>
+      <button data-correct="false">把提示词再加长一倍</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。鸿沟是基准好看、真实任务差。"
+      data-bad="不是数学能力差，也不是网速问题。">
+      <p>讲义里的能力鸿沟指什么？</p>
+      <button data-correct="true">基准好看，真实任务差一截</button>
+      <button data-correct="false">模型算术题全部都不会做</button>
+      <button data-correct="false">网线太慢导致工具总超时</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。同类任务结构良好时能成，先假设马具。"
+      data-bad="不是模型隔夜退化，也不是必须先微调。">
+      <p>昨天规格写清就做成，今天一句糊需求失败。优先？</p>
+      <button data-correct="true">先修 harness，不先换模型</button>
+      <button data-correct="false">认定模型隔夜已经退化了</button>
+      <button data-correct="false">必须先微调再继续排障</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。五层是失败往哪查，不是 L02 架构表。"
+      data-bad="不要和 L02 子系统或 Spring 分层混成一张图。">
+      <p>本课的五层防御是干什么的？</p>
+      <button data-correct="true">给失败做归因的一张清单</button>
+      <button data-correct="false">就是 L02 那五个子系统</button>
+      <button data-correct="false">对应 Java 里的五层架构</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能用自己的话讲使命 L10：失败先查 harness，不先怪模型。</li>
+      <li>能说出能力鸿沟、验证缺口各是什么，并指出在 L01「关键名词解释」（书里没有这两个词）。</li>
+      <li>能用三案区分：先修马具 / 补完成定义 / 才考虑换模型。</li>
+      <li>能把一次失败归到五层之一；知道这张表不是 L02。</li>
+      <li><code>blame_fail.py</code> 跑通，六条归因能对上表。</li>
+    </ul>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>讲义全文：
+          <a href="https://walkinglabs.github.io/learn-harness-engineering/zh/lectures/lecture-01-why-capable-agents-still-fail/">L01. 模型能力强，不等于执行可靠</a>
+          。练习区和延伸阅读可略；不要去做 P01，不要接着点 L02。</li>
+        <li>使命原文：
+          <a href="../../MISSION.md">MISSION.md</a>
+          <a href="cursor://file/d:/agent-learning/MISSION.md:10">L10</a></li>
+        <li>压缩：<a href="../../reference/phase-1/fail-check.html">失败先查速查</a> ·
+          <a href="../../reference/phase-1/agency-harness.html">Agency / Harness</a></li>
+      </ul>
+    </div>
+    <p>
+      <a href="./index.html">阶段 1 分册</a>
+      · <a href="./0019-react-loop.html">上一课 0019</a>
+    </p>
+    <div data-lesson-id-footer="0020"></div>
+    <footer>
+      不清楚的立刻问我。0020 已过关，阶段 1 收束。下一阶段从 North s01 起跑 <code>code.py</code>。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

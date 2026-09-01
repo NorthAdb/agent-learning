@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>学习路径：三份材料怎么配</title>
+  <link rel="stylesheet" href="../assets/lesson.css" />
+  <link rel="stylesheet" href="../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="./index.html">速查索引</a> · 对齐 <a href="../MISSION.md">MISSION.md</a></p>
+    <h1>学习路径：三份材料怎么配</h1>
+    <p class="mission">同一主题：<strong>先书（概念）→ 再 North（跑代码）→ 卡住再看 Harness 讲义</strong>。禁止三线并行通读。不写工期。</p>
+
+    <h2>三份材料</h2>
+    <table>
+      <tr><th>角色</th><th>在哪</th><th>干什么</th></tr>
+      <tr>
+        <td>原理</td>
+        <td><code>AI-Agents-in-Depth-md/</code></td>
+        <td>钉死公式与术语。默认路径不要求把原书每页读完——课件会内化当课要点。</td>
+      </tr>
+      <tr>
+        <td>实践</td>
+        <td><code>learn-claude-code-north/</code></td>
+        <td>唯一动手主线。只跑根目录 <code>s01_*</code>–<code>s20_*</code> 的 <code>code.py</code>。不要混用 <code>docs/</code> / <code>agents/</code> 旧 12 章编号。</td>
+      </tr>
+      <tr>
+        <td>工程约束</td>
+        <td><a href="https://walkinglabs.github.io/learn-harness-engineering/zh/">Learn Harness Engineering</a></td>
+        <td>卫星：为什么要规则、验证、跨会话交接。不把课程项目 P01 当主作业。</td>
+      </tr>
+    </table>
+
+    <h2>阶段对照</h2>
+    <table>
+      <tr><th>阶段</th><th>你在练什么</th><th>书</th><th>North</th><th>Harness 讲义（卡住再看）</th></tr>
+      <tr>
+        <td>0 Python 地基</td>
+        <td><strong>已过关</strong> 0001–0016。语法速查留在 <a href="./python-phase0.html">python-phase0.html</a></td>
+        <td>Day 主干已内化；原书选读</td>
+        <td>对照读过 s01 表面；主线等阶段 2 再跑 <code>code.py</code></td>
+        <td>—</td>
+      </tr>
+      <tr>
+        <td>1 心智模型</td>
+        <td>拆四课，放 <code>lessons/phase-1/</code>。<strong>0017</strong> 公式 → 0018 Agency/Harness → 0019 最小 loop → 0020 失败先查 harness</td>
+        <td>Ch1 <strong>按课切片</strong>，不整章通读</td>
+        <td>0018–0019 才读 README-zh 前半 + 循环图；仍不跑 s01</td>
+        <td>0020 读 L01（失败归因）；L02 五子系统暂缓</td>
+      </tr>
+      <tr>
+        <td>2 能动手</td>
+        <td>一个循环、多工具、权限、hooks</td>
+        <td>Ch4 工具；Ch5 Coding Agent</td>
+        <td><strong>s01–s04</strong>（必须跑）</td>
+        <td>划清任务边界；防止提前宣告完成；跑通才算验证</td>
+      </tr>
+      <tr>
+        <td>3 上下文 / 记忆</td>
+        <td>按需加载、压缩、记忆、拼 system prompt</td>
+        <td>Ch2 上下文；Ch3 记忆和知识库</td>
+        <td><strong>s07–s10</strong>（s08 / s09 为重心）</td>
+        <td>仓库即事实来源；指令拆文件；跨会话连续；初始化；交接</td>
+      </tr>
+      <tr>
+        <td>之后</td>
+        <td>沿 North 往下，每段只带对应书章节</td>
+        <td>按需（Ch6 / Ch10…）</td>
+        <td>s05–s06，s11–s20</td>
+        <td>观测、自动循环等，仍当卫星</td>
+      </tr>
+    </table>
+
+    <h2>当前不做</h2>
+    <ul>
+      <li>LangChain / LangGraph</li>
+      <li>对 Pi / Hermes / OpenCode 二次开发</li>
+      <li>面试叙事打磨</li>
+    </ul>
+
+    <p><a href="./agent-stack.html">Agent / Harness 用语</a> · <a href="../lessons/index.html">课件目录</a></p>
+    <footer>计划原文在 <a href="../NOTES.md">NOTES.md</a>；使命在 <a href="../MISSION.md">MISSION.md</a>。</footer>
+  </main>
+</body>
+</html>

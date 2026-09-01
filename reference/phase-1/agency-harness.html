@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>阶段 1 · Agency / Harness 速查</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+  <link rel="stylesheet" href="../../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="../index.html">速查索引</a> · 课 0018 · 打印友好</p>
+    <h1>Agency vs Harness</h1>
+    <p class="mission">两套公式叠在一起，不是互相作废。模型是驾驶者，harness 是载具。</p>
+    <p class="src">
+      Agency 定义：
+      <a href="../../learn-claude-code-north/README-zh.md">README-zh.md</a>
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:9">L9</a>
+      （书 Ch1 无此词）。
+      第二套公式：书 §1.2
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:270">L270</a>。
+    </p>
+
+    <pre>0017  Agent = LLM + 上下文 + 工具
+0018  Agent = Model + Harness
+
+Model  = LLM（大脑）
+最小 Harness = 上下文管理 + 工具接口
+生产 Harness = 最小 + 约束 + 验证 + 纠正
+
+Agent  ↔  Environment（仍在外面）</pre>
+
+    <h2>「我在开发 Agent」三案</h2>
+    <table>
+      <tr><th>实际在做</th><th>本仓库怎么叫</th></tr>
+      <tr><td>调权重 / 后训练</td><td>开发 Agency（不做）</td></tr>
+      <tr><td>拼上下文、暴露工具、权限与验证</td><td>开发 Harness（要做）</td></tr>
+      <tr><td>节点图 / 规则树模拟智能</td><td>不是（水管工 / 工作流）</td></tr>
+    </table>
+
+    <h2>生产三保障（本课只认名字）</h2>
+    <table>
+      <tr><th>词</th><th>一句话</th></tr>
+      <tr><td>约束</td><td>能做什么、不能做什么（权限、沙箱、审批）</td></tr>
+      <tr><td>验证</td><td>做得对不对（测试、完成定义）；不听「我做完了」</td></tr>
+      <tr><td>纠正</td><td>错了怎么补救（重试、回退）</td></tr>
+    </table>
+
+    <h2>North 五件套 ≈ 同一层载具</h2>
+    <table>
+      <tr><th>North</th><th>多半落在书的哪一项</th></tr>
+      <tr><td>Tools / Action</td><td>工具接口</td></tr>
+      <tr><td>Knowledge / Observation</td><td>上下文管理</td></tr>
+      <tr><td>Permissions</td><td>约束</td></tr>
+    </table>
+
+    <p>
+      <a href="../../lessons/phase-1/0018-agency-vs-harness.html">打开 0018</a>
+      · <a href="./formula.html">公式速查</a>
+      · <a href="./react-loop.html">ReAct 循环</a>
+      · <a href="../../GLOSSARY.md">GLOSSARY</a>
+    </p>
+    <footer>失败归因见 <a href="./fail-check.html">0020</a>。仍不要跑 North s01。</footer>
+  </main>
+  <script src="../../assets/lesson-nav.js"></script>
+</body>
+</html>

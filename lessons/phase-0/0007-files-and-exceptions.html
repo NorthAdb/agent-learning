@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0007 · 文件读写与异常</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0007"></div>
+    <h1>文件读写与异常：把知识库安全加载进 Agent</h1>
+    <p class="mission">前 6 课里的数据都活在内存里：脚本一结束，列表和字典就消失。真实的 Agent/RAG 必须读取磁盘上的知识文件、写日志，并且在文件缺失或编码错误时给出可理解的结果。<strong>主技能</strong>是文件路径、读写模式与异常边界；<strong>载体</strong>是把知识库安全加载进后续可检索的文档列表。</p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">对应 <a href="../../python-100Days/Day21-30/21.文件读写和异常处理.md">Python-100-Days · Day21 文件读写和异常处理</a>。读完本页即可过关，不必先翻原书。JSON 读写故意留给下一课。</p>
+    <table><tr><th>来源要点</th><th>本课处理</th></tr>
+      <tr><td><code>open</code>、读写模式、文本编码、逐行读取</td><td><span class="tag">已内化</span>讲解 1、5–8；重点用 UTF-8 和 RAG 文档</td></tr>
+      <tr><td><code>try</code> / <code>except</code> / <code>else</code> / <code>finally</code>、<code>raise</code>、<code>as error</code></td><td><span class="tag">已内化</span>讲解 10–15；第 11 节为异常标准范式</td></tr>
+      <tr><td><code>with</code> 上下文管理器</td><td><span class="tag">已内化</span>作为默认文件写法；解释自动关闭</td></tr>
+      <tr><td><code>pathlib.Path</code> 零件、<code>exists</code>/<code>resolve</code>、<code>read_text</code>、<code>iterdir</code></td><td><span class="tag">已内化</span>讲解 2–4、6、9；与 <code>open</code> 对照</td></tr>
+      <tr><td>二进制文件复制、递归自定义异常</td><td><span class="tag">跳过</span>本阶段 Agent/RAG 主线暂不需要；知道 <code>rb/wb</code> 是选读即可</td></tr>
+      <tr><td><code>json</code> 读写</td><td><span class="tag">下一课</span>字典持久化成配置 / tool_call 存档</td></tr>
+    </table>
+
+    <h2>和 Java 怎么对照</h2>
+    <table><tr><th>Python</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr><td><code>Path</code></td><td><code>Path</code> / <code>Files</code></td><td>Python 的 <code>/</code> 可拼路径；别用字符串手拼斜杠</td></tr>
+      <tr><td><code>with open(...) as file</code></td><td>try-with-resources</td><td>离开缩进块自动关闭资源</td></tr>
+      <tr><td><code>"r" / "w" / "a" / "x"</code></td><td><code>READ / CREATE / APPEND</code></td><td><code>w</code> 会先清空；<code>x</code> 在已存在时失败</td></tr>
+      <tr><td><code>except FileNotFoundError</code></td><td>catch 具体异常</td><td>Python 异常也是类；顺序从具体到宽泛</td></tr>
+      <tr><td><code>raise ValueError(...)</code></td><td><code>throw new IllegalArgumentException</code></td><td>可用 <code>raise ... from error</code> 保留异常链</td></tr>
+      <tr><td><code>else</code>（try 后）</td><td>没有完全对应物</td><td>只在 try 没抛异常时执行，避免把后续错误误判为读取错误</td></tr>
+      <tr><td>无 checked exception</td><td>方法签名可写 <code>throws</code></td><td>Python 不强制声明；边界仍要设计谁捕获、谁上抛</td></tr>
+    </table>
+
+    <h2>系统讲解</h2>
+    <h3>1. 文件是“磁盘上的字符串”，路径是它的地址</h3>
+    <p>变量指向内存中的对象；文件存在于磁盘。Python 通过 <code>open</code> 打开文件，得到一个文件对象。最小读取代码如下：</p>
+    <pre>with open("knowledge.txt", "r", encoding="utf-8") as file:
+    text = file.read()
+
+print(text)</pre>
+    <p>逐词读：<code>with</code> 表示“进入一个需要清理的上下文”；<code>open(...)</code> 打开文件；<code>as file</code> 把文件对象命名为 <code>file</code>；缩进块里可以读；离开块后 Python 自动关闭文件。关闭很重要：文件句柄是有限的操作系统资源，异常发生时也必须释放。</p>
+
+    <h3>2. Path 对象：先认识零件</h3>
+    <p><code>Path</code> 是「路径」的对象，不是已经打开的文件。它先帮你定位地址；真正读写还要 <code>open</code> 或 <code>read_text</code>。本课会用到这些零件：</p>
+    <table>
+      <tr><th>零件</th><th>做什么</th><th>返回什么</th></tr>
+      <tr><td><code>__file__</code></td><td>解释器提供的特殊变量：当前这份 <code>.py</code> 的路径</td><td>通常是 <code>str</code></td></tr>
+      <tr><td><code>Path(__file__)</code></td><td>把字符串路径包成 <code>Path</code>，才能用下面的方法</td><td><code>Path</code></td></tr>
+      <tr><td><code>.parent</code></td><td>上一级目录（脚本所在文件夹）</td><td><code>Path</code></td></tr>
+      <tr><td><code>/</code>（Path 上）</td><td>拼接子路径，等价于「进子目录 / 拼文件名」</td><td>新的 <code>Path</code>；不要用字符串 <code>+</code> 手拼斜杠</td></tr>
+      <tr><td><code>Path.cwd()</code></td><td>当前工作目录：你执行命令时「站」在哪</td><td><code>Path</code></td></tr>
+      <tr><td><code>.name</code></td><td>最后一段文件名（含后缀）</td><td><code>str</code>，如 <code>"knowledge.txt"</code></td></tr>
+      <tr><td><code>.suffix</code></td><td>扩展名（含点）</td><td><code>str</code>，如 <code>".txt"</code>；无后缀则 <code>""</code></td></tr>
+    </table>
+    <pre>from pathlib import Path
+
+print(__file__)                 # 当前脚本路径（字符串）
+BASE_DIR = Path(__file__).parent
+path = BASE_DIR / "knowledge.txt"
+print(path.name)                # knowledge.txt
+print(path.suffix)              # .txt
+print(Path.cwd())               # 你现在站在哪
+print(BASE_DIR)                 # 脚本躺在哪</pre>
+    <p>绝对路径示例里的 <code>r"D:\data\kb.txt"</code> 是 0006 讲过的<strong>原始字符串</strong>：避免 <code>\n</code>、<code>\t</code> 被当成转义。Windows 路径里反斜杠多，常用 <code>r"..."</code>。</p>
+
+    <h3>3. 路径三种锚点：cwd / 脚本目录 / 绝对路径</h3>
+    <p>这是本课最容易踩坑、也最值得背下来的三案（对照你已会的可变默认值三案）：</p>
+    <table>
+      <tr><th>锚点</th><th>写法</th><th>结果</th></tr>
+      <tr><td>当前工作目录</td><td><code>open("knowledge.txt")</code></td><td>相对你<strong>执行命令时所在目录</strong>；换目录运行就可能突然找不到</td></tr>
+      <tr><td>脚本所在目录</td><td><code>Path(__file__).parent / "knowledge.txt"</code></td><td>相对<strong>这份 .py 文件</strong>；练习与 Agent 工具默认应选这个</td></tr>
+      <tr><td>绝对路径</td><td><code>Path(r"D:\data\kb.txt")</code></td><td>不依赖 cwd；配置项、部署路径常用；本机硬编码要谨慎</td></tr>
+    </table>
+    <p>Agent 里的配置、提示词和知识库都应该明确路径来源。默认优先「脚本目录拼接」；只有配置文件明确给出绝对路径时才用第三种。</p>
+
+    <h3>4. <code>exists()</code> 与 <code>resolve()</code>：问的是两个不同问题</h3>
+    <p>这两句常被并排写出，但<strong>不是同类操作</strong>：一个在问「有没有」，一个在问「规范成哪条绝对路径」。</p>
+    <table>
+      <tr><th>方法</th><th>问什么</th><th>返回值</th><th>路径不存在时</th></tr>
+      <tr><td><code>path.exists()</code></td><td>磁盘上<strong>现在</strong>有没有这个路径指向的文件/目录</td><td><code>bool</code>（<code>True</code>/<code>False</code>）</td><td>返回 <code>False</code>，一般不抛异常</td></tr>
+      <tr><td><code>path.resolve()</code></td><td>把路径<strong>规范成绝对路径</strong>（去掉 <code>..</code> 等；并尽量解析符号链接）</td><td>新的 <code>Path</code></td><td>默认 <code>strict=False</code>：仍尽量给出绝对路径；不回答「有没有」</td></tr>
+    </table>
+    <pre>path = BASE_DIR / "knowledge.txt"
+
+print(path)                 # 可能仍带相对感：.../0007-files-exceptions/knowledge.txt
+print(path.exists())        # True 或 False —— 只回答存在性
+print(path.resolve())       # D:\...\knowledge.txt —— 便于写进日志、报错信息
+
+missing = BASE_DIR / "no-such.txt"
+print(missing.exists())     # False
+print(missing.resolve())    # 仍然是一条绝对路径字符串形态；存在性要用 exists 另查</pre>
+    <p>记忆口诀：<code>exists</code> → 布尔检查；<code>resolve</code> → 把地址「写清楚」给人或日志看。需要「有没有」时用前者；需要「完整绝对路径」时用后者。二者常一起用，但职责不互换。官方说明见 <a href="https://docs.python.org/3/library/pathlib.html#pathlib.Path.exists">Path.exists</a> 与 <a href="https://docs.python.org/3/library/pathlib.html#pathlib.Path.resolve">Path.resolve</a>。</p>
+
+    <h3>5. 三个常用文本模式 + 一个安全写入：r、w、a、x</h3>
+    <table><tr><th>模式</th><th>含义</th><th>注意</th></tr>
+      <tr><td><code>r</code></td><td>读取</td><td>文件不存在会抛 <code>FileNotFoundError</code></td></tr>
+      <tr><td><code>w</code></td><td>覆盖写入</td><td>打开瞬间清空旧内容；文件不存在会创建</td></tr>
+      <tr><td><code>a</code></td><td>追加写入</td><td>保留旧内容，把新内容写到末尾</td></tr>
+      <tr><td><code>x</code></td><td>独占创建</td><td>文件已存在则失败；避免误覆盖重要文件</td></tr>
+    </table>
+    <pre>log_path = BASE_DIR / "run.log"
+
+with open(log_path, "w", encoding="utf-8") as file:
+    file.write("启动\n")       # 每次运行先重置
+
+with open(log_path, "a", encoding="utf-8") as file:
+    file.write("调用 rag_search\n")  # 追加事件</pre>
+    <p>不要把 <code>w</code> 当成“写一行”的意思，它是“我要这个文件的新内容完全由我负责”。日志通常用 <code>a</code>；生成一次性的输出文件才常用 <code>w</code>。</p>
+    <p><strong>编码 <code>encoding</code>：</strong>磁盘上存的是字节；Python 里的 <code>str</code> 是字符。读写文本时必须约定「用哪套规则把字节 ↔ 字符」——这就是编码。中文知识库一律显式写 <code>encoding="utf-8"</code>：不写则跟操作系统默认走，换机器可能乱码或抛 <code>UnicodeDecodeError</code>。</p>
+
+    <h3>6. open 与 Path.read_text：两种等价写法</h3>
+    <pre># 写法 A：open + with（细粒度控制、适合逐行流式读）
+with open(path, "r", encoding="utf-8") as file:
+    text = file.read()
+
+# 写法 B：Path 便捷方法（整文件读写更短）
+text = path.read_text(encoding="utf-8")
+path.write_text(text, encoding="utf-8")  # 等价于 w 覆盖写</pre>
+    <p>小配置、小知识文件用 <code>read_text</code> 很合适。知识库可能很大、需要边读边过滤时，用 <code>with open</code> 逐行迭代更省内存。本课两个主脚本各示范一种：<code>examples.py</code> 偏 <code>open</code>，<code>load_knowledge.py</code> 偏 <code>read_text</code>。</p>
+
+    <h3>7. read、readline、逐行循环：选择内存占用</h3>
+    <pre>with open(path, "r", encoding="utf-8") as file:
+    whole = file.read()             # 一次读完，得到 str
+
+with open(path, "r", encoding="utf-8") as file:
+    first = file.readline()         # 读一行，末尾通常带 \n
+
+with open(path, "r", encoding="utf-8") as file:
+    for line in file:               # 逐行迭代，适合大文件
+        cleaned = line.strip()
+        if cleaned:
+            print(cleaned)</pre>
+    <p>小型 prompt 或配置可以 <code>read()</code>。如果知识库文件可能很大，逐行处理不会一次把所有内容塞进内存。注意：</p>
+    <ul>
+      <li><code>read()</code> → 一个大 <code>str</code></li>
+      <li><code>readline()</code> → 一行 <code>str</code>（常带末尾 <code>\n</code>）</li>
+      <li><code>readlines()</code> → <code>list[str]</code>（一次载入所有行，大文件慎用）</li>
+      <li><code>for line in file</code> → 边读边处理，通常最省内存</li>
+    </ul>
+
+    <h3>8. 把“加载文件”封装成函数</h3>
+    <pre>from pathlib import Path
+
+def load_non_empty_lines(path: Path) -&gt; list[str]:
+    with open(path, "r", encoding="utf-8") as file:
+        return [line.strip() for line in file if line.strip()]
+
+lines = load_non_empty_lines(BASE_DIR / "knowledge.txt")</pre>
+    <p>这里复用了 0006 的列表生成式：对文件逐行遍历，先过滤空行，再去除两端空白。函数的好处是：路径、清洗规则和调用处分离，之后换成 Markdown、数据库或 HTTP 接口时，主流程不必全部重写。</p>
+
+    <h3>9. 扫目录：<code>iterdir</code>、<code>suffix</code>、<code>sorted</code></h3>
+    <p><code>load_knowledge.py</code> 不是只读一个固定文件名，而是「打开一个文件夹，挑出知识文档」。新零件：</p>
+    <table>
+      <tr><th>写法</th><th>做什么</th></tr>
+      <tr><td><code>directory.iterdir()</code></td><td>迭代该目录<strong>下一层</strong>的每个条目（文件或子目录），得到一串 <code>Path</code>；不递归进子文件夹</td></tr>
+      <tr><td><code>path.suffix</code></td><td>扩展名；用 <code>path.suffix in {".md", ".txt"}</code> 过滤类型</td></tr>
+      <tr><td><code>sorted(...)</code></td><td>0005 已学：让输出顺序稳定，便于对照</td></tr>
+      <tr><td><code>path.name</code></td><td>只保留文件名，写进文档的 <code>source</code> 字段，避免把整段绝对路径塞进上下文</td></tr>
+    </table>
+    <pre>for path in sorted(directory.iterdir()):
+    if path.suffix not in {".md", ".txt"}:
+        continue
+    text = path.read_text(encoding="utf-8")</pre>
+
+    <h3>10. 异常是运行时失败的控制流</h3>
+    <p>语法错误通常在程序启动前就被发现；异常则发生在运行过程中。例如文件不存在、整数转换失败、字典键缺失。异常不是“Python 随机发脾气”，而是程序用来表达失败的控制流。官方教程把这类错误统称为 <a href="https://docs.python.org/3/tutorial/errors.html">Errors and Exceptions</a>：语法错在解析期，异常在执行期。</p>
+    <p>常用层次（从宽到窄记即可）：</p>
+    <pre>Exception
+ └─ OSError              # 文件系统相关总类
+     └─ FileNotFoundError   # 路径不存在
+     └─ PermissionError     # 没权限读/写
+UnicodeDecodeError       # 字节无法按指定编码解成字符（不在 OSError 下）</pre>
+    <p>匹配按书写顺序，具体异常放前面。若先写 <code>OSError</code>，后面的 <code>FileNotFoundError</code> 永远进不去。</p>
+
+    <h3>11. 异常标准范式（整课心法）</h3>
+    <p>后面所有策略都套在这一套骨架上。先背<strong>结构</strong>，再背<strong>决策</strong>，最后背<strong>五条硬规则</strong>。</p>
+
+    <h4>11.1 结构骨架</h4>
+    <pre>try:
+    # 1. 只放「可能失败」的最小几行
+    text = path.read_text(encoding="utf-8")
+except FileNotFoundError as error:
+    # 2. 只捕获你知道怎么处理的具体类型；as 接住实例
+    raise FileNotFoundError(f"知识文件不存在: {path}") from error
+except OSError as error:
+    # 3. 更宽泛的同类放后面
+    raise RuntimeError(f"读取知识库失败: {path}") from error
+else:
+    # 4. 仅当 try 完全成功时执行（成功后的统计、继续加工）
+    print(f"读到 {len(text)} 字符")
+finally:
+    # 5. 无论成败都会走；文件场景优先用 with，少手写 close
+    pass
+
+# 资源场景的标准写法（自动进入 finally 式清理）：
+with open(path, "r", encoding="utf-8") as file:
+    text = file.read()</pre>
+    <table>
+      <tr><th>子句</th><th>何时执行</th><th>本课用途</th></tr>
+      <tr><td><code>try</code></td><td>先执行这里</td><td>真正的 I/O / 转换</td></tr>
+      <tr><td><code>except T as e</code></td><td>try 里抛出且类型匹配</td><td>恢复、转换上抛、或记日志后跳过</td></tr>
+      <tr><td><code>else</code></td><td>try <strong>没有</strong>抛异常</td><td>成功统计；避免把后续错误误判成读取错误</td></tr>
+      <tr><td><code>finally</code></td><td>总会执行（有无异常都走）</td><td>收尾；文件优先用 <code>with</code> 代替手写 close</td></tr>
+    </table>
+
+    <h4>11.2 决策：这一层该不该接住？</h4>
+    <p>在函数边界问自己三个问题，答案唯一对应三种策略（下一节展开例子）：</p>
+    <table>
+      <tr><th>问自己</th><th>若答案是「是」</th><th>策略名</th></tr>
+      <tr><td>我<strong>现在</strong>就能合理恢复吗？（默认值 / 跳过本条 / 换路径）</td><td><code>except</code> 后继续跑</td><td>局部恢复</td></tr>
+      <tr><td>我恢复不了，但能把错误<strong>说成人话</strong>给上层吗？</td><td><code>raise ... from error</code></td><td>转换后上抛</td></tr>
+      <tr><td>我既不能恢复，也不比调用方更懂业务？</td><td>不要 <code>except</code>，让它冒泡</td><td>不捕获</td></tr>
+    </table>
+    <pre>                    发生异常
+                        │
+            ┌───────────┼───────────┐
+            ▼           ▼           ▼
+         能恢复？    只改语义？    都不行？
+            │           │           │
+       局部恢复    转换后上抛      不捕获
+     （继续往下） （raise from）  （冒泡）</pre>
+    <p>Agent / 工具边界的常见切法：底层小函数偏「不捕获」；知识库加载边界偏「转换后上抛」；批量扫目录时单文件失败偏「局部恢复」。</p>
+
+    <h4>11.3 五条硬规则</h4>
+    <ol>
+      <li><strong>try 要窄：</strong>只包可能失败的那几行，不要把整个 <code>main</code> 塞进去。</li>
+      <li><strong>except 要具体：</strong>写 <code>FileNotFoundError</code> / <code>ValueError</code>，禁止裸 <code>except:</code>（会吞掉 <code>KeyboardInterrupt</code> 等）。</li>
+      <li><strong>顺序从具体到宽泛：</strong>子类在前，父类在后。</li>
+      <li><strong>边界才改写消息：</strong>用 <code>raise NewError(...) from error</code> 补业务语义，并保留原因链。</li>
+      <li><strong>清理用对工具：</strong>文件 / 连接优先 <code>with</code>；<code>finally</code> 留给「with 管不到」的收尾。</li>
+    </ol>
+
+    <h4>11.4 和「先判断再动手」怎么选</h4>
+    <p>Python 社区常说 EAFP（Easier to Ask Forgiveness than Permission）：先做，失败再用异常处理——例如直接 <code>read_text</code>，捕获 <code>FileNotFoundError</code>。这和 Java 里大量先 <code>if (Files.exists(...))</code> 的风格不同。</p>
+    <p>但本课仍保留一条实用边界：若「不存在」是<strong>普通业务分支</strong>（例如可选配置文件），用 <code>path.exists()</code> 更清晰；若「不存在」是<strong>意外失败</strong>（例如必选知识库丢了），让它抛异常再用上面的决策处理。不要把异常当成普通 <code>if/else</code> 的替代品乱飞。</p>
+
+    <h3>12. <code>except ... as error</code>：把异常对象接住</h3>
+    <p><code>except SomeError as error</code> 的意思是：匹配到该类异常后，把<strong>异常实例</strong>绑定到变量 <code>error</code>，以便读取消息或再抛出。这是标准范式里第 2 步的零件。</p>
+    <pre>try:
+    text = path.read_text(encoding="utf-8")
+except FileNotFoundError as error:
+    print(error)                 # 默认错误消息
+    print(type(error).__name__)  # 类型名字符串，如 "FileNotFoundError"
+    raise FileNotFoundError(f"知识文件不存在: {path}") from error</pre>
+    <ul>
+      <li><code>as error</code>：接住实例（名字可自取，常用 <code>e</code> / <code>err</code> / <code>error</code>）</li>
+      <li><code>type(error)</code>：异常的类；<code>.__name__</code> 是类名字符串，适合日志里打印「跳过 xxx: PermissionError」</li>
+      <li><code>raise ... from error</code>：再抛一个新异常，并保留原异常为原因链（调试时能看到底层原因）</li>
+    </ul>
+
+    <h3>13. 边界上三种异常策略（范式的落点）</h3>
+    <p>这就是第 11.2 节决策表的可跑版本。工具函数、知识库加载、解析 tool_call 时，你会反复在这三种里选：</p>
+    <table>
+      <tr><th>策略</th><th>做法</th><th>适用</th></tr>
+      <tr><td>局部恢复</td><td><code>except</code> 后给默认值 / 跳过本条，程序继续</td><td>批量加载文档：坏文件不该拖垮整库</td></tr>
+      <tr><td>转换后上抛</td><td><code>raise ... from error</code>，补业务语义</td><td>边界函数：底层说「路径不存在」，你说「知识库缺失」</td></tr>
+      <tr><td>不捕获</td><td>让异常冒泡给调用方</td><td>库代码不知如何恢复；由 Agent loop / main 决定退出或重试</td></tr>
+    </table>
+    <pre># 1) 局部恢复 —— 我能扛
+try:
+    text = path.read_text(encoding="utf-8")
+except FileNotFoundError:
+    text = ""
+
+# 2) 转换后上抛 —— 我说清楚，上层做决定
+try:
+    return path.read_text(encoding="utf-8")
+except FileNotFoundError as error:
+    raise FileNotFoundError(f"知识文件不存在: {path}") from error
+
+# 3) 不捕获 —— 我什么都不说，直接冒泡
+text = path.read_text(encoding="utf-8")</pre>
+    <p><strong>转换后上抛怎么读：</strong>底层异常太「系统」；边界函数把它改写成调用方听得懂的业务话，同时用 <code>from error</code> 把原件挂在原因链上。和 Java 的 <code>throw new X("业务消息", cause)</code> 同一思路。</p>
+    <p>和 Java 的另一差别：Python 不强制在签名上声明 throws，但<strong>职责仍然要设计</strong>——谁恢复、谁转换、谁决定失败。<code>load_knowledge.py</code> 用策略 1；<code>read_lines_safely</code> 用策略 2；策略 3 适合更底层的小函数。</p>
+
+    <h3>14. else、finally 与 with（骨架里的第 4、5 步）</h3>
+    <pre>try:
+    data = load_non_empty_lines(path)
+except FileNotFoundError:
+    data = []
+except UnicodeDecodeError:
+    raise ValueError("知识库必须是 UTF-8 文本")
+else:
+    print(f"成功加载 {len(data)} 行")
+finally:
+    print("这句话无论成功失败都会执行")</pre>
+    <p><code>else</code> 适合放“成功之后才做”的事，这样成功统计不会被误认成读取失败的一部分。<code>finally</code> 无论成功还是异常都会运行。对文件来说，<code>with</code> 已经替你完成关闭，因此通常不需要手写 <code>finally: file.close()</code>。</p>
+
+    <h3>15. raise：在边界把错误说清楚</h3>
+    <pre>def load_text(path: Path) -&gt; str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError as error:
+        raise FileNotFoundError(f"知识文件不存在: {path}") from error</pre>
+    <p>这是标准范式里「转换后上抛」的完整函数形态：接住 → 改写消息 → <code>from error</code> 保留链路 → 交给上层。函数不必自己吞掉错误；它可以转换后继续抛出，让更上层决定退出、重试还是跳过。</p>
+
+    <h2>主脚本导读</h2>
+    <div class="box steps"><ol>
+      <li>打开 <a href="../../playground/python/0007-files-exceptions/examples.py"><code>examples.py</code></a>。<code>show_path_anchors</code> 打印 cwd、脚本目录、<code>exists</code>、<code>resolve</code>，对照讲解第 2–4 节。</li>
+      <li><code>show_file_modes</code> 先用 <code>r</code> 读取，再用 <code>w</code> 创建日志，最后用 <code>a</code> 追加。连续运行两次，观察为什么日志每次都先被 <code>w</code> 清空。</li>
+      <li><code>read_lines_safely</code> 套的是标准范式 + 策略 2：窄 <code>try</code>、<code>as error</code>、<code>raise ... from error</code>、成功走 <code>else</code>。</li>
+      <li><code>show_exception_strategies</code> 把三种策略打印在一起；先对照第 11 节决策表，再看第 13 节例子。</li>
+      <li>再看 <a href="../../playground/python/0007-files-exceptions/load_knowledge.py"><code>load_knowledge.py</code></a>：<code>iterdir</code> + <code>suffix</code> 筛选，逐个 <code>read_text</code>；失败时用 <code>type(error).__name__</code> 打印原因并 <code>continue</code>（策略 1）。同目录的 <code>sample-rag.md</code> 用来看到多文件输出。</li>
+    </ol></div>
+
+    <h2>先跑起来</h2>
+    <div class="box steps"><ol>
+      <li>进入目录：<pre>cd D:\agent-learning\playground\python
+.\.venv\Scripts\Activate.ps1</pre></li>
+      <li>运行：<pre>python 0007-files-exceptions\examples.py
+python 0007-files-exceptions\load_knowledge.py</pre></li>
+      <li>打开生成的 <code>run.log</code>，再运行一次 <code>examples.py</code>，确认每次都会先被 <code>w</code> 清空再追加。</li>
+      <li>把 <code>knowledge.txt</code> 临时改名，再跑一次 <code>examples.py</code>，观察策略 2 打印出的错误信息；改回文件名。</li>
+      <li>（可选）从别的目录运行同一脚本，对比「相对名」与「脚本目录拼接」谁更稳：<pre>cd D:\agent-learning
+python playground\python\0007-files-exceptions\examples.py</pre></li>
+    </ol></div>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box"><ul>
+      <li><strong>当前目录不是脚本目录：</strong>命令在哪个目录执行，<code>open("x.txt")</code> 就从哪里找。用 <code>Path(__file__).parent</code> 明确锚点。</li>
+      <li><strong><code>w</code> 的破坏性：</strong>打开就截断，哪怕后面还没写入。重要文件可用 <code>x</code> 防止覆盖，或先写临时文件再替换。</li>
+      <li><strong><code>write_text</code> 也是覆盖：</strong>它等价于 <code>w</code>，不是追加。</li>
+      <li><strong>编码不匹配：</strong>中文文本通常用 UTF-8；<code>UnicodeDecodeError</code> 说明“字节无法按指定编码解释”，不是普通的空字符串。</li>
+      <li><strong>不要裸 <code>except:</code>：</strong>它还会捕获键盘中断等不应静默处理的情况。优先写具体异常。</li>
+      <li><strong>不要把异常当 if：</strong>能用 <code>path.exists()</code> 判断的普通分支，不必先打开再靠异常控制正常流程；异常留给真正意外的失败。</li>
+      <li><strong>三种策略别混用职责：</strong>边界函数若既吞掉错误又返回模糊空值，上层会以为“知识库是空的”而不是“加载失败”。</li>
+      <li><strong>Java 易混：</strong>Python 没有 checked exception；函数签名不写 throws，但边界仍要设计谁负责捕获、谁负责继续抛出。</li>
+    </ul></div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz data-ok="对。with 块结束时会自动关闭文件，异常路径也会执行清理。" data-bad="with 的价值就是自动管理资源；不要只在正常路径手写 close。"><p>为什么推荐 <code>with open(...) as file</code>？</p><button data-correct="true">离开代码块时自动关闭文件</button><button data-correct="false">把文件内容自动转成字典</button><button data-correct="false">让文件路径永远都存在</button><p class="feedback"></p></div>
+    <div class="quiz" data-quiz data-ok="对。w 会截断旧内容；追加日志应使用 a。" data-bad="w 不是“写一行”的意思，而是覆盖模式。"><p>想在旧日志末尾追加一行，应该使用哪个模式？</p><button data-correct="true">a</button><button data-correct="false">w</button><button data-correct="false">r</button><p class="feedback"></p></div>
+    <div class="quiz" data-quiz data-ok="对。具体异常先匹配，宽泛异常放后面。" data-bad="FileNotFoundError 是 OSError 的子类；先写 OSError 会挡住具体分支。"><p>下面哪个 except 顺序更合理？</p><button data-correct="true">先 FileNotFoundError，再 OSError</button><button data-correct="false">先 OSError，再 FileNotFoundError</button><button data-correct="false">只写一个裸 except 分支</button><p class="feedback"></p></div>
+    <div class="quiz" data-quiz data-ok="对。else 只在 try 完整成功后执行。" data-bad="finally 是总会执行；else 只在没有异常时执行。"><p>try 没有抛异常时，哪个分支会执行？</p><button data-correct="true">else</button><button data-correct="false">except</button><button data-correct="false">只有 finally</button><p class="feedback"></p></div>
+    <div class="quiz" data-quiz data-ok="对。raise ... from error 补充语义，同时保留底层原因。" data-bad="raise 不是打印错误；它会把异常交给调用者处理。"><p><code>raise ValueError("bad input")</code> 的作用是什么？</p><button data-correct="true">主动抛出一个异常对象</button><button data-correct="false">只打印一条警告并继续</button><button data-correct="false">把字符串写入磁盘文件</button><p class="feedback"></p></div>
+    <div class="quiz" data-quiz data-ok="对。批量加载时单文件失败应局部恢复，避免拖垮整库。" data-bad="转换上抛适合边界语义；不捕获会中断整次加载。"><p>扫描知识库目录时，单个坏文件最合适的策略是？</p><button data-correct="true">局部恢复并跳过该文件</button><button data-correct="false">转换上抛并立刻退出</button><button data-correct="false">完全不捕获任何异常</button><p class="feedback"></p></div>
+    <div class="quiz" data-quiz data-ok="对。相对文件名锚定的是 cwd，不是脚本目录。" data-bad="Path(__file__).parent 才绑脚本；绝对路径不依赖 cwd。"><p><code>open("knowledge.txt")</code> 相对的是哪里？</p><button data-correct="true">当前工作目录</button><button data-correct="false">脚本所在目录</button><button data-correct="false">用户主目录</button><p class="feedback"></p></div>
+    <div class="quiz" data-quiz data-ok="对。exists 返回布尔；resolve 返回规范化后的 Path。" data-bad="resolve 不回答有没有；exists 也不负责生成绝对路径。"><p><code>path.exists()</code> 与 <code>path.resolve()</code> 的差别是？</p><button data-correct="true">前者问是否存在，后者规范绝对路径</button><button data-correct="false">前者规范绝对路径，后者问是否存在</button><button data-correct="false">二者等价，只是写法不同</button><p class="feedback"></p></div>
+    <div class="quiz" data-quiz data-ok="对。iterdir 只列出该目录下一层条目。" data-bad="suffix 是扩展名；resolve 是路径规范化，都不负责列目录。"><p><code>directory.iterdir()</code> 的作用是？</p><button data-correct="true">迭代目录下一层的每个路径</button><button data-correct="false">把相对路径规范成绝对路径</button><button data-correct="false">只返回该目录的扩展名</button><p class="feedback"></p></div>
+    <div class="quiz" data-quiz data-ok="对。能恢复就局部恢复；否则在边界改写语义再上抛；都不行就冒泡。" data-bad="标准范式先问职责，不是一律 try/except 包住整个 main。"><p>异常标准范式里，先问自己的是什么？</p><button data-correct="true">这一层能否恢复或改写语义</button><button data-correct="false">要不要把整个 main 放进 try</button><button data-correct="false">要不要改用裸 except</button><p class="feedback"></p></div>
+    <div class="quiz" data-quiz data-ok="对。else 只在 try 成功时执行，适合成功后的统计与继续加工。" data-bad="finally 总会执行；except 是失败路径。"><p>标准骨架里，成功读完文件后的统计应放哪？</p><button data-correct="true">else</button><button data-correct="false">except</button><button data-correct="false">只能放 finally</button><p class="feedback"></p></div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能解释 Path 零件：<code>__file__</code>、<code>.parent</code>、<code>/</code>、<code>.name</code>、<code>.suffix</code>、<code>cwd</code>。</li>
+      <li>能区分 <code>exists()</code>（布尔，问有没有）与 <code>resolve()</code>（Path，规范绝对路径）。</li>
+      <li>能当场说出路径三案（cwd / 脚本目录 / 绝对），并写出 <code>Path(__file__).parent / name</code>。</li>
+      <li>能区分 <code>r</code>、<code>w</code>、<code>a</code>（知道 <code>x</code> 的用途），并说出为何要写 <code>encoding="utf-8"</code>。</li>
+      <li>能口述异常标准范式：骨架（try/except/else/finally/with）+ 决策三问 + 五条硬规则。</li>
+      <li>能对照说明 <code>open</code> 与 <code>Path.read_text</code>；知道 <code>iterdir</code> + <code>suffix</code> 如何扫知识库目录。</li>
+      <li>能解释 <code>except ... as error</code> 与 <code>raise ... from error</code>；能用三策略讲两个主脚本。</li>
+      <li>两个脚本运行通过；能按“定位路径 → 打开资源 → 清洗内容 → 选策略处理失败 → 继续流程”讲解。</li>
+    </ul>
+
+    <h2>选读与速查</h2>
+    <div class="box"><p><strong>权威出处</strong></p><ul><li><a href="https://docs.python.org/3/tutorial/inputoutput.html#reading-and-writing-files">Python 官方：Reading and Writing Files</a></li><li><a href="https://docs.python.org/3/tutorial/errors.html">Python 官方：Errors and Exceptions</a></li><li><a href="https://docs.python.org/3/library/pathlib.html">Python 官方：pathlib</a></li></ul><p><strong>本地选读</strong></p><ul><li><a href="../../python-100Days/Day21-30/21.文件读写和异常处理.md">Day21 文件读写和异常处理</a>：更多二进制文件与自定义异常例子</li></ul></div>
+    <p><a href="../../reference/python-phase0.html#files">Python 阶段 0 速查：文件与异常</a> · <a href="../../GLOSSARY.md">GLOSSARY.md</a> · <a href="../../reference/index.html">速查索引</a></p>
+    <div data-lesson-id-footer="0007"></div>
+    <footer>不清楚的立刻问我。跑完或卡住，把输出贴回来。下一课：<a href="./0008-json-config-and-tool-call.html">0008 JSON：配置与 tool call 持久化</a>。</footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script><script src="../../assets/lesson-nav.js"></script><script src="../../assets/quiz.js"></script>
+</body>
+</html>

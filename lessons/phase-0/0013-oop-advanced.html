@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0013 · 面向对象进阶：可见性、slots、property、三种方法</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0013"></div>
+    <h1>面向对象进阶：名字、插槽、属性、三种方法</h1>
+    <p class="mission">
+      0012 会了 class / <code>self</code> / dataclass。Day19 剩下四块：
+      <strong>可见性、<code>__slots__</code>、<code>@property</code>、实例/静态/类方法</strong>。
+      扫过 North 20 章：这四块在 <code>code.py</code> 里几乎不出现，但单下划线约定（s19）和「方法当属性」在别的库很常见。
+      按你的要求：进 North 前补齐，避免后半再倒回来。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">对应 <a href="../../python-100Days/Day01-20/19.面向对象编程进阶.md">Python-100-Days · Day19</a>。读完本页即可过关。</p>
+    <table>
+      <tr><th>来源要点</th><th>本课处理</th></tr>
+      <tr><td>公开 / <code>_name</code> / <code>__name</code> 名称改写</td><td><span class="tag">已内化</span>讲解 1</td></tr>
+      <tr><td>动态属性 vs <code>__slots__</code></td><td><span class="tag">已内化</span>讲解 2</td></tr>
+      <tr><td><code>@property</code> / setter</td><td><span class="tag">已内化</span>讲解 3</td></tr>
+      <tr><td>实例方法 / <code>@staticmethod</code> / <code>@classmethod</code></td><td><span class="tag">已内化</span>讲解 4</td></tr>
+      <tr><td>Day19 三角形面积长例</td><td><span class="tag">跳过</span>趣味几何</td></tr>
+      <tr><td>多重继承、多态深挖</td><td><span class="tag">跳过</span>North 未用；0012 已有 Exception 子类</td></tr>
+    </table>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>Python</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr><td><code>self.token</code></td><td><code>public</code> 字段</td><td>默认都公开</td></tr>
+      <tr><td><code>self._cache</code></td><td>约定当 protected</td><td><strong>语法不拦</strong>，全靠约定</td></tr>
+      <tr><td><code>self.__secret</code></td><td>近似 private 改名</td><td>变成 <code>_类名__secret</code>，仍能绕过</td></tr>
+      <tr><td><code>__slots__</code></td><td>没有直接对应</td><td>锁死允许的实例属性名</td></tr>
+      <tr><td><code>@xxx</code>（装饰器）</td><td>有点像注解 + 框架挂钩</td><td>标准译名是<strong>装饰器</strong>，不是注释器；<code>#</code> 才是注释</td></tr>
+      <tr><td><code>@property</code> / <code>@名.setter</code></td><td>getter / setter 方法</td><td>读不加 <code>()</code>；无 setter → 赋值 AttributeError（只读）</td></tr>
+      <tr><td><code>@staticmethod</code></td><td><code>static</code> 方法</td><td>没有 <code>self</code></td></tr>
+      <tr><td><code>@classmethod</code></td><td>静态工厂 + 子类可覆盖</td><td>第一个参数是 <code>cls</code>（类本身）</td></tr>
+    </table>
+
+    <h2>系统讲解</h2>
+
+    <h3>1. 三种名字</h3>
+    <p>
+      先澄清：下面例子里的 <code>Bag</code> / <code>bag</code> <strong>不是关键字</strong>。
+      <code>Bag</code> 是作者给类起的名字（像「袋子」）；<code>bag = Bag(...)</code> 是该实例的变量名。
+      换成 <code>Box</code> / <code>box</code> 机制完全一样。要记的是属性名前缀规则，不是 <code>bag</code> 这个词。
+    </p>
+    <p>
+      Python <strong>没有</strong> Java 那种编译期 <code>public</code> / <code>private</code>。
+      属性默认可从类外读写；「别乱摸」靠<strong>命名约定</strong>告诉读代码的人，解释器多数时候不拦。
+      教材原话大意：大家都是成年人。
+    </p>
+
+    <h4>1.1 总表</h4>
+    <table>
+      <tr><th>写法</th><th>作者意图</th><th>类外 <code>bag.xxx</code></th><th>该不该当公开 API</th></tr>
+      <tr>
+        <td><code>self.token</code></td>
+        <td>公开字段 / 公开接口的一部分</td>
+        <td>正常读写</td>
+        <td><strong>可以</strong>：稳定依赖它</td>
+      </tr>
+      <tr>
+        <td><code>self._cache</code></td>
+        <td>内部实现；请走公开方法 / property</td>
+        <td>语法<strong>允许</strong>读写（不报错）</td>
+        <td><strong>不该</strong>：升级时可能改名或删掉</td>
+      </tr>
+      <tr>
+        <td><code>self.__secret</code></td>
+        <td>名称改写（mangle），主要防子类踩名</td>
+        <td><code>bag.__secret</code> → AttributeError</td>
+        <td>仍非安全私有；真名是 <code>_Bag__secret</code></td>
+      </tr>
+    </table>
+
+    <h4>1.2 公开名：<code>token</code></h4>
+    <p>
+      无前缀下划线 = 「这是接口的一部分」。外面写 <code>bag.token</code> 是预期用法。
+      类作者若改掉或删掉它，就算破坏兼容——所以公开名要慎重。
+    </p>
+    <pre>bag = Bag("sk-demo")
+print(bag.token)      # 正常：公开 API
+bag.token = "sk-new"  # 也允许（除非另有 property 拦住）</pre>
+
+    <h4>1.3 单下划线：<code>_cache</code>（最常见、最重要）</h4>
+    <p>
+      一个前导 <code>_</code> = 门上贴条「内部通道」。
+      <strong>门没锁</strong>：<code>bag._cache</code> 能读能写，不会 AttributeError。
+      含义是：实现细节；外面应调用公开方法，不要把 <code>_cache</code> 写进自己的业务逻辑。
+    </p>
+    <table>
+      <tr><th>情况</th><th>结果</th><th>该怎么想</th></tr>
+      <tr><td>类<strong>里面</strong>用 <code>self._cache</code></td><td>正常</td><td>作者自己的零件</td></tr>
+      <tr><td>类<strong>外面</strong>读 <code>bag._cache</code></td><td>语法成功</td><td>能跑 ≠ 该当接口；很脆</td></tr>
+      <tr><td>模块级 <code>_DISALLOWED_CHARS = re.compile(...)</code></td><td>同约定</td><td>内部正则；对外用 <code>normalize_mcp_name(...)</code></td></tr>
+    </table>
+    <p>
+      North s19 正是模块级单下划线：
+      <code>_DISALLOWED_CHARS</code> 是编译好的正则零件；公开入口是 <code>normalize_mcp_name</code>。
+      「内部正则，别当公开 API」= 别 <code>from xxx import _DISALLOWED_CHARS</code> 当自己的依赖。
+    </p>
+    <p class="muted">
+      和 0012 的 <code>ToolRegistry._tools</code> 同一约定：注册表内部的 dict，外面请用 <code>register</code> / <code>dispatch</code>。
+    </p>
+
+    <h4>1.4 双下划线：<code>__secret</code>（名称改写，少用）</h4>
+    <p>
+      类体里写 <code>self.__secret</code> 时，解释器<strong>改写存储名</strong>为 <code>_类名__secret</code>
+      （本例类叫 <code>Bag</code> → 真名 <code>_Bag__secret</code>）。这叫 <strong>name mangling（名称改写）</strong>。
+    </p>
+    <table>
+      <tr><th>写法</th><th>结果</th></tr>
+      <tr><td><code>bag.__secret</code></td><td>AttributeError（按字面找不到这个属性）</td></tr>
+      <tr><td><code>bag._Bag__secret</code></td><td>能读到（绕过改写后的真名）</td></tr>
+      <tr><td>子类里再写 <code>self.__secret</code></td><td>变成 <code>_子类名__secret</code>，<strong>不会</strong>盖住父类那份</td></tr>
+    </table>
+
+    <p><strong>为什么要改写？看父子各写一遍同名属性。</strong></p>
+    <p>
+      继承：<code>Child(Parent)</code> 表示 Child 是 Parent 的子类，会先跑父类初始化，再跑自己的。
+      问题是：子类作者可能<strong>不知道</strong>父类已经用了某个内部名，自己又写了同名 → 单下划线会<strong>盖住</strong>父类的值。
+    </p>
+    <pre>class Parent:
+    def __init__(self):
+        self._cache = "父:_cache"
+        self.__secret = "父:__secret"   # 存成 _Parent__secret
+
+class Child(Parent):
+    def __init__(self):
+        super().__init__()              # 先让父类把格子建好
+        self._cache = "子:_cache"       # 同一名字 → 盖住父的
+        self.__secret = "子:__secret"   # 存成 _Child__secret → 父的还在
+
+child = Child()
+child._cache              # → "子:_cache"（父的没了）
+child._Parent__secret     # → "父:__secret"（还在）
+child._Child__secret      # → "子:__secret"</pre>
+    <table>
+      <tr><th>前缀</th><th>子类写同名后</th><th>一句话</th></tr>
+      <tr><td><code>_cache</code></td><td>只剩子的；父的被覆盖</td><td>同一格子抢着用</td></tr>
+      <tr><td><code>__secret</code></td><td>父、子各一份（真名不同）</td><td>自动加类名前缀，互不踩</td></tr>
+    </table>
+    <p>
+      所以双下划线<strong>不是</strong>「外面绝对读不到」（仍可用 <code>_Parent__secret</code> 读到），
+      而是「继承树里别无意同名踩踏」。
+      日常库代码更常见单下划线 <code>_x</code>；双下划线少写，除非真在写会被大量继承的基类。
+      可跑对照：<code>examples.py</code> 例 1b。
+    </p>
+
+    <h4>1.5 别和「两边都是双下划线」搞混</h4>
+    <table>
+      <tr><th>样子</th><th>是什么</th><th>例子</th></tr>
+      <tr>
+        <td>前导一个 <code>_</code></td>
+        <td>约定内部</td>
+        <td><code>_cache</code>、<code>_tools</code>、<code>_DISALLOWED_CHARS</code></td>
+      </tr>
+      <tr>
+        <td>前导两个 <code>__</code>，后面<strong>没有</strong>再跟 <code>__</code></td>
+        <td>名称改写</td>
+        <td><code>__secret</code> → <code>_Bag__secret</code></td>
+      </tr>
+      <tr>
+        <td>两边都是 <code>__...__</code>（dunder）</td>
+        <td>语言/协议认的特殊名，<strong>不是</strong>「私有」</td>
+        <td><code>__init__</code>、<code>__name__</code>、<code>__slots__</code>、<code>__repr__</code></td>
+      </tr>
+    </table>
+    <p>
+      过关口诀：<code>__name__</code>（模块入口那套）和属性 <code>__secret</code>（改写）不是一类东西。
+      见 0012「哪些是 Python 的，哪些是你起的」。
+    </p>
+
+    <h3>2. <code>__slots__</code>：锁死「允许哪些属性名」</h3>
+    <p>
+      「三案」= 故意对照的<strong>三种情况</strong>，不是第三个 API。
+      先问一个问题：实例上能不能<strong>临时新加</strong>一个属性？
+    </p>
+
+    <h4>2.1 默认：实例像一个小字典（动态属性）</h4>
+    <p>
+      0012 已见：普通类的实例，格子可以随时加。
+      你在 <code>__init__</code> 里只写了 <code>self.name</code>，外面仍可 <code>obj.extra = 1</code>——解释器会新建格子。
+      这叫<strong>动态属性</strong>：属性名不必事先全部申报。
+    </p>
+    <pre>class OpenBox:
+    def __init__(self, name):
+        self.name = name
+
+box = OpenBox("a")
+box.extra = 1      # 成功：临时加了一个叫 extra 的格子
+print(box.extra)   # 1</pre>
+    <p>
+      灵活，但也容易打错字：本意写 <code>box.name = "x"</code>，手滑写成 <code>box.nmae = "x"</code>，
+      不会报错，只是多了一个没用的 <code>nmae</code>，原来的 <code>name</code> 没改到——这类 bug 难查。
+    </p>
+
+    <h4>2.2 声明 <code>__slots__</code>：只允许名单里的名字</h4>
+    <p>
+      <code>__slots__</code> 是类里的一个<strong>特殊声明</strong>（两边双下划线，语言认的 dunder，不是「私有」）。
+      写成元组/列表，列出本类实例<strong>允许拥有</strong>的属性名。名单外赋值 → <code>AttributeError</code>。
+    </p>
+    <pre>class ClosedBox:
+    __slots__ = ("name",)   # 注意：单元素元组要有逗号
+
+    def __init__(self, name):
+        self.name = name</pre>
+    <p class="muted">
+      <code>("name",)</code> 的逗号：写成 <code>("name")</code> 只是加了括号的字符串，不是一元组。
+    </p>
+
+    <h4>2.3 三案对照（必背）</h4>
+    <table>
+      <tr><th>案</th><th>写法</th><th>结果</th><th>说明</th></tr>
+      <tr>
+        <td>①</td>
+        <td>无 <code>__slots__</code>，再 <code>obj.extra = 1</code></td>
+        <td>成功</td>
+        <td>默认动态属性（0012 行为）</td>
+      </tr>
+      <tr>
+        <td>②</td>
+        <td>有 slots，改名单<strong>内</strong>的 <code>name</code></td>
+        <td>可读写</td>
+        <td>名单不是「只读」，只是「只许这些名字」</td>
+      </tr>
+      <tr>
+        <td>③</td>
+        <td>有 slots，再加名单<strong>外</strong>的 <code>extra</code></td>
+        <td>AttributeError</td>
+        <td>没有这个格子，也不许新建</td>
+      </tr>
+    </table>
+    <pre># ①
+open_box = OpenBox("a")
+open_box.extra = 1          # OK
+
+# ②
+closed = ClosedBox("b")
+closed.name = "b2"          # OK：name 在名单里
+
+# ③
+closed.extra = 1            # AttributeError</pre>
+
+    <h4>2.4 和「私有」无关；North 怎么用</h4>
+    <table>
+      <tr><th>易混</th><th>澄清</th></tr>
+      <tr>
+        <td>slots 是不是 private？</td>
+        <td>不是。它管的是<strong>能不能动态加字段名</strong>，不管谁能读。名单里的 <code>name</code> 外面照样 <code>closed.name</code>。</td>
+      </tr>
+      <tr>
+        <td>和单下划线 <code>_value</code> 一起用？</td>
+        <td>可以。本课 <code>name_guard.ToolName</code>：<code>__slots__ = ("_value",)</code> + <code>@property value</code>——锁名 + 约定内部存储。</td>
+      </tr>
+      <tr>
+        <td>主要图什么？</td>
+        <td>① 防打错字变成野属性；② 大量小对象时略省内存（默认每实例一个 dict）。</td>
+      </tr>
+    </table>
+    <p>
+      North 的 dataclass <strong>没有</strong>开 slots（除非显式 <code>@dataclass(slots=True)</code>，20 章都没写）。
+      阶段 0 过关：见到能解释「锁属性名、可选省内存」；自己写 Agent 脚本不必先用。
+      可跑对照：<code>examples.py</code> 例 2；主脚本 <code>name_guard.py</code> 里 slots 拦住 <code>bash.extra = True</code>。
+    </p>
+
+    <h3>3. <code>@property</code>：方法当属性读</h3>
+    <p>
+      有时你想让外面写 <code>policy.max_retries</code>（像读字段），但背后其实要跑一段逻辑（读内部存储、做校验）。
+      <strong>property</strong> 就是把「无参方法」伪装成「属性访问」：读时不加 <code>()</code>。
+    </p>
+
+    <h4>3.0 先认：是「装饰器」，不是「注释器」</h4>
+    <p>
+      行首的 <code>@xxx</code> 叫 <strong>装饰器（decorator）</strong>，不要叫注释器。
+      注释是 <code># ...</code> 给人看的；装饰器是<strong>真会改下一行定义行为</strong>的语法糖。
+    </p>
+    <p>
+      写法：<code>@foo</code> 紧贴在 <code>def</code> / <code>class</code> <strong>上一行</strong>，表示「下面这个定义先交给 <code>foo</code> 加工再绑定名字」。
+      本阶段<strong>只认会用</strong>，不必自己写通用装饰器函数（0012 / Day17 已跳过）。
+    </p>
+    <table>
+      <tr><th>你见过的 <code>@</code></th><th>贴在什么上面</th><th>加工后多了什么</th></tr>
+      <tr>
+        <td><code>@dataclass</code></td>
+        <td><code>class</code></td>
+        <td>自动生成 <code>__init__</code> / <code>repr</code> 等（0012）</td>
+      </tr>
+      <tr>
+        <td><code>@property</code></td>
+        <td><code>def</code>（getter）</td>
+        <td>读 <code>obj.名</code> 时调这个函数；默认<strong>不能写</strong></td>
+      </tr>
+      <tr>
+        <td><code>@名.setter</code></td>
+        <td>同名 <code>def</code></td>
+        <td>给已有 property <strong>补上写通道</strong></td>
+      </tr>
+      <tr>
+        <td><code>@staticmethod</code></td>
+        <td><code>def</code></td>
+        <td>变成无 <code>self</code> 的普通函数，挂在类名下</td>
+      </tr>
+      <tr>
+        <td><code>@classmethod</code></td>
+        <td><code>def</code></td>
+        <td>第一个参数变成 <code>cls</code>（类本身）</td>
+      </tr>
+    </table>
+    <p class="muted">
+      口诀：见到 <code>@foo</code> →「下一行的定义被 foo 加工过」。
+      不是发网络、不是删注释、也不是 Java 注解（annotation）——功能上有点像注解+框架挂钩，但 Python 里标准译名是<strong>装饰器</strong>。
+    </p>
+
+    <h4>3.1 getter / setter 是什么（先记这对词）</h4>
+    <table>
+      <tr><th>英文</th><th>对应装饰器</th><th>何时触发</th><th>干什么</th></tr>
+      <tr>
+        <td><strong>getter</strong>（读取器）</td>
+        <td><code>@property</code></td>
+        <td>读：<code>policy.max_retries</code></td>
+        <td>算出/取出值并 <code>return</code>；<strong>不加 <code>()</code></strong></td>
+      </tr>
+      <tr>
+        <td><strong>setter</strong>（设置器）</td>
+        <td><code>@max_retries.setter</code></td>
+        <td>写：<code>policy.max_retries = 5</code></td>
+        <td>校验后写入真格子 <code>_max_retries</code></td>
+      </tr>
+    </table>
+    <p>
+      一对名字、两条钩子：<strong>读走 getter，写走 setter</strong>。
+      只有 <code>@property</code>、没有 <code>@xxx.setter</code> → 只有读钩子，没有写钩子 → 赋值会报错（下一小节）。
+    </p>
+    <p>
+      <strong>无参函数不必用装饰器。</strong>
+      普通实例方法照样写 <code>def schema(self): ...</code>，调用 <code>obj.schema()</code>（有括号）。
+      只有当你想让外面写成 <code>obj.名</code>（像字段、不加括号）时，才给这个无参方法加 <code>@property</code>。
+      装饰器是「需要时才贴」的加工标签，不是无参函数的通行证。
+    </p>
+
+    <h4>3.2 为什么不只写普通字段？</h4>
+    <table>
+      <tr><th>写法</th><th>读</th><th>写</th><th>校验？</th></tr>
+      <tr>
+        <td>普通字段 <code>self.n = n</code></td>
+        <td><code>obj.n</code></td>
+        <td><code>obj.n = -1</code> 也成功</td>
+        <td>无；非法值照样进去</td>
+      </tr>
+      <tr>
+        <td><code>@property</code> + setter</td>
+        <td><code>obj.max_retries</code>（无括号）</td>
+        <td><code>obj.max_retries = -1</code> 可拦截</td>
+        <td>有；setter 里 <code>raise</code></td>
+      </tr>
+      <tr>
+        <td>只有 <code>@property</code>（无 setter）</td>
+        <td>同上</td>
+        <td>赋值 → AttributeError</td>
+        <td>只读对外接口</td>
+      </tr>
+    </table>
+
+    <h4>3.3 为什么「没有 setter」会报错？</h4>
+    <p>
+      <code>@property</code> 加工后，这个名字在类上变成一个<strong>受管属性</strong>：
+      解释器规定——读必须走 getter；写必须走 setter。
+      <strong>没挂 setter = 写通道不存在</strong>，不是「当成普通字段随便赋」。
+    </p>
+    <pre>class ReadonlyLabel:
+    def __init__(self, text: str) -&gt; None:
+        self._text = text          # 真格子：在 __init__ 里用 _text 直接写，OK
+
+    @property
+    def text(self) -&gt; str:         # 只有 getter
+        return self._text
+    # 没有 @text.setter
+
+label = ReadonlyLabel("bash")
+print(label.text)     # OK → 调 getter
+label.text = "other"  # AttributeError：property 没有 setter / can't set attribute</pre>
+    <table>
+      <tr><th>动作</th><th>有 getter + setter</th><th>只有 getter</th></tr>
+      <tr><td>读 <code>obj.名</code></td><td>调 getter</td><td>调 getter</td></tr>
+      <tr><td>写 <code>obj.名 = ...</code></td><td>调 setter</td><td><strong>AttributeError</strong>（故意只读）</td></tr>
+      <tr><td>在 <code>__init__</code> 里写 <code>self._名 = ...</code></td><td>直接写真格子，不走对外名</td><td>同上；只读门面仍可在内部灌初值</td></tr>
+    </table>
+    <p>
+      这不是 bug：作者用「无 setter」表达 <strong>对外只读</strong>。
+      本课 <code>ToolName.value</code>、<code>ReadonlyLabel.text</code> 都是这种。
+      若既要对外可写又要校验，就补上 <code>@名.setter</code>（如 <code>RetryPolicy.max_retries</code>）。
+    </p>
+
+    <h4>3.4 两个名字 + 全流程（getter / setter 怎么接力）</h4>
+    <p>
+      <code>max_retries</code> 和 <code>_max_retries</code> 不是同一个东西：
+    </p>
+    <table>
+      <tr><th>名字</th><th>角色</th></tr>
+      <tr><td><code>_max_retries</code></td><td><strong>真格子</strong>：普通属性，里面就是一个 int</td></tr>
+      <tr><td><code>max_retries</code></td><td><strong>对外门面</strong>：一对「读函数 / 写函数」，不是普通字段</td></tr>
+    </table>
+    <p>
+      <code>@property</code> / <code>@max_retries.setter</code> 告诉解释器：
+      读 <code>policy.max_retries</code> → 调 <strong>getter</strong>；
+      写 <code>policy.max_retries = 5</code> → 调 <strong>setter</strong>。
+      所以 setter = 给「赋值」装上的钩子：先校验，再写入真格子。
+    </p>
+    <pre>class RetryPolicy:
+    def __init__(self, max_retries: int) -&gt; None:
+        # ① 先建内部格子（写 _max_retries，不走 setter）
+        self._max_retries = 0
+        # ② 再赋对外名（写 max_retries，会走 setter，创建时就校验）
+        self.max_retries = max_retries
+
+    @property
+    def max_retries(self) -&gt; int:           # ← 这是 getter
+        # 读 policy.max_retries 时调用这里；必须 return _max_retries
+        # 若写成 return self.max_retries → 又触发 getter → 递归炸栈
+        return self._max_retries
+
+    @max_retries.setter
+    def max_retries(self, value: int) -&gt; None:  # ← 这是 setter
+        # 写 policy.max_retries = ... 时调用这里
+        if value &lt; 0:                      # 门卫：非法则抛错，不改数据
+            raise ValueError("max_retries must be &gt;= 0")
+        self._max_retries = value          # 合法才写入真格子</pre>
+
+    <p><strong>创建</strong> <code>RetryPolicy(3)</code>：</p>
+    <pre>RetryPolicy(3)
+  → __init__(self, max_retries=3)
+      self._max_retries = 0          # 占位，不走 setter
+      self.max_retries = 3           # 触发 setter(value=3)
+           → 校验通过
+           → self._max_retries = 3   # 真格子变成 3
+
+# 若 RetryPolicy(-1)：setter 里 raise → 对象创建失败</pre>
+
+    <p><strong>读</strong>（无括号）与<strong>写</strong>：</p>
+    <pre>policy.max_retries          # → getter → return _max_retries
+# 不要写成 policy.max_retries()  —— getter 已返回 int，再 () 会 TypeError
+
+policy.max_retries = 5      # → setter(value=5) → 校验 → _max_retries = 5
+policy.max_retries = -1     # → setter → ValueError；真格子不变</pre>
+
+    <p>对照图（对外名 ↔ 钩子 ↔ 真存储）：</p>
+    <pre>外面读写的名字:     max_retries
+                         │
+          ┌──────────────┼──────────────┐
+          │ 读                          │ 写 =
+          ▼                          ▼
+     getter (@property)         setter (@名.setter)
+     return _max_retries        校验 → 写入 _max_retries
+          │                          │
+          └──────────┬───────────────┘
+                     ▼
+              真存储: _max_retries
+
+# 若去掉 setter 这一支：写通道消失 → AttributeError（只读）</pre>
+    <p>
+      口诀：<strong>对外用 <code>max_retries</code>，对内只动 <code>_max_retries</code>；读 getter、写 setter、无 setter 则只读。</strong>
+    </p>
+
+    <h4>3.5 三案汇总（读 / 写 / 只读）</h4>
+    <table>
+      <tr><th>案</th><th>操作</th><th>结果</th></tr>
+      <tr><td>①</td><td><code>print(policy.max_retries)</code></td><td>走 getter，得到 int；<strong>不要</strong>写成 <code>max_retries()</code></td></tr>
+      <tr><td>②</td><td><code>policy.max_retries = 5</code> / <code>= -1</code></td><td>走 setter；合法写入 / 非法 ValueError</td></tr>
+      <tr><td>③</td><td>只有 getter 的 property 再赋值</td><td>AttributeError（没有写通道）</td></tr>
+    </table>
+    <p>
+      Java 对照：有点像 getter/setter 方法，但调用方<strong>不加 <code>()</code></strong>，看起来像字段。
+      North 20 章几乎不用；库代码常见。本课主脚本 <code>ToolName.value</code> 是只读 property（案 ③）。
+      可跑：<code>examples.py</code> 例 3。
+    </p>
+
+    <h3>4. 三种方法：实例 / 静态 / 类方法</h3>
+    <p>
+      都写在 <code>class</code> 里，差别是<strong>第一个参数是谁</strong>、以及<strong>调用时手里要不要已有实例</strong>。
+      <code>@staticmethod</code> / <code>@classmethod</code> 也是<strong>装饰器</strong>（见 3.0）：加工紧挨着的下一个 <code>def</code>。
+    </p>
+
+    <h4>4.1 总表</h4>
+    <table>
+      <tr><th>种类</th><th>第一个参数</th><th>谁来调用</th><th>典型用途</th></tr>
+      <tr>
+        <td>实例方法（默认）</td>
+        <td><code>self</code>（某一个对象）</td>
+        <td><code>obj.schema()</code></td>
+        <td>要用到该实例上的数据</td>
+      </tr>
+      <tr>
+        <td><code>@staticmethod</code></td>
+        <td>无 self / 无 cls</td>
+        <td><code>Cls.is_valid(x)</code> 或 <code>obj.is_valid(x)</code></td>
+        <td>和实例无关的纯规则，只是挂在类名下好找</td>
+      </tr>
+      <tr>
+        <td><code>@classmethod</code></td>
+        <td><code>cls</code>（类本身 / 图纸）</td>
+        <td><code>Cls.from_dict(d)</code></td>
+        <td>工厂：<code>return cls(...)</code>；子类调用得到子类实例</td>
+      </tr>
+    </table>
+
+    <h4>4.2 实例方法：已经有对象</h4>
+    <pre>class ToolSpec:
+    def __init__(self, name: str) -&gt; None:
+        self.name = name
+
+    def schema(self) -&gt; dict[str, str]:
+        return {"name": self.name}   # 用到 self.name
+
+ToolSpec("bash").schema()   # → {"name": "bash"}</pre>
+    <p>0012 的 <code>self</code>：点号左边自动填进第一个参数。没有实例就谈不上 <code>schema()</code>。</p>
+
+    <h4>4.3 <code>@staticmethod</code>：纯函数，挂在类上</h4>
+    <p>
+      有时规则<strong>根本不需要某个具体对象</strong>——比如「这个字符串算不算合法工具名」。
+      写成普通实例方法会别扭：还没造出对象，就不能问合不合法。
+      <code>@staticmethod</code>：把函数放进类的命名空间里，但<strong>不自动传入 self / cls</strong>。
+    </p>
+
+    <h5>写法和调用</h5>
+    <pre>class ToolSpec:
+    @staticmethod
+    def is_valid_name(name: str) -&gt; bool:
+        # 没有 self，也没有 cls —— 参数表里只有你显式写的
+        return bool(name) and " " not in name
+
+# 推荐：用类名调用（还没有实例）
+ToolSpec.is_valid_name("rag_search")  # True
+ToolSpec.is_valid_name("bad name")    # False
+
+# 也能用已有实例调用，但第一个参数仍不会变成 self
+spec = ToolSpec("bash")
+spec.is_valid_name("x")               # 同样只是把 "x" 传给 name</pre>
+
+    <h5>为什么两个返回值不一样？</h5>
+    <p>不是 staticmethod 有两套逻辑，而是<strong>传入的字符串不同</strong>：</p>
+    <table>
+      <tr><th>实参</th><th><code>bool(name)</code></th><th><code>" " not in name</code></th><th>结果</th></tr>
+      <tr><td><code>"rag_search"</code></td><td>非空 → True</td><td>无空格 → True</td><td><code>True</code></td></tr>
+      <tr><td><code>"bad name"</code></td><td>非空 → True</td><td>有空格 → False</td><td><code>False</code></td></tr>
+      <tr><td><code>""</code></td><td>空 → False</td><td>（短路，可不看）</td><td><code>False</code></td></tr>
+    </table>
+
+    <h5>和「模块级函数」比；和实例方法比</h5>
+    <table>
+      <tr><th>写法</th><th>差别</th></tr>
+      <tr>
+        <td>模块里 <code>def is_valid_name(name): ...</code></td>
+        <td>完全可行；staticmethod 只是把函数<strong>挂到类名下</strong>，表示「这是 ToolSpec 相关规则」</td>
+      </tr>
+      <tr>
+        <td>实例方法 <code>def is_valid_name(self, name): ...</code></td>
+        <td>必须先有实例；且容易误用 <code>self</code>。规则与实例无关时用 static 更干净</td>
+      </tr>
+      <tr>
+        <td>staticmethod 里写 <code>self.xxx</code></td>
+        <td><strong>不行</strong>：没有这个参数 → NameError</td>
+      </tr>
+    </table>
+    <p>
+      本课主脚本 <code>ToolName.is_valid</code> 同理：造 <code>ToolName(...)</code> 之前就能问名字合不合法。
+      Java 对照：接近 <code>public static boolean isValidName(String name)</code>。
+    </p>
+
+    <h4>4.4 <code>@classmethod</code>：第一个参数是类（图纸）</h4>
+    <p>
+      <code>cls</code> <strong>不是关键字</strong>（约定名，别改），也不是某一个实例。
+      它是<strong>类本身</strong>：调用时点号左边是哪个类，<code>cls</code> 就是那个类。
+    </p>
+    <table>
+      <tr><th></th><th><code>self</code></th><th><code>cls</code></th></tr>
+      <tr><td>出现在</td><td>普通实例方法</td><td><code>@classmethod</code></td></tr>
+      <tr><td>是什么</td><td>某一个已造好的对象（成品）</td><td>类这个图纸</td></tr>
+      <tr><td>谁填进来</td><td><code>obj.schema()</code> 左边的 <code>obj</code></td><td><code>ToolSpec.from_dict(...)</code> 左边的类名</td></tr>
+    </table>
+
+    <h5>工厂：用图纸造实例</h5>
+    <p>
+      <strong>工厂</strong>在这里不是工业术语，而是起名习惯：一个函数/方法的职责是
+      「按某种输入，<strong>造出对象并返回</strong>」。
+      往往比直接调用构造更方便——先加工输入（取 dict 字段、<code>strip</code>…），再 <code>cls(...)</code> / 类名构造。
+    </p>
+    <table>
+      <tr><th>普通构造</th><th>工厂（本课）</th></tr>
+      <tr><td><code>ToolSpec("read")</code></td><td><code>ToolSpec.from_dict({"name": "read"})</code></td></tr>
+      <tr><td><code>ToolName("bash")</code></td><td><code>ToolName.parse("  bash  ")</code></td></tr>
+      <tr><td>参数已是 <code>__init__</code> 要的形状</td><td>先加工，再造实例</td></tr>
+    </table>
+    <p>
+      <strong>@classmethod 工厂</strong> = 这个入口写在类上，里面用 <code>cls(...)</code> 造；
+      子类调用同一份方法时，<code>cls</code> 变成子类，仍造出子类实例。
+      口诀：工厂 = 「帮你 new 出一个实例」的函数。
+    </p>
+    <pre>class ToolSpec:
+    def __init__(self, name: str) -&gt; None:
+        self.name = name
+
+    @classmethod
+    def from_dict(cls, data: dict[str, str]) -&gt; "ToolSpec":
+        # 调用 ToolSpec.from_dict(...) 时，cls 就是 ToolSpec
+        return cls(data["name"])   # 等价于 ToolSpec(data["name"])，但别写死类名
+
+obj = ToolSpec.from_dict({"name": "read"})
+# 流程：
+#   1. 解释器把 ToolSpec 填进 cls
+#   2. data = {"name": "read"}
+#   3. return cls("read") → 调用 ToolSpec.__init__，得到实例</pre>
+
+    <h5>为什么子类调用仍得到子类？</h5>
+    <pre>class SpecialTool(ToolSpec):
+    pass
+
+type(SpecialTool.from_dict({"name": "x"}))  # → SpecialTool</pre>
+    <p>
+      同一份 <code>from_dict</code> 写在父类里；子类没覆盖也会继承。
+      调用 <code>SpecialTool.from_dict(...)</code> 时，解释器把 <strong><code>SpecialTool</code></strong> 填进 <code>cls</code>，
+      于是 <code>cls(...)</code> 造出的是子类实例。
+    </p>
+    <table>
+      <tr><th>工厂写法</th><th><code>SpecialTool.from_dict(...)</code> 得到</th></tr>
+      <tr><td><code>return cls(...)</code></td><td>子类实例 ✅</td></tr>
+      <tr><td><code>return ToolSpec(...)</code>（写死父类名）</td><td>永远是父类实例 ❌</td></tr>
+    </table>
+
+    <h5>staticmethod vs classmethod 怎么选</h5>
+    <table>
+      <tr><th>需要……</th><th>用</th><th>本课例子</th></tr>
+      <tr>
+        <td>纯规则，既不要实例也不要「当前是哪个类」</td>
+        <td><code>@staticmethod</code></td>
+        <td><code>is_valid_name</code> / <code>ToolName.is_valid</code></td>
+      </tr>
+      <tr>
+        <td>要造实例，且希望子类调用时造出子类</td>
+        <td><code>@classmethod</code></td>
+        <td><code>from_dict</code> / <code>ToolName.parse</code></td>
+      </tr>
+      <tr>
+        <td>要用到某一个对象上的数据</td>
+        <td>实例方法（默认）</td>
+        <td><code>schema</code></td>
+      </tr>
+    </table>
+
+    <h5>那句「要造实例，且希望子类调用时造出子类」怎么拆？</h5>
+    <p>表里第二行其实是<strong>两个条件叠在一起</strong>，缺一就不必强上 classmethod：</p>
+    <table>
+      <tr><th>条件</th><th>含义</th><th>反例（不满足时）</th></tr>
+      <tr>
+        <td>① 要造实例</td>
+        <td>这个函数的目的是<strong>返回一个新对象</strong>（工厂），不是只算 True/False</td>
+        <td><code>is_valid_name</code> 只返回 bool → 用 staticmethod 即可</td>
+      </tr>
+      <tr>
+        <td>② 希望子类调用时造出子类</td>
+        <td>以后若有 <code>SpecialXxx(父类)</code>，希望 <code>SpecialXxx.工厂(...)</code> 得到的是<strong>子类实例</strong>，而不是写死的父类</td>
+        <td>确定永远没有子类、或工厂写在模块里并写死类名也无所谓 → 不必纠结 cls</td>
+      </tr>
+    </table>
+    <p>两个条件都满足 → 写成 <code>@classmethod</code>，里面 <code>return cls(...)</code>。</p>
+
+    <p><strong>本课两个例子对照：</strong></p>
+    <pre># examples.py：从 dict 造 ToolSpec
+@classmethod
+def from_dict(cls, data: dict[str, str]) -&gt; "ToolSpec":
+    return cls(data["name"])
+# ToolSpec.from_dict(...)     → 造出 ToolSpec
+# SpecialTool.from_dict(...)  → 造出 SpecialTool（子类白嫖同一份工厂）
+
+# name_guard.py：从原始字符串造 ToolName（先 strip 再构造）
+@classmethod
+def parse(cls, raw: str) -&gt; ToolName:
+    return cls(raw.strip())
+# ToolName.parse("  bash  ")           → ToolName('bash')
+# 若将来有 class StrictName(ToolName): → StrictName.parse(...) 仍得 StrictName</pre>
+    <table>
+      <tr><th>例子</th><th>① 造实例？</th><th>② 照顾子类？</th><th>怎么调用</th></tr>
+      <tr>
+        <td><code>from_dict</code></td>
+        <td>是：返回 <code>cls(...)</code></td>
+        <td>是：<code>SpecialTool.from_dict</code> 时 cls 变子类</td>
+        <td><code>ToolSpec.from_dict({"name": "read"})</code></td>
+      </tr>
+      <tr>
+        <td><code>ToolName.parse</code></td>
+        <td>是：strip 后 <code>cls(...)</code></td>
+        <td>是：同一写法，子类可继承</td>
+        <td><code>ToolName.parse("bash")</code></td>
+      </tr>
+      <tr>
+        <td><code>is_valid</code> / <code>is_valid_name</code></td>
+        <td>否：只返回 bool</td>
+        <td>不涉及造谁</td>
+        <td>用 <code>@staticmethod</code></td>
+      </tr>
+    </table>
+    <p>
+      现阶段若还没有子类：你写 <code>ToolName.parse</code> 仍然合理——它是清晰的「构造入口」，
+      并且<strong>预先留好</strong>子类继承时不用改工厂。
+      不必为了 classmethod 硬造子类；读懂「写 <code>cls</code> 而不是写死类名」即可。
+    </p>
+    <p>
+      口诀：<strong>self = 某一个成品；cls = 图纸。</strong>
+      可跑：<code>examples.py</code> 例 4（含 <code>SpecialTool</code>）；主脚本 <code>name_guard.py</code> 看 <code>parse</code>。
+    </p>
+
+    <h2>主脚本导读</h2>
+    <p>
+      先跑 <code>examples.py</code>（例 1 / 1b / 2 / 3 / 4），再读并跑
+      <a href="../../playground/python/0013-oop-advanced/name_guard.py"><code>name_guard.py</code></a>：
+      把本课四块收进一个「工具名」值对象。
+    </p>
+    <table>
+      <tr><th>块</th><th>代码里看什么</th><th>对应本课哪节</th></tr>
+      <tr>
+        <td><code>ToolNameError</code></td>
+        <td><code>ValueError</code> 子类；非法名时抛业务错误</td>
+        <td>0012 异常子类</td>
+      </tr>
+      <tr>
+        <td><code>__slots__ = ("_value",)</code></td>
+        <td>实例只能有 <code>_value</code>；<code>bash.extra = True</code> → AttributeError</td>
+        <td>讲解 2</td>
+      </tr>
+      <tr>
+        <td><code>self._value</code></td>
+        <td>单下划线存储；外面请用 <code>.value</code>，别直接摸</td>
+        <td>讲解 1</td>
+      </tr>
+      <tr>
+        <td><code>@property value</code></td>
+        <td>只读对外接口；无 setter → 不能 <code>bash.value = ...</code></td>
+        <td>讲解 3</td>
+      </tr>
+      <tr>
+        <td><code>@staticmethod is_valid</code></td>
+        <td>无实例也能问「这名字行不行」</td>
+        <td>讲解 4</td>
+      </tr>
+      <tr>
+        <td><code>@classmethod parse</code></td>
+        <td>工厂：<code>strip</code> 后 <code>return cls(...)</code>；失败抛 ToolNameError</td>
+        <td>讲解 4</td>
+      </tr>
+    </table>
+    <pre>cd d:\agent-learning\playground\python
+.\.venv\Scripts\Activate.ps1
+python 0013-oop-advanced\examples.py
+python 0013-oop-advanced\name_guard.py</pre>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>以为 <code>_x</code> 会报错</strong>：不会。只是约定；外面仍能读。</li>
+        <li><strong>以为 <code>__x</code> 是安全私有</strong>：能用 <code>_Class__x</code> 读到；目的是防子类踩名。</li>
+        <li><strong>把 <code>__secret</code> 和 <code>__name__</code> 当成一类</strong>：前者名称改写；后者是语言特殊名（dunder）。</li>
+        <li><strong>把例子里的 <code>bag</code> 当成关键字</strong>：只是实例变量名，可换成任意合法标识符。</li>
+        <li><strong>以为 slots 是 private</strong>：不管可见性；只管能不能动态加字段名。</li>
+        <li><strong>写成 <code>__slots__ = ("name")</code></strong>：少了逗号就不是元组，声明无效或行为怪异。</li>
+        <li><strong>把 <code>@</code> 叫成「注释器」</strong>：标准译名是<strong>装饰器</strong>；注释是 <code>#</code>。</li>
+        <li><strong>property 还加括号</strong>：<code>policy.max_retries()</code> 会把返回的 int 再当函数调 → TypeError。</li>
+        <li><strong>getter 里写 <code>return self.max_retries</code></strong>：应读 <code>_max_retries</code>，否则递归。</li>
+        <li><strong>奇怪为何无 setter 赋值报错</strong>：受管属性必须走 setter；没挂写通道 = 故意只读，不是普通字段。</li>
+        <li><strong>staticmethod 里用 <code>self</code></strong>：没有这个参数。</li>
+        <li><strong>classmethod 里写死类名</strong>：<code>return ToolSpec(...)</code> 让子类工厂失效；应 <code>return cls(...)</code>。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。语法不拦单下划线；双下划线才改名。"
+      data-bad="单下划线只是约定，外面仍能读。">
+      <p><code>bag._cache</code> 在类外面会怎样？</p>
+      <button data-correct="true">外面能读只是不该当接口</button>
+      <button data-correct="false">一定报错而且无法去绕过</button>
+      <button data-correct="false">一定报错但能改名来绕过</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。slots 名单外的动态属性会被拒绝。"
+      data-bad="无 slots 才能随便加 extra。">
+      <p><code>__slots__ = ("name",)</code> 时 <code>obj.extra = 1</code>？</p>
+      <button data-correct="true">只允许名单内的属性</button>
+      <button data-correct="false">只允许名单外的属性</button>
+      <button data-correct="false">只允许任意动态属性</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。property 读时不加括号，看起来像字段。"
+      data-bad="写成 max_retries() 会把 int 再当函数调用。">
+      <p>读 property 应写成？</p>
+      <button data-correct="true"><code>policy.max_retries</code>（无括号）</button>
+      <button data-correct="false"><code>policy.max_retries()</code>（必须加括号）</button>
+      <button data-correct="false">只能 <code>policy._max_retries</code></button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。只有 getter 时写通道不存在，赋值 AttributeError（故意只读）。"
+      data-bad="无 setter 不会变成普通字段；也不会静默忽略赋值。">
+      <p>只有 <code>@property</code>、没有 <code>@名.setter</code> 时，<code>obj.名 = 1</code>？</p>
+      <button data-correct="true">AttributeError（写通道不存在）</button>
+      <button data-correct="false">静默成功，当成普通字段</button>
+      <button data-correct="false">一定 ValueError</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。标准译名是装饰器；# 才是注释。"
+      data-bad="@ 会改下一行定义的行为，不是给人看的注释。">
+      <p>行首的 <code>@property</code> 叫什么？</p>
+      <button data-correct="true">装饰器（decorator）</button>
+      <button data-correct="false">注释器</button>
+      <button data-correct="false">和 <code>#</code> 一样的注释</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。classmethod 的第一个参数是类，用来当工厂。"
+      data-bad="staticmethod 没有 cls；实例方法的第一个是 self。">
+      <p><code>@classmethod def parse(cls, raw)</code> 的 <code>cls</code> 是谁？</p>
+      <button data-correct="true">第一个参数是类对象</button>
+      <button data-correct="false">第一个参数是该实例</button>
+      <button data-correct="false">不接收实例只当函数</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。写死父类名会让子类工厂永远造出父类实例。"
+      data-bad="工厂里应 return cls(...)。">
+      <p>classmethod 工厂里为什么不要写死 <code>return ToolSpec(...)</code>？</p>
+      <button data-correct="true">子类调用时仍会得到父类实例</button>
+      <button data-correct="false">语法上不允许写类名</button>
+      <button data-correct="false">只有 staticmethod 才能当工厂</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能区分公开名 / <code>_name</code> / <code>__name</code>（改写）三案；知道 <code>bag</code> 只是变量名。</li>
+      <li>能说明 slots「三案」：无 slots 可动态加、名单内可写、名单外 AttributeError；且不是 private。</li>
+      <li>读 <code>@property</code> 不加括号；能分清 getter / setter；能解释「无 setter → AttributeError」是故意只读。</li>
+      <li>能说出 <code>@</code> 叫<strong>装饰器</strong>（不是注释器），并列出本阶段认的几种。</li>
+      <li>能对照表讲清实例方法 / staticmethod / classmethod；工厂用 <code>cls</code> 不写死类名。</li>
+      <li><code>examples.py</code> 与 <code>name_guard.py</code> 跑通，并能指出主脚本每一块对应哪一节。</li>
+    </ul>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li><a href="https://docs.python.org/3/tutorial/classes.html#private-variables">Tutorial · Private Variables</a></li>
+        <li><a href="https://docs.python.org/3/reference/datamodel.html#slots">Data model · __slots__</a></li>
+        <li><a href="https://docs.python.org/3/library/functions.html#property">property</a> ·
+            <a href="https://docs.python.org/3/library/functions.html#classmethod">classmethod</a></li>
+        <li>选读原书：<a href="../../python-100Days/Day01-20/19.面向对象编程进阶.md">Day19</a></li>
+      </ul>
+    </div>
+    <p>
+      <a href="../../reference/python-phase0.html#oop-adv">阶段 0 速查：OOP 进阶</a> ·
+      <a href="../../reference/python-100days-map.html">100-Days 对照</a>
+    </p>
+    <div data-lesson-id-footer="0013"></div>
+    <footer>不清楚的立刻问我。下一课：0014 <code>getattr</code> / <code>subprocess</code> / <code>glob</code>（North s01 就会用到）。</footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0009 · 类型标注：读懂 Agent 代码签名</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0009"></div>
+    <h1>类型标注：读懂 Agent 代码里的「形状约定」</h1>
+    <p class="mission">0008 里你已经见过 <code>list[dict[str, str]]</code>、<code>path: Path</code>、<code>-&gt; dict</code>。开源 Agent / RAG 脚本里这类写法几乎无处不在——它们不是装饰，而是<strong>给读代码的人看的形状说明</strong>。本课主技能是读懂并写出常用标注；载体是把 0008 的配置加载与 tool_call 校验「标清楚类型」。目标：<strong>读 North / Hermes 签名不懵，边界仍用 <code>isinstance</code> 校验</strong>。</p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">对应 <a href="https://docs.python.org/3/library/typing.html">Python 官方 · typing</a> 与 <a href="https://docs.python.org/3/reference/compound_stmts.html#function-definitions">函数定义中的标注</a>。100-Days 无独立一章；本课以官方为准，对齐阶段 0「类型基础」补丁。</p>
+    <table>
+      <tr><th>来源要点</th><th>本课处理</th></tr>
+      <tr><td>变量 / 参数 / 返回值标注</td><td><span class="tag">已内化</span>讲解 1–3</td></tr>
+      <tr><td>容器泛型 <code>list[str]</code>、<code>dict[str, int]</code></td><td><span class="tag">已内化</span>讲解 4–5</td></tr>
+      <tr><td><code>None</code>、<code>X | None</code>、可选参数</td><td><span class="tag">已内化</span>讲解 6（三案）</td></tr>
+      <tr><td><code>Any</code>、JSON 边界</td><td><span class="tag">已内化</span>讲解 7</td></tr>
+      <tr><td><code>from __future__ import annotations</code></td><td><span class="tag">已内化</span>讲解 8</td></tr>
+      <tr><td><code>TypedDict</code> 描述 dict 形状</td><td><span class="tag">已内化</span>讲解 9；轻量引入</td></tr>
+      <tr><td><code>mypy</code> / <code>pyright</code> 静态检查全流程</td><td><span class="tag">跳过</span>阶段 0 以读懂为主；知道存在即可</td></tr>
+      <tr><td><code>Protocol</code>、<code>Generic</code>、复杂泛型演算</td><td><span class="tag">跳过</span>读开源 agent 暂不需要</td></tr>
+      <tr><td><code>requests</code> HTTP</td><td><span class="tag">下一课</span>0010</td></tr>
+    </table>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>Python</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr><td><code>name: str</code></td><td><code>String name</code></td><td>Python 标注在名字<strong>后面</strong>，用冒号</td></tr>
+      <tr><td><code>-&gt; str</code></td><td>返回类型在方法名前</td><td>Python 返回类型在参数列表<strong>后面</strong></td></tr>
+      <tr><td><code>list[str]</code></td><td><code>List&lt;String&gt;</code></td><td>3.9+ 直接用内置 <code>list</code>，不必 <code>List</code> from typing</td></tr>
+      <tr><td><code>str | None</code></td><td><code>Optional&lt;String&gt;</code></td><td>3.10+ 用 <code>|</code> 联合类型更常见</td></tr>
+      <tr><td>运行时默认不强制</td><td>编译期检查</td><td>错类型仍可能跑起来；边界要靠 <code>isinstance</code> 或静态检查工具</td></tr>
+      <tr><td><code>dict[str, Any]</code></td><td><code>Map&lt;String, Object&gt;</code></td><td>JSON 边界常用 <code>Any</code> 承认「还没验形状」</td></tr>
+      <tr><td><code>TypedDict</code></td><td>record / DTO</td><td>仍是 dict 运行时，只是标注层描述字段</td></tr>
+    </table>
+
+    <h2>系统讲解</h2>
+
+    <h3>1. 标注是什么：说明书，不是运行时护栏（默认）</h3>
+    <p>类型标注（type hints）写在变量、参数、返回值上，说明<strong>作者期望的类型形状</strong>。默认情况下 Python <strong>不会在运行时因为标注不匹配而报错</strong>——这和 Java 编译期检查不同。</p>
+    <pre>def greet(name: str) -&gt; str:
+    return f"hello, {name}"
+
+print(greet.__annotations__)
+# {'name': 'str', 'return': 'str'}</pre>
+    <p>标注存在 <code>__annotations__</code> 字典里，IDE、mypy、pyright 会读它们帮你补全和报错。你读 Agent 代码时，<strong>先看函数签名再进函数体</strong>。</p>
+
+    <h3>2. 三种常见写法位置</h3>
+    <table>
+      <tr><th>位置</th><th>写法</th><th>例子</th></tr>
+      <tr><td>参数</td><td><code>name: str</code></td><td><code>def run(query: str, top_k: int = 3)</code></td></tr>
+      <tr><td>返回值</td><td><code>-&gt; T</code></td><td><code>def load() -&gt; dict[str, Any]</code></td></tr>
+      <tr><td>局部变量（可选）</td><td><code>x: int = 0</code></td><td><code>count: int = 0</code>；帮助读代码，不常强制</td></tr>
+    </table>
+    <pre>documents: list[dict[str, str]] = []
+path: Path = BASE_DIR / "config.json"</pre>
+    <p>你在 <code>load_knowledge.py</code> 第 6 行见过的 <code>documents: list[dict[str, str]] = []</code> 就是在说：这个列表里每个元素是「键值都是 str 的 dict」——和 Java <code>List&lt;Map&lt;String,String&gt;&gt;</code> 同一意图。</p>
+
+    <h3>3. 容器泛型：list / dict / set / tuple</h3>
+    <p>Python 3.9+ 推荐直接用内置类型加方括号（不必从 <code>typing</code> 导入 <code>List</code>/<code>Dict</code>）：</p>
+    <pre>names: list[str] = ["rag_search", "final"]
+scores: dict[str, float] = {"a": 0.9, "b": 0.7}
+tags: set[str] = {"rag", "tool"}
+pair: tuple[str, int] = ("query", 3)</pre>
+    <p>嵌套时从外往里读：<code>list[dict[str, float]]</code> = 「dict 列表，每个 dict 的键是 str、值是 float」——典型检索 hits 结构。</p>
+    <pre>def pick_top_k(
+    hits: list[dict[str, float]],
+    top_k: int = 3,
+) -&gt; list[dict[str, float]]:
+    return sorted(hits, key=lambda h: h["score"], reverse=True)[:top_k]</pre>
+    <p>「方括号」这套就是<strong>泛型</strong>：把类型本身当参数——容器先留空位，使用时再填具体类型。空位填得越满，信息量越大：</p>
+    <pre>list[dict[str, float]]   # 「列表」这个收纳盒贴了标签：每个元素是 dict，键 str、值 float
+list                     # 光说"是个列表"，什么都可能装 —— 读代码等于没说</pre>
+    <p>对照 Java：<code>list[dict[str, float]]</code> 就是 <code>List&lt;Map&lt;String, Float&gt;&gt;</code>，只是尖括号 <code>&lt;&gt;</code> 换成了方括号 <code>[]</code>。（自己写泛型函数要用 <code>TypeVar</code> 定义类型变量 T，本课跳过；现阶段读懂方括号即可。）</p>
+
+    <h3>4. <code>Any</code>：边界上诚实地说「形状未验」</h3>
+    <p><code>json.load</code> 之后你得到的是松散对象。在<strong>刚进门</strong>的函数里用 <code>Any</code> 或 <code>dict[str, Any]</code>，表示「我还没验证字段」；校验后再收成更具体的类型。</p>
+    <pre>from typing import Any
+
+def load_config(path: Path) -&gt; dict[str, Any]:
+    ...
+    return data   # 仍是松散 dict
+
+def summarize_config(config: dict[str, Any]) -&gt; ConfigSummary:
+    ...           # 在这里 int()/str()/isinstance 归一化</pre>
+    <p>口诀：<strong>Any 只留在边界一层</strong>，不要一路 <code>Any</code> 传到业务深处。</p>
+
+    <h3>5. <code>None</code> 三案（必背）</h3>
+    <table>
+      <tr><th>场景</th><th>写法</th><th>含义</th></tr>
+      <tr><td>必填，不允许空</td><td><code>name: str</code></td><td>调用方必须传 str；若可能缺字段用校验抛错</td></tr>
+      <tr><td>可选参数，默认就是 None</td><td><code>path: str | None = None</code></td><td>没传时是 <code>None</code>；函数内先判断</td></tr>
+      <tr><td>可能返回空</td><td><code>-&gt; str | None</code></td><td>有时返回 str，有时返回 <code>None</code></td></tr>
+    </table>
+    <pre>def load_label(path: str | None = None) -&gt; str:
+    if path is None:
+        return "default-config"
+    return path</pre>
+    <p>3.10+ 用 <code>X | None</code>；旧代码常见 <code>Optional[X]</code>（等价）。<strong>标注说可 None，不等于你可以省略 <code>if x is None</code> 判断。</strong></p>
+    <p>先懂 <code>|</code>：<code>str | None</code> 读作「要么是 str，要么是 None」，二选一（联合类型）。三案各自的完整样子：</p>
+    <pre>① 必填        def greet(name: str) -&gt; str: ...
+              greet()      # TypeError：缺参数，调用时就拦住
+              greet(None)  # 类型检查器标红：None 不是 str
+
+② 可选参数    def load(path: str | None = None):
+                  if path is None:            # 函数内先判断
+                      path = "default.json"
+              # 「= None」管"不传时填什么"；「str | None」管"传了之后的合法范围"
+
+③ 可能返回空  def find_user(uid: int) -&gt; str | None:
+                  if uid in users:
+                      return users[uid]
+                  return None                  # 没查到只能给 None，不许硬编名字</pre>
+    <table>
+      <tr><th>场景</th><th>调用方能不传？</th><th>None 出现时谁处理</th></tr>
+      <tr><td>必填非空 <code>name: str</code></td><td>不能，缺了直接报错</td><td>不该出现；传错当场炸</td></tr>
+      <tr><td>可选参数 <code>path: str | None = None</code></td><td>能</td><td><strong>函数内</strong>先判断再用</td></tr>
+      <tr><td>可能空返回 <code>-&gt; str | None</code></td><td>—</td><td><strong>调用方</strong>拿到后先 <code>if x is None</code></td></tr>
+    </table>
+    <p>口诀：<strong>参数侧的 None 用默认值表达（<code>= None</code>），返回侧的 None 用联合类型表达（<code>-&gt; X | None</code>）；谁拿到 None，谁负责判断。</strong>与 0008 的 <code>.get("arguments", {})</code> 同一条线——把「可能没有」显式写进接口，而不是埋雷。</p>
+
+    <h3>6. <code>from __future__ import annotations</code> 是干什么的</h3>
+    <p>文件顶部常见这一行（你的 0008 脚本已有）。它让标注在定义时<strong>先当字符串存</strong>，推迟解析：</p>
+    <ul>
+      <li>可以用尚未定义的类名做返回类型（前向引用）</li>
+      <li>避免运行时立刻求值带来的循环引用问题</li>
+      <li>标注里写 <code>list[str]</code> 不会在旧版本里立刻去构造泛型对象</li>
+    </ul>
+    <pre>from __future__ import annotations
+
+class AgentSession:
+    def add_tool_result(self, name: str, payload: dict[str, str]) -&gt; None:
+        ...</pre>
+    <p>读代码时：看到文件第一行有它，知道标注是「现代 Python 项目」风格，和开源 agent 仓一致。</p>
+    <pre># 加了它之后，标注不再在定义时求值，而是存成字符串：
+def g(x: int) -&gt; None: ...
+print(g.__annotations__)
+# {'x': 'int'}        ← 字符串！不加这行则是 {'x': &lt;class 'int'&gt;}（真实类型对象）</pre>
+    <p>它解决两个实际问题：</p>
+    <ul>
+      <li><strong>旧解释器跑新语法（最常见动机）：</strong><code>str | None</code> 这类写法要 3.10+ 运行时支持；在 3.9 上不加这行，函数<strong>定义那一刻</strong>就抛 <code>TypeError: unsupported operand type(s) for |</code>。加了则标注只存文本、不求值，顺利定义。</li>
+      <li><strong>前向引用：</strong>标注里用了「文件更下方才定义」的类名，也不会 NameError。</li>
+    </ul>
+    <p>注意它<strong>不做什么</strong>：不会打开任何运行时类型检查（Python 默认就没有）。副作用：运行时从 <code>__annotations__</code> 拿到的是文本；程序要真实类型对象得用 <code>get_type_hints()</code>（见讲解 9）。</p>
+
+    <h3>7. <code>TypedDict</code>：给 dict 一张字段表（轻量 DTO）</h3>
+    <p>当 dict 形状稳定（如配置摘要、工具结果），可用 <code>TypedDict</code> 描述有哪些键、各是什么类型——仍是运行时 dict，不是 Java class。</p>
+    <pre>from typing import TypedDict
+
+class ConfigSummary(TypedDict):
+    model: str
+    max_turns: int
+    rag_enabled: bool
+    top_k: int
+    knowledge_dir: str
+    allowed_tools: list[str]
+
+def summarize_config(config: dict[str, Any]) -&gt; ConfigSummary:
+    return {
+        "model": str(config.get("model", "unknown")),
+        "max_turns": int(config.get("max_turns", 4)),
+        ...
+    }</pre>
+    <p><code>total=False</code> 表示字段可缺省（用于描述 JSON 里可选块，如 <code>RagConfig</code>）。读代码：见到 <code>TypedDict</code>，把它当「这份 dict 应该长什么样」的注释表。</p>
+
+    <h3>8. 读开源代码的标准流程</h3>
+    <ol>
+      <li>看函数签名：参数类型、返回类型、默认值。</li>
+      <li>看边界函数是否用 <code>Any</code> / <code>dict[str, Any]</code>——那里通常要做 <code>isinstance</code>。</li>
+      <li>看内部是否收成 <code>TypedDict</code> 或具体 <code>list[dict[...]]</code>。</li>
+      <li>不信标注：JSON、模型输出、外部 API 一律当不可信，延续 0006/0008 校验链。</li>
+    </ol>
+    <pre># 读签名
+def parse_tool_call(raw: dict[str, Any]) -&gt; tuple[str, dict[str, Any]]:
+    ...
+
+# 看边界
+if not isinstance(arguments, dict):
+    raise TypeError("arguments 必须是对象")</pre>
+    <p>顺带读 <code>-&gt; tuple[str, dict]</code>：Python 函数只能 return 一个东西；要交出「工具名 + 参数」两件结果，就打包成元组，调用方按位置解包 <code>name, arguments = parse_tool_call(call)</code>。<code>return a, b</code> 本质是 <code>return (a, b)</code>——逗号创建元组，括号可省。</p>
+
+    <h3>9. 逐段读 <code>typed_tool_call.py</code>（本课主脚本）</h3>
+    <p>打开 <a href="../../playground/python/0009-type-hints/typed_tool_call.py"><code>typed_tool_call.py</code></a>。下面按出现顺序讲每一个「新面孔」——读不懂签名时，回到这一节对照。</p>
+
+    <h4>9.1 文件顶：<code>frozenset</code> 白名单</h4>
+    <pre>KNOWN_TOOLS = frozenset({"rag_search", "read_file", "final"})</pre>
+    <table>
+      <tr><th>写法</th><th>可变？</th><th>何时用</th></tr>
+      <tr><td><code>set({...})</code></td><td>可变（可 <code>add</code>/<code>remove</code>）</td><td>运行中要增删成员</td></tr>
+      <tr><td><code>frozenset({...})</code></td><td><strong>不可变</strong></td><td>写死的白名单、当 dict 的键</td></tr>
+    </table>
+    <p>工具名白名单不应被别处改掉；用 <code>frozenset</code> 表达「这份名单是常量」。判断 <code>name not in KNOWN_TOOLS</code> 与 set 一样快。对照 Java：有点像 <code>Set.of(...)</code> 得到的不可变集合。</p>
+
+    <h4>9.2 路径：<code>parent.parent</code></h4>
+    <pre>CALL_PATH = Path(__file__).parent.parent / "0008-json" / "sample_tool_call.json"</pre>
+    <p>拆开：</p>
+    <ul>
+      <li><code>Path(__file__)</code> → 本文件路径</li>
+      <li><code>.parent</code> → <code>.../0009-type-hints/</code></li>
+      <li>再 <code>.parent</code> → <code>.../../playground/python/</code></li>
+      <li><code>/ "0008-json" / "sample_tool_call.json"</code> → 复用 0008 的样例，不必复制一份</li>
+    </ul>
+
+    <h4>9.3 核心签名：一行拆成四块</h4>
+    <pre>def parse_tool_call(raw: dict[str, Any]) -&gt; tuple[str, dict[str, Any]]:</pre>
+    <table>
+      <tr><th>片段</th><th>读法</th></tr>
+      <tr><td><code>raw</code></td><td>参数名：原始 tool_call</td></tr>
+      <tr><td><code>: dict[str, Any]</code></td><td>入参形状：键 str，值<strong>尚未验</strong>（Any）</td></tr>
+      <tr><td><code>-&gt;</code></td><td>后面是返回类型</td></tr>
+      <tr><td><code>tuple[str, dict[str, Any]]</code></td><td>返回二元组：第 0 个 str（工具名），第 1 个 dict（arguments）</td></tr>
+    </table>
+    <p>为何入参是 <code>Any</code> 值、不是 <code>TypedDict</code>？因为 JSON 刚进来时字段可能缺失、类型可能是错的——标注承认「松」，函数体里用 <code>isinstance</code> 变「紧」。</p>
+    <pre># 调用方这样接两个返回值（元组解包）
+name, arguments = parse_tool_call(raw)
+# name -&gt; "rag_search"
+# arguments -&gt; {"query": "...", "top_k": "2"}  # top_k 可能仍是字符串！</pre>
+
+    <h4>9.4 函数体：标注之后仍要校验</h4>
+    <pre>name = raw.get("name")           # 缺键 → None，不是抛 KeyError
+if not isinstance(name, str):    # 挡掉 None / 数字 / 嵌套对象
+    raise TypeError(...)
+if name not in KNOWN_TOOLS:      # 类型对了，业务仍可能非法
+    raise ValueError(...)
+
+arguments = raw.get("arguments", {})
+if not isinstance(arguments, dict):
+    raise TypeError(...)
+return name, arguments           # 打包成元组交出去</pre>
+    <p>两条异常分工（接 0007）：</p>
+    <ul>
+      <li><code>TypeError</code>：形状/类型不对（不是 str、不是 dict）</li>
+      <li><code>ValueError</code>：类型对了但业务不允许（未知工具名）</li>
+    </ul>
+
+    <h4>9.5 <code>dict[str, int | str]</code>：值可以是联合类型</h4>
+    <pre>def normalize_rag_args(arguments: dict[str, Any]) -&gt; dict[str, int | str]:
+    ...
+    return {"query": query, "top_k": top_k}  # query:str, top_k:int</pre>
+    <p><code>int | str</code> 读作「int <strong>或</strong> str」。用在 dict 值位置时意思是：<strong>每个值各自</strong>属于其中一种——不是要求同一个值同时是两种。这里 <code>query</code> 是 str，<code>top_k</code> 是 int，所以整个返回值标成 <code>dict[str, int | str]</code>。</p>
+    <p>若字段形状更固定，也可用 <code>TypedDict</code>（见 <code>typed_config.py</code>）写清「query 一定是 str、top_k 一定是 int」。</p>
+
+    <h4>9.6 <code>{"name": name, **normalized}</code>：字典解包</h4>
+    <pre>normalized = {"query": "...", "top_k": 2}
+print({"name": name, **normalized})
+# 得到 {"name": "rag_search", "query": "...", "top_k": 2}</pre>
+    <p><code>**</code> 用在 dict 字面量里：把另一个 dict 的键值对<strong>摊开合并</strong>进新 dict。和 0004 的 <code>fn(**kwargs)</code> 是同一套「拆开映射」直觉，只是这里拆进字面量而不是函数参数。若键冲突，后写的覆盖先写的。</p>
+
+    <h4>9.7 整条流水线（记住这张图）</h4>
+    <pre>sample_tool_call.json 或 模型字符串
+        │  json.load / json.loads
+        ▼
+   dict[str, Any]          ← 松散，不可信
+        │  parse_tool_call（白名单 + isinstance）
+        ▼
+   (name: str, arguments: dict)
+        │  normalize_rag_args（int/str 归一化）
+        ▼
+   {"query": str, "top_k": int}   ← 交给执行层</pre>
+
+    <h3>10. <code>__annotations__</code> vs <code>get_type_hints</code>：原始便签 vs 解析成品</h3>
+    <pre>from typing import get_type_hints
+
+def pick_top_k(hits: list[dict[str, float]], top_k: int = 3) -&gt; list[dict[str, float]]:
+    ...
+
+print(pick_top_k.__annotations__)
+# {'hits': 'list[dict[str, float]]', 'top_k': 'int', 'return': 'list[dict[str, float]]'}
+# ↑ 文件顶上有 from __future__ import annotations 时，全是字符串（原样存档，不求值）
+
+print(get_type_hints(pick_top_k))
+# {'hits': list[dict[str, float]], 'top_k': &lt;class 'int'&gt;, 'return': list[dict[str, float]]}
+# ↑ 把字符串求值回真实类型对象</pre>
+    <table>
+      <tr><th>取法</th><th>行为</th><th>适用</th></tr>
+      <tr><td><code>fn.__annotations__</code></td><td>存了什么给什么；惰性模式下是文本</td><td>人看一眼</td></tr>
+      <tr><td><code>get_type_hints(fn)</code></td><td>把字符串求值回对象（在模块命名空间查名字），并给未标注参数补 <code>Any</code></td><td>程序要消费类型信息（写校验器/工具）</td></tr>
+    </table>
+    <p>日常读 agent 代码，认识 <code>__annotations__</code> 即可。</p>
+
+    <h3>11. 标注 + 异常：类型错了抛什么</h3>
+    <p>标注不挡运行时错误，所以边界仍用 0007 范式：</p>
+    <ul>
+      <li>形状不对 → <code>TypeError</code>（<code>isinstance</code> 失败）</li>
+      <li>业务不允许 → <code>ValueError</code>（如 unknown tool）</li>
+      <li>JSON 语法坏 → <code>json.JSONDecodeError</code> → 边界转成 <code>ValueError</code></li>
+    </ul>
+    <p>返回类型 <code>-&gt; None</code> 表示「不返回有用值」；不要和参数 <code>None</code> 混淆。</p>
+
+    <h2>主脚本导读</h2>
+    <div class="box steps">
+      <ol>
+        <li><a href="../../playground/python/0009-type-hints/examples.py"><code>examples.py</code></a>：<code>__annotations__</code>、<code>get_type_hints</code>、<code>Any</code> 边界、<code>str | None</code> 默认参数。</li>
+        <li><a href="../../playground/python/0009-type-hints/typed_config.py"><code>typed_config.py</code></a>：用 <code>TypedDict</code> 描述配置摘要；对比 0008 的 <code>summarize_config</code> 多了哪些「形状信息」。</li>
+        <li><a href="../../playground/python/0009-type-hints/typed_tool_call.py"><code>typed_tool_call.py</code></a>：<strong>先读课件第 9 节逐段导读</strong>，再对照脚本注释；抓住「松散 dict → 校验 → 元组 → 归一化」。</li>
+        <li>打开 0008 的 <code>load_knowledge.py</code> 第 6 行，对照本课「容器泛型」一节，能口头读出类型含义。</li>
+      </ol>
+    </div>
+
+    <h2>先跑起来</h2>
+    <div class="box steps">
+      <ol>
+        <li><pre>cd D:\agent-learning\playground\python
+.\.venv\Scripts\Activate.ps1</pre></li>
+        <li><pre>python 0009-type-hints\examples.py
+python 0009-type-hints\typed_config.py
+python 0009-type-hints\typed_tool_call.py</pre></li>
+        <li>在 IDE 里悬停 <code>typed_config.py</code> 的函数名，看参数提示是否和签名一致。</li>
+      </ol>
+    </div>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>标注 ≠ 校验：</strong>写了 <code>str</code> 仍可能传入 int；边界必须 <code>isinstance</code>。</li>
+        <li><strong>JSON 后仍是松散 dict：</strong>不要假设有 <code>TypedDict</code> 字段就一定存在。</li>
+        <li><strong><code>list</code> vs <code>List</code>：</strong>新代码优先 <code>list[str]</code>；读老库可能仍见 <code>from typing import List</code>。</li>
+        <li><strong><code>| None</code> vs 默认 <code>None</code>：</strong>前者是类型声明；后者是运行时默认值——常一起出现。</li>
+        <li><strong><code>-&gt; None</code>：</strong>函数不返回业务值；别写成 <code>-&gt; None</code> 却又 <code>return 42</code>（静态检查会骂）。</li>
+        <li><strong>过度标注：</strong>每个局部变量都标反而噪；优先标函数边界和公共 API。</li>
+        <li><strong>Java 易混：</strong>Python 没有编译期强制；面试时说「标注 + 运行时校验 / 静态检查可选」。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz data-ok="对。默认运行时不会因标注不匹配自动报错。" data-bad="标注主要给 IDE 和静态检查；默认不挡运行时。"><p>Python 类型标注默认会在运行时强制检查吗？</p>
+      <button data-correct="true">不会，除非另用检查工具</button>
+      <button data-correct="false">会，和 Java 编译一样</button>
+      <button data-correct="false">仅对 int 会强制</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。3.9+ 推荐内置 list 加方括号。" data-bad="现代写法是 list[str]，不是 typing.List。"><p>「字符串列表」更推荐的标注是？</p>
+      <button data-correct="true">list[str]</button>
+      <button data-correct="false">list(str)</button>
+      <button data-correct="false">str[list]</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。JSON 刚解析宜用 Any 或松散 dict。" data-bad="边界刚进门时用具体 TypedDict 往往过早。"><p><code>json.load</code> 刚返回时，常用哪种标注？</p>
+      <button data-correct="true">dict[str, Any]</button>
+      <button data-correct="false">ConfigSummary 已验类型</button>
+      <button data-correct="false">list[int] 固定列表</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。| None 表示类型上允许空值。" data-bad="Optional 是旧写法；语义是可能为 None。"><p><code>str | None</code> 表示什么？</p>
+      <button data-correct="true">可能是 str 或 None</button>
+      <button data-correct="false">必须是空字符串</button>
+      <button data-correct="false">等价于 str 且非空</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。TypedDict 描述 dict 字段形状。" data-bad="TypedDict 运行时仍是 dict，不是 class 实例。"><p><code>TypedDict</code> 主要用途是？</p>
+      <button data-correct="true">描述 dict 应有哪些键</button>
+      <button data-correct="false">替代 json.load 解析</button>
+      <button data-correct="false">在运行时自动校验类型</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。标注推迟求值，便于前向引用。" data-bad="future annotations 不关闭类型检查。"><p><code>from __future__ import annotations</code> 的作用是？</p>
+      <button data-correct="true">标注先存为字符串再解析</button>
+      <button data-correct="false">打开运行时强制类型检查</button>
+      <button data-correct="false">自动把 dict 转成 class</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。从外到内：list 包 dict 包 str/float。" data-bad="先读最内层键类型，再读外层容器。"><p><code>list[dict[str, float]]</code> 怎么读？</p>
+      <button data-correct="true">dict 列表，键 str 值 float</button>
+      <button data-correct="false">float 列表包 dict</button>
+      <button data-correct="false">单个 dict 的嵌套别名</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。不信任外部输入，isinstance 仍要做。" data-bad="有标注就可以省略 isinstance 是危险想法。"><p>函数标了 <code>arguments: dict</code>，仍应做什么？</p>
+      <button data-correct="true">运行时 isinstance 校验形状</button>
+      <button data-correct="false">相信调用方不会乱传</button>
+      <button data-correct="false">删除所有 TypeError 分支</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。frozenset 不可变，适合写死的白名单。" data-bad="list 查找慢且可变；可变 set 可能被别处改掉。"><p>工具名白名单更推荐用？</p>
+      <button data-correct="true">frozenset 固定成员</button>
+      <button data-correct="false">可变 list 随时 append</button>
+      <button data-correct="false">只用一个长字符串</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。** 把另一个 dict 的键值摊进新 dict。" data-bad="单星号是序列解包；这里是映射解包。"><p><code>{"name": n, **{"query": "q", "top_k": 2}}</code> 的结果是？</p>
+      <button data-correct="true">含 name/query/top_k 的一个 dict</button>
+      <button data-correct="false">一个 list 套两个 dict</button>
+      <button data-correct="false">语法错误无法运行</button>
+      <p class="feedback"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能解释：标注是形状说明，默认不在运行时强制（对比 Java）。</li>
+      <li>能读懂 <code>list[dict[str, float]]</code>、<code>dict[str, Any]</code>、<code>-&gt; tuple[str, dict]</code>。</li>
+      <li>能区分 <code>Any</code> 边界、<code>TypedDict</code> 输出、<code>str | None</code> 三案。</li>
+      <li>能说明 <code>from __future__ import annotations</code> 为何常见于 agent 项目。</li>
+      <li>能按第 9 节口头讲解 <code>typed_tool_call.py</code>：frozenset、签名四块、isinstance、<code>**</code> 解包、流水线。</li>
+      <li>三个脚本运行通过；能口头对照 0008 脚本「多了哪些类型信息、为何仍要 isinstance」。</li>
+    </ul>
+
+    <h2>选读与速查</h2>
+    <div class="box">
+      <p><strong>权威出处</strong></p>
+      <ul>
+        <li><a href="https://docs.python.org/3/library/typing.html">Python 官方：typing</a>（本课主来源）</li>
+        <li><a href="https://docs.python.org/3/reference/compound_stmts.html#function-definitions">函数定义中的标注</a></li>
+        <li><a href="https://docs.python.org/3/library/typing.html#typing.TypedDict">TypedDict</a></li>
+      </ul>
+      <p><strong>本地衔接</strong></p>
+      <ul>
+        <li><a href="./0008-json-config-and-tool-call.html">0008 JSON</a>：松散 dict 从哪来</li>
+        <li><a href="./0006-strings-sets-dicts.html">0006 字典校验</a>：<code>isinstance</code> 与白名单</li>
+      </ul>
+    </div>
+    <p><a href="../../reference/python-phase0.html#typing">Python 阶段 0 速查：类型标注</a> · <a href="../../GLOSSARY.md">GLOSSARY.md</a> · <a href="../../reference/index.html">速查索引</a></p>
+    <div data-lesson-id-footer="0009"></div>
+    <footer>不清楚的立刻问我。跑完或卡住，把输出贴回来。下一课：<a href="./0010-requests-http-json.html">0010 requests：HTTP JSON</a>。</footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

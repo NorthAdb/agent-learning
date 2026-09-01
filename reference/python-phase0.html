@@ -9,12 +9,25 @@
 </head>
 <body>
   <main class="ref">
-    <p class="meta"><a href="./index.html">速查索引</a> · 课 0001–0003 · 打印友好</p>
+    <p class="meta"><a href="./index.html">速查索引</a> · 课 0001–0016 · 打印友好</p>
     <h1>Python 阶段 0 速查</h1>
     <nav class="toc meta">
       <a href="#env">环境</a>
       <a href="#types">类型</a>
       <a href="#control">控制流</a>
+      <a href="#seq">列表与元组</a>
+      <a href="#func">函数与模块</a>
+      <a href="#text">字符串 / 集合 / 字典</a>
+      <a href="#files">文件与异常</a>
+      <a href="#json">JSON</a>
+      <a href="#typing">类型标注</a>
+      <a href="#http">HTTP / requests</a>
+      <a href="#packages">包管理</a>
+      <a href="#oop">类与对象</a>
+      <a href="#oop-adv">OOP 进阶</a>
+      <a href="#runtime">getattr/subprocess</a>
+      <a href="#parse">正则/literal_eval</a>
+      <a href="#threads">线程/时间</a>
       <a href="#java">Java 对照</a>
       <a href="#run">常用命令</a>
     </nav>
@@ -23,10 +36,248 @@
     <table>
       <tr><th>概念</th><th>要点</th></tr>
       <tr><td>解释器</td><td><code>python --version</code>；本机练习用 3.12+</td></tr>
-      <tr><td>venv</td><td>项目隔离依赖；路径 <code>playground/python/.venv</code></td></tr>
+      <tr><td>练习场根</td><td><code>playground/python/</code>；先 <code>cd</code> 到这里再跑脚本</td></tr>
+      <tr><td>venv 路径</td><td><code>playground/python/.venv</code>；0001–0016 共用，不按课各建</td></tr>
       <tr><td>激活 (PowerShell)</td><td><code>.\.venv\Scripts\Activate.ps1</code></td></tr>
-      <tr><td>跑脚本</td><td><code>python path\to\file.py</code>（先激活再装包）</td></tr>
+      <tr><td>确认激活</td><td><code>python -c "import sys; print(sys.executable)"</code> 应含 <code>.venv\Scripts\python.exe</code></td></tr>
+      <tr><td>第三方包目录</td><td><code>.venv\Lib\site-packages</code></td></tr>
+      <tr><td>清单文件</td><td>真项目常 <code>requirements.txt</code>；本课 <code>0011-packages/requirements-agent-demo.txt</code></td></tr>
+      <tr><td>git</td><td>提交清单；<strong>不</strong>提交 <code>.venv</code> / 整个 <code>playground/</code>（本教学仓）</td></tr>
     </table>
+    <pre>d:\agent-learning\
+  lessons\ reference\     ← 课件/速查（git）
+  playground\python\      ← 练习脚本 + .venv（本仓 gitignore）
+    .venv\Scripts\python.exe
+    .venv\Lib\site-packages\
+    0010-requests\ ...
+    0011-packages\requirements-agent-demo.txt</pre>
+
+    <h2 id="packages">包管理（0011）</h2>
+    <table>
+      <tr><th>概念</th><th>要点</th><th>Agent 场景</th></tr>
+      <tr><td>标准库 vs 第三方</td><td><code>json</code> 不用 pip；<code>requests</code> 要装</td><td>读仓库先认依赖类型</td></tr>
+      <tr><td><code>python -m pip install</code></td><td>绑定当前解释器</td><td>优于裸 <code>pip</code></td></tr>
+      <tr><td><code>install -r</code></td><td>按 requirements 批量装</td><td>clone 后第一步</td></tr>
+      <tr><td><code>pip list / show / freeze</code></td><td>查已装 / 单包元数据 / 生成锁定行</td><td>排错 ImportError</td></tr>
+      <tr><td><code>requirements.txt</code></td><td>一行一依赖；<code>#</code> 注释；<code>==</code> / <code>&gt;=</code></td><td>类似 Maven 依赖列表</td></tr>
+      <tr><td>site-packages</td><td>第三方包落盘目录</td><td><code>pip install</code> 写这里</td></tr>
+    </table>
+    <pre>cd playground\python
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r 0011-packages\requirements-agent-demo.txt
+python -m pip list
+python -m pip show requests</pre>
+    <p class="muted"><span class="tag">坑</span> 未激活 venv；IDE 解释器与终端不一致；pip 包名 ≠ import 名；<strong>Windows 上 requirements 勿写中文注释</strong>（pip 按 GBK 读文件会炸）。</p>
+    <h3>声明 vs 实例（为何 .venv 不进 git）</h3>
+    <table>
+      <tr><th>进 git</th><th>不进 git</th></tr>
+      <tr><td><code>requirements.txt</code>（要什么包）</td><td><code>.venv/</code>（已装好的环境）</td></tr>
+      <tr><td>README（Python 3.11+ 等）</td><td><code>site-packages</code> 二进制</td></tr>
+    </table>
+    <p>可复现 = clone 后按清单<strong>重建</strong>环境，不是拷贝 .venv 文件夹。≈ 提交 pom.xml，不提交 ~/.m2。</p>
+
+    <h2 id="oop">类与对象（0012）</h2>
+    <table>
+      <tr><th>概念</th><th>要点</th></tr>
+      <tr><td>class / 实例</td><td>类是图纸；<code>Session("alice")</code> 造实例，没有 <code>new</code></td></tr>
+      <tr><td><code>__init__</code></td><td>构造时自动调用的初始化方法</td></tr>
+      <tr><td><code>self</code></td><td>当前实例（Java <code>this</code>）；必须写在方法第一个参数</td></tr>
+      <tr><td>方法</td><td><code>a.note("x")</code> 把 <code>a</code> 填进 <code>self</code></td></tr>
+      <tr><td>三案</td><td>① <code>self.xs=[]</code> 隔离；② 类体 <code>xs=[]</code> 共享；③ 默认参数 <code>xs=[]</code> 共享</td></tr>
+      <tr><td>继承</td><td><code>class E(Exception)</code>；自定义工具错误</td></tr>
+      <tr><td>属性</td><td>作者起的格子名；一格一份值；再赋覆盖</td></tr>
+      <tr><td>特殊名</td><td><code>__init__</code> 等由语言认；<code>handler</code> 不是</td></tr>
+      <tr><td><code>Callable[..., str]</code></td><td>0012 首次；标注可调用+返回 str；真值是 run_echo 不是 Callable</td></tr>
+      <tr><td><code>ToolSpec(...)</code></td><td>常传 3 个：name / description / handler；calls 默认 []</td></tr>
+      <tr><td><code>@dataclass</code></td><td>自动 <code>__init__</code> / <code>repr</code>；可变字段用 <code>field(default_factory=list)</code>（非关键字，见 0012 §6.1）</td></tr>
+      <tr><td><code>field(default_factory=list)</code></td><td><code>field</code> 来自 dataclasses；<code>list</code> 无括号；每实例 <code>list()</code> 新建</td></tr>
+      <tr><td>注册表</td><td>名字 → 可调用实现；多工具 = 多条目，不是一个 handler 堆函数</td></tr>
+      <tr><td>存函数</td><td>注册写 <code>run_echo</code>（无括号）；须能 <code>(**args)</code> 且返回观察用 str</td></tr>
+    </table>
+    <pre>@dataclass
+class ToolSpec:
+    name: str
+    handler: Callable[..., str]
+    calls: list[str] = field(default_factory=list)
+
+spec.run(**arguments)   # 0004 的 dict 展开</pre>
+    <p class="muted"><span class="tag">坑</span> 漏 <code>self.</code>；<code>new Session()</code>；class 体或默认参数里的可变 list；注册 handler 时多写 <code>()</code>。</p>
+
+    <h2 id="oop-adv">OOP 进阶（0013）</h2>
+    <table>
+      <tr><th>概念</th><th>要点</th></tr>
+      <tr><td><code>token</code> / <code>_x</code> / <code>__x</code></td><td>公开可依赖；单 <code>_</code> 约定内部（能读但不该当 API）；双 <code>__</code> 改名为 <code>_Class__x</code>（防子类踩名，非沙箱）。勿与 <code>__init__</code> 等 dunder 混淆</td></tr>
+      <tr><td><code>__slots__</code></td><td>锁属性名名单：无 slots 可动态加；名单内可读写；名单外 AttributeError。不是 private</td></tr>
+      <tr><td><code>@xxx</code> 装饰器</td><td>加工下一行 def/class；不是注释器。认 dataclass / property / setter / static / classmethod</td></tr>
+      <tr><td><code>@property</code></td><td>getter 读（无括号）；<code>@名.setter</code> 写；无 setter → AttributeError（只读）；对内 <code>_x</code></td></tr>
+      <tr><td>三种方法</td><td>实例 <code>self</code>=成品；static 纯函数无 self；class 的 <code>cls</code>=图纸，工厂（造实例的入口）须 <code>return cls(...)</code></td></tr>
+    </table>
+    <p class="muted"><span class="tag">坑</span> 以为 <code>_x</code> 会语法报错；<code>obj.area()</code> 给 property 多加括号；staticmethod 里写 <code>self</code>；classmethod 写死类名不用 <code>cls</code>。</p>
+
+    <h2 id="runtime">getattr / subprocess / glob（0014）</h2>
+    <p class="muted">为何学：s01 读 SDK 块 + 跑 bash；s02 按模式找文件。三件是硬依赖，不是点缀。</p>
+    <table>
+      <tr><th>概念</th><th>是什么 / 解决什么</th></tr>
+      <tr><td><code>getattr(obj, n, default)</code></td><td>按字符串读<strong>任意对象</strong>的属性/方法（含 list 等）；缺了给默认。不是取下标/dict 键。SDK 块用它；dict 键用 <code>.get</code></td></tr>
+      <tr><td><code>subprocess.run</code></td><td>起 OS 子进程并等结束（bash 工具）。argv、<code>capture_output</code>、<code>text</code>、<code>timeout</code>；看 returncode；超时抛异常</td></tr>
+      <tr><td>glob / grep</td><td>glob：通配<strong>文件名</strong>，无匹配是空；grep：搜文件<strong>正文</strong>（概念对照，无标准库同名模块）</td></tr>
+    </table>
+    <pre>getattr(block, "type", None)
+subprocess.run(["python", "-c", "print(1)"], capture_output=True, text=True, timeout=10)
+list(Path(".").glob("*.py"))</pre>
+    <p class="muted"><span class="tag">坑</span> 对象用 <code>[]</code>、dict 用点号；不设 timeout；只看 stdout 不看 returncode；以为非零退出必抛异常；glob 无匹配当成错误；自己的脚本乱用 <code>shell=True</code>。</p>
+
+    <h2 id="parse">文本解析（0015）</h2>
+    <p class="muted">为何学：从模型乱文本里定位结构并安全变成对象。re 搜字符串内容（对照 glob/grep）；literal_eval 拒绝执行。</p>
+    <table>
+      <tr><th>概念</th><th>是什么 / 解决什么</th></tr>
+      <tr><td><code>re.search</code></td><td>找第一处；找不到 <code>None</code>；先判断再 <code>group</code></td></tr>
+      <tr><td><code>re.DOTALL</code></td><td>让 <code>.</code> 匹配换行（折行 list）</td></tr>
+      <tr><td><code>eval</code></td><td>内置：字符串当表达式执行；模型输出禁止。本课 0015 首次讲</td></tr>
+      <tr><td><code>ast.literal_eval</code></td><td>只解析字面量；禁止 eval；JSON 仍用 <code>json.loads</code></td></tr>
+      <tr><td>YAML</td><td>s07 才用；第三方 <code>yaml.safe_load</code></td></tr>
+    </table>
+    <p class="muted"><span class="tag">坑</span> 对 <code>None</code> 调 <code>group</code>；<code>eval</code> 解析模型输出；单引号 Python dict 当 JSON；re 和 glob 混用。</p>
+
+    <h2 id="threads">线程与时间（0016）</h2>
+    <p class="muted">为何学：慢命令后台跑、共享 dict 加锁、记时间、dataclass 落 JSON、模块级计数器。不是 async。</p>
+    <table>
+      <tr><th>概念</th><th>是什么 / 解决什么</th></tr>
+      <tr><td><code>Thread(target=fn, args=, daemon=True)</code></td><td><code>target</code> 函数对象不要加括号；单元素 args 要逗号；<code>start</code> 立即返回；<code>join</code> 才等；daemon 随主进程结束</td></tr>
+      <tr><td><code>with lock:</code></td><td>保护多线程共享 dict；改状态锁内，sleep/慢活锁外</td></tr>
+      <tr><td><code>datetime.now()</code></td><td>当前时间；<code>timedelta</code> 做差；<code>strftime</code> 给人看；<code>isoformat</code> 给程序存</td></tr>
+      <tr><td><code>asdict</code></td><td>dataclass → dict，再 <code>json.dumps</code></td></tr>
+      <tr><td><code>global</code></td><td>函数里重新赋值模块级名才要；只读/改对象内部不必</td></tr>
+    </table>
+    <p class="muted"><span class="tag">坑</span> <code>target=fn()</code>；<code>args=("x")</code> 少逗号；无锁改共享 dict；以为 daemon 会干完；直接 dumps dataclass；锁内长时间阻塞；<code>+=</code> 忘了 global。</p>
+
+    <h2 id="text">字符串、集合与字典</h2>
+    <table>
+      <tr><th>结构</th><th>稳定规则</th><th>Agent / RAG 用途</th></tr>
+      <tr><td><code>str</code></td><td>不可变；<code>strip</code>/<code>replace</code> 返回新值；索引/切片同序列</td><td>清洗 query、规范化文本</td></tr>
+      <tr><td>拆分 / 合并</td><td><code>text.split(sep, 1)</code> → list；<code>"\n".join(lines)</code> → str</td><td>切文本块、拼上下文 prompt</td></tr>
+      <tr><td><code>set</code></td><td>去重、无序；<code>&amp;</code> 交集、<code>-</code> 差集、<code>|</code> 并集；空集合 <code>set()</code></td><td>已见工具、权限与能力标签</td></tr>
+      <tr><td><code>dict</code></td><td><code>d[k]</code> 缺失抛 KeyError；<code>d.get(k, default)</code> 安全默认；<code>items()</code> 遍历键值</td><td>配置、JSON、嵌套 tool call</td></tr>
+      <tr><td>字典生成式</td><td><code>{k: v for k, v in d.items() if cond}</code></td><td>过滤字段、统计结果</td></tr>
+    </table>
+    <pre>raw = "  q  "
+query = raw.strip()
+lines = [x.strip() for x in text.splitlines() if x.strip()]
+context = "\n".join(lines)
+call["name"]
+args = call.get("arguments", {})
+top_k = int(args.get("top_k", 3))</pre>
+    <p class="muted"><span class="tag">坑</span> <code>{}</code> 是空 dict；set 无索引；join 要求元素都是 str；外部 JSON 的 <code>"3"</code> 不是整数。</p>
+
+    <h2 id="files">文件与异常</h2>
+    <table>
+      <tr><th>概念</th><th>稳定规则</th><th>Agent / RAG 用途</th></tr>
+      <tr><td>路径三案</td><td>cwd 相对名 / <code>Path(__file__).parent</code> / 绝对路径；默认选脚本目录</td><td>定位知识库、日志与配置</td></tr>
+      <tr><td><code>exists</code> vs <code>resolve</code></td><td><code>exists()</code> → <code>bool</code>（有没有）；<code>resolve()</code> → 绝对 <code>Path</code>（写清地址）</td><td>先检查再读；日志里打印绝对路径</td></tr>
+      <tr><td>Path 零件</td><td><code>.parent</code> / <code>/</code> / <code>.name</code> / <code>.suffix</code> / <code>iterdir()</code></td><td>拼路径、筛扩展名、扫知识库目录</td></tr>
+      <tr><td><code>open</code> / <code>read_text</code></td><td><code>r/w/a/x</code>；文本显式 UTF-8；大文件逐行，小文件可用 <code>read_text</code></td><td>读取文档、写运行日志</td></tr>
+      <tr><td><code>with</code></td><td>离开代码块自动关闭文件，即使发生异常也会清理资源</td><td>安全管理文件、网络连接等资源</td></tr>
+      <tr><td>异常标准范式</td><td>窄 try → 具体 except →（可选）else / finally；决策：能恢复 / 改语义上抛 / 冒泡；文件清理优先 <code>with</code></td><td>工具边界、知识库加载、Agent loop 收口</td></tr>
+      <tr><td><code>as error</code></td><td><code>except E as error</code> 接住实例；<code>type(error).__name__</code> 取类型名；<code>raise ... from error</code> 保留原因链</td><td>边界改写错误消息、日志分类</td></tr>
+      <tr><td>异常三策略</td><td>局部恢复 / 转换上抛 / 不捕获（范式决策的落点）</td><td>单文件可跳过；边界补语义；库代码可冒泡</td></tr>
+      <tr><td><code>else / finally</code></td><td><code>else</code> 仅在无异常时执行；<code>finally</code> 总会执行</td><td>成功后统计；释放必须释放的资源</td></tr>
+      <tr><td><code>raise</code></td><td>在边界把低层错误转换成更有语义的错误</td><td>把“文件不存在”变成“知识库加载失败”</td></tr>
+    </table>
+    <pre>from pathlib import Path
+
+path = Path(__file__).parent / "knowledge.txt"
+print(path.exists())     # True/False
+print(path.resolve())    # 绝对路径，便于日志
+
+# 标准范式：窄 try + 具体 except + else；边界可 raise ... from error
+try:
+    text = path.read_text(encoding="utf-8")
+except FileNotFoundError as error:
+    text = ""            # 策略1：局部恢复
+    print(type(error).__name__)
+else:
+    print("读取成功")
+
+# 策略2：raise FileNotFoundError(f"...: {path}") from error
+# 需要写入时：w / write_text 会清空；a 会追加
+with open(path.parent / "run.log", "a", encoding="utf-8") as file:
+    file.write("one event\n")</pre>
+    <p class="muted"><span class="tag">坑</span> <code>open("knowledge.txt")</code> 相对 cwd；<code>exists</code> 与 <code>resolve</code> 问的不是同一件事；<code>w</code>/<code>write_text</code> 会截断；批量加载勿把局部恢复写成“静默空库”；禁止裸 <code>except:</code>。</p>
+
+    <h2 id="json">JSON</h2>
+    <table>
+      <tr><th>概念</th><th>稳定规则</th><th>Agent / RAG 用途</th></tr>
+      <tr><td>文本 vs 内存</td><td>JSON 是文本协议；<code>dict</code>/<code>list</code> 是内存结构</td><td>配置、tool_call、运行状态交换</td></tr>
+      <tr><td>四函数</td><td><code>dumps/loads</code> ↔ 字符串；<code>dump/load</code> ↔ 文件对象</td><td>模型输出用 loads；配置落盘用 dump/load</td></tr>
+      <tr><td>类型对照</td><td><code>true/false/null</code> → <code>True/False/None</code>；object/array → dict/list</td><td>读配置后立刻归一化</td></tr>
+      <tr><td><code>ensure_ascii</code></td><td>默认 <code>True</code> 会转义中文；人读配置用 <code>False</code></td><td>可读的 agent_config.json</td></tr>
+      <tr><td>数字三案</td><td>JSON 数字 / <code>"3"</code> 字符串 / 缺键默认 → 统一 <code>int(...)</code></td><td><code>top_k</code>、max_turns</td></tr>
+      <tr><td>非法 JSON</td><td>单引号、尾逗号、Python <code>True/None</code> 都不合法</td><td><code>JSONDecodeError</code> → 边界转换上抛</td></tr>
+    </table>
+    <pre>import json
+from pathlib import Path
+
+path = Path(__file__).parent / "agent_config.json"
+with open(path, "r", encoding="utf-8") as file:
+    config = json.load(file)
+
+top_k = int(config.get("rag", {}).get("top_k", 3))
+text = json.dumps(config, ensure_ascii=False, indent=2)</pre>
+    <p class="muted"><span class="tag">坑</span> <code>loads("file.json")</code> 不会读盘；键非 str 往返会变字符串键；不可直接 dumps <code>set</code>/<code>Path</code>。</p>
+
+    <h2 id="typing">类型标注</h2>
+    <table>
+      <tr><th>概念</th><th>稳定规则</th><th>Agent 用途</th></tr>
+      <tr><td>标注位置</td><td>参数 <code>x: T</code>、返回 <code>-&gt; T</code>、变量 <code>x: T = v</code></td><td>读函数签名</td></tr>
+      <tr><td>容器</td><td><code>list[str]</code>、<code>dict[str, Any]</code>、<code>set[str]</code>、<code>tuple[str, int]</code></td><td>hits、tool_call、配置</td></tr>
+      <tr><td><code>Any</code></td><td>只留在 JSON/外部边界一层</td><td><code>json.load</code> 刚进门</td></tr>
+      <tr><td><code>X | None</code></td><td>类型上允许 None；默认 <code>= None</code> 是运行时默认</td><td>可选路径、可选配置</td></tr>
+      <tr><td><code>TypedDict</code></td><td>描述 dict 字段表；运行时仍是 dict</td><td>配置摘要、稳定输出</td></tr>
+      <tr><td><code>frozenset</code></td><td>不可变集合；适合工具名白名单</td><td><code>name not in KNOWN_TOOLS</code></td></tr>
+      <tr><td><code>tuple[A, B]</code></td><td>固定长度、按位置解包的多返回值</td><td><code>name, args = parse(...)</code></td></tr>
+      <tr><td><code>{**d}</code></td><td>把 dict 键值摊进新 dict</td><td>合并 name + 归一化字段</td></tr>
+      <tr><td><code>__future__ annotations</code></td><td>标注推迟求值；开源仓常见</td><td>读 North/Hermes 风格</td></tr>
+    </table>
+    <pre>from __future__ import annotations
+from typing import Any, TypedDict
+
+def load(path: Path) -&gt; dict[str, Any]: ...
+def parse(raw: dict[str, Any]) -&gt; tuple[str, dict[str, Any]]: ...
+def label(path: str | None = None) -&gt; str: ...
+
+class Summary(TypedDict):
+    model: str
+    top_k: int</pre>
+    <p class="muted"><span class="tag">坑</span> 标注默认不挡运行时；JSON 后仍要 <code>isinstance</code>；<code>-&gt; None</code> 不是参数可为 None。</p>
+
+    <h2 id="http">HTTP / requests</h2>
+    <table>
+      <tr><th>概念</th><th>稳定规则</th><th>Agent 用途</th></tr>
+      <tr><td>GET / POST</td><td>GET 查资源；POST 提交 JSON 身体</td><td>检索、chat completions、业务 API</td></tr>
+      <tr><td>参数放哪</td><td><code>url</code> 地址；<code>params</code> 查询串；<code>json</code> 身体；<code>headers</code> 头；<code>timeout</code> 超时</td><td>写工具时按抽屉填，勿混用</td></tr>
+      <tr><td><code>params</code></td><td>查询串自动编码；别手拼 URL</td><td><code>/rag/search?q=</code></td></tr>
+      <tr><td><code>json=</code> vs <code>data=</code></td><td><code>json=</code> → application/json；<code>data=dict</code> → 表单；必须写关键字名</td><td>模型 API 用 <code>json=</code></td></tr>
+      <tr><td><code>headers</code></td><td><code>dict[str,str]</code>；Bearer 放 <code>Authorization</code></td><td>鉴权、User-Agent</td></tr>
+      <tr><td><code>timeout</code></td><td>几乎总要设；可 <code>float</code> 或 <code>(connect, read)</code></td><td>防止工具卡死 agent loop</td></tr>
+      <tr><td><code>raise_for_status</code></td><td>非 2xx 抛 <code>HTTPError</code>；先于 <code>json()</code></td><td>避免把错误页当业务 JSON</td></tr>
+      <tr><td>异常</td><td><code>Timeout</code> / <code>HTTPError</code> / <code>RequestException</code> → 边界转换上抛</td><td>工具失败观察</td></tr>
+    </table>
+    <pre>import requests
+
+# GET
+r = requests.get(url, params={"q": "x"}, timeout=5)
+r.raise_for_status()
+data = r.json()
+
+# POST：关键字 json= / headers= 不要漏写名字
+r = requests.post(
+    url,
+    json={"model": "demo", "messages": []},
+    headers={"Authorization": "Bearer TOKEN"},
+    timeout=5,
+)
+r.raise_for_status()</pre>
+    <p class="muted"><span class="tag">坑</span> 不设 timeout；只调 <code>json()</code> 不看状态；用 <code>data=dict</code> 当 JSON API；写成 <code>post(url, payload)</code> 漏掉 <code>json=</code>。</p>
 
     <h2 id="types">类型与结构</h2>
     <table>
@@ -74,6 +325,51 @@ else:
       <tr><td><code>while</code></td><td>圈数未知；配 <code>max_turns</code> + <code>break</code></td></tr>
     </table>
 
+    <h2 id="seq">列表与元组</h2>
+    <table>
+      <tr><th>概念</th><th>要点</th></tr>
+      <tr><td>创建</td><td><code>[1, 2, 3]</code>、<code>list(range(5))</code>、<code>[0] * 6</code>（乘不可变对象安全）</td></tr>
+      <tr><td>索引</td><td><code>xs[0]</code> 第一个；<code>xs[-1]</code> 倒数第一个；越界 <code>IndexError</code>（崩）</td></tr>
+      <tr><td>切片</td><td><code>xs[start:end:step]</code>，end 不含；越界给空 list<strong>不崩</strong>；返回<strong>新 list</strong>；<code>xs[::-1]</code> 反转</td></tr>
+      <tr><td>拷贝 / 引用</td><td><code>ys = xs[:]</code> 拷贝；<code>ys = xs</code> 共享同一 list，改 ys 改 xs</td></tr>
+      <tr><td>遍历</td><td><code>for x in xs</code>；<code>for i, x in enumerate(xs)</code>（<code>start=1</code> 编号从 1 起）；<code>zip(a, b)</code> 并列配对</td></tr>
+      <tr><td>增删</td><td><code>append</code> 加<strong>一个元素</strong>；<code>extend</code> 展平并入；<code>pop()</code> 删末尾并返回；<code>remove</code> 按值删</td></tr>
+      <tr><td>排序</td><td><code>sorted(xs)</code> 新 list；<code>xs.sort()</code> 原地且返回 <code>None</code>；<code>reverse=True</code> 降序</td></tr>
+      <tr><td>按字段排</td><td><code>sorted(hits, key=lambda h: h["score"], reverse=True)</code></td></tr>
+      <tr><td>生成式</td><td><code>[expr for x in xs if cond]</code>：过滤在 if，投影在前；生成式优于手写 append</td></tr>
+      <tr><td>元组</td><td>不可变 <code>(1, 2)</code>；一元组 <code>(1,)</code> 逗号不可省；<code>a, b = pair</code> 解包；<code>a, *rest = xs</code> 收走剩下的</td></tr>
+      <tr><td>交换</td><td><code>a, b = b, a</code></td></tr>
+      <tr><td>嵌套</td><td>list[dict]：<code>hits[0]["score"]</code>；list[list]：<code>m[0][1]</code></td></tr>
+    </table>
+    <p class="muted"><span class="tag">坑</span> <code>xs = xs.sort()</code> 把 list 变 None；<code>append([1,2])</code> 嵌套、<code>extend([1,2])</code> 展平；<code>[[]] * 3</code> 三行共享同一个空列表，要独立用 <code>[[] for _ in range(3)]</code>。<code>remove</code>/<code>index</code> 找不到抛 <code>ValueError</code>（Java <code>indexOf</code> 返 -1）。</p>
+
+    <h2 id="func">函数与模块</h2>
+    <pre>def rag_search(query: str, top_k: int = 3) -&gt; list:
+    return hits[:top_k]
+
+rag_search("q")                    # top_k 用默认值
+rag_search("q", top_k=2)           # 关键字参数
+rag_search(**{"query": "q", "top_k": 2})  # dict 展开
+
+from tools import run_tool
+import tools as t
+# 差别是当前文件多了哪个名字，不是加载了几份代码
+
+if __name__ == "__main__":
+    agent_loop()</pre>
+    <table>
+      <tr><th>规则</th><th>要点</th></tr>
+      <tr><td>无 <code>return</code></td><td>得到 <code>None</code>（真对象，不是 Java <code>void</code>）</td></tr>
+      <tr><td>默认值形参</td><td>必须写在必填形参后面</td></tr>
+      <tr><td>可变默认值</td><td>定义时求值一次。独立调用用 <code>None</code> 再新建；同一会话显式传入同一份 list / dict</td></tr>
+      <tr><td><code>*args</code> / <code>**kwargs</code></td><td>定义时：多出来的位置→tuple，关键字→dict</td></tr>
+      <tr><td><code>fn(**d)</code></td><td>调用时：把 dict 拆成关键字参数（tool call 核心）</td></tr>
+      <tr><td>模块</td><td>一个 <code>.py</code> 文件；<code>from x import y</code> 后没有名字 <code>x</code></td></tr>
+      <tr><td><code>__name__</code></td><td>直接运行是 <code>"__main__"</code>；被 import 是模块名</td></tr>
+      <tr><td>函数对象</td><td><code>TOOLBOX["rag_search"] = rag_search</code> 不要加 <code>()</code></td></tr>
+    </table>
+    <p class="muted"><span class="tag">坑</span> <code>from module import *</code> 污染命名空间；练习禁用。</p>
+
     <h2 id="java">和 Java 对照（速记）</h2>
     <table>
       <tr><th>Python</th><th>Java 直觉</th></tr>
@@ -83,6 +379,19 @@ else:
       <tr><td><code>dict</code></td><td><code>Map</code></td></tr>
       <tr><td><code>list</code></td><td><code>List</code></td></tr>
       <tr><td>动态类型</td><td>无静态声明；靠运行时检查</td></tr>
+      <tr><td><code>def f(a, b=3)</code></td><td>方法 + 重载 / <code>Optional</code></td></tr>
+      <tr><td><code>fn(**dict)</code></td><td>无等价语法；从 Map 逐个 get</td></tr>
+      <tr><td><code>.py</code> 模块</td><td>一个 public 类一个文件（不完全等同）</td></tr>
+      <tr><td><code>if __name__ == "__main__"</code></td><td><code>public static void main</code></td></tr>
+      <tr><td><code>def f(xs=[])</code></td><td>共享静态 ArrayList，不是方法里每次 new</td></tr>
+      <tr><td><code>class</code> / <code>self</code></td><td>class / <code>this</code>（self 必须写）</td></tr>
+      <tr><td><code>Session()</code></td><td><code>new Session()</code>（Python 无 new）</td></tr>
+      <tr><td><code>@dataclass</code></td><td>record / Lombok <code>@Data</code></td></tr>
+      <tr><td><code>_x</code> / <code>__x</code></td><td>约定 vs 改名；都不是 Java <code>private</code></td></tr>
+      <tr><td><code>@property</code></td><td>getter；调用不加 <code>()</code></td></tr>
+      <tr><td><code>getattr(obj, n, d)</code></td><td>反射取字段；dict 仍用 <code>.get</code></td></tr>
+      <tr><td><code>subprocess.run</code></td><td><code>ProcessBuilder</code> + 等结束</td></tr>
+      <tr><td><code>Thread(..., daemon=True)</code></td><td>daemon 线程；主进程退出一起结束</td></tr>
     </table>
 
     <h2 id="run">练习场命令</h2>
@@ -91,13 +400,43 @@ else:
 python 0001-hello\hello_agent.py
 python 0002-vars\tool_call.py
 python 0002-vars\top_k_pitfall.py
-python 0003-control-flow\mini_agent_loop.py</pre>
+python 0003-control-flow\mini_agent_loop.py
+python 0004-functions-modules\examples.py
+python 0004-functions-modules\run.py
+python 0004-functions-modules\tools.py
+python 0004-functions-modules\import_styles.py
+python 0005-lists-tuples\examples.py
+python 0005-lists-tuples\rank_results.py
+python 0012-classes\examples.py
+python 0012-classes\tool_registry.py
+python 0012-classes\read_s01_surface.py
+python 0013-oop-advanced\examples.py
+python 0013-oop-advanced\name_guard.py
+python 0014-runtime-tools\examples.py
+python 0014-runtime-tools\run_surface.py
+python 0015-text-parse\examples.py
+python 0015-text-parse\extract_todos.py
+python 0016-threads-time\examples.py
+python 0016-threads-time\background_jobs.py</pre>
 
     <footer>
       课件：
-      <a href="../lessons/0001-python-env-and-first-script.html">0001</a> ·
-      <a href="../lessons/0002-variables-and-types.html">0002</a> ·
-      <a href="../lessons/0003-control-flow-agent-loop.html">0003</a>
+      <a href="../lessons/phase-0/0001-python-env-and-first-script.html">0001</a> ·
+      <a href="../lessons/phase-0/0002-variables-and-types.html">0002</a> ·
+      <a href="../lessons/phase-0/0003-control-flow-agent-loop.html">0003</a> ·
+      <a href="../lessons/phase-0/0004-functions-and-modules.html">0004</a> ·
+      <a href="../lessons/phase-0/0005-lists-tuples.html">0005</a> ·
+      <a href="../lessons/phase-0/0006-strings-sets-dicts.html">0006</a>
+      · <a href="../lessons/phase-0/0007-files-and-exceptions.html">0007</a>
+      · <a href="../lessons/phase-0/0008-json-config-and-tool-call.html">0008</a>
+      · <a href="../lessons/phase-0/0009-type-hints-reading-agent-code.html">0009</a>
+      · <a href="../lessons/phase-0/0010-requests-http-json.html">0010</a>
+      · <a href="../lessons/phase-0/0011-python-packages-and-venv.html">0011</a>
+      · <a href="../lessons/phase-0/0012-classes-and-objects.html">0012</a>
+      · <a href="../lessons/phase-0/0013-oop-advanced.html">0013</a>
+      · <a href="../lessons/phase-0/0014-runtime-tools.html">0014</a>
+      · <a href="../lessons/phase-0/0015-text-parse.html">0015</a>
+      · <a href="../lessons/phase-0/0016-threads-time.html">0016</a>
     </footer>
   </main>
 </body>

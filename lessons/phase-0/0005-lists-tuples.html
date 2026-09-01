@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0005 · 列表与元组：检索结果与候选排序</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0005"></div>
+    <h1>列表与元组：检索结果与候选排序</h1>
+    <p class="mission">
+      上一课的 <code>tools.py</code> 里，<code>rag_search</code> 返回 <code>hits[:top_k]</code>——那是<strong>检索侧</strong>。
+      真实 RAG 不会这么省心：候选几十上百条、分数乱序、里面混着低于阈值该扔掉的旧文档。
+      今天练的是<strong>拿到 hits 之后、喂给模型之前</strong>那段处理：过滤、排序、截断、拼上下文。
+      <strong>主技能</strong>是 Python 的列表与元组；<strong>载体</strong>是把这套操作串成一个 <code>rank_results.py</code>。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">对应 Python-100-Days · Day08（列表-1）、Day09（列表-2）、Day10（元组）。读完本页即可过关，不必先翻原书。</p>
+    <table>
+      <tr><th>来源</th><th>本课怎么处理</th></tr>
+      <tr>
+        <td>Day08：创建列表、<code>+</code>/<code>*</code>/<code>in</code>、索引、切片、遍历</td>
+        <td><span class="tag">已内化</span>系统讲解 2–4 节 + 例1～3</td>
+      </tr>
+      <tr>
+        <td>Day09：<code>append</code>/<code>extend</code>/<code>insert</code>/<code>remove</code>/<code>pop</code>、<code>sort</code>/<code>reverse</code>、列表生成式、嵌套列表</td>
+        <td><span class="tag">已内化</span>系统讲解 5–7、9 节 + 例4～6；<code>key=</code> 排序在此引入</td>
+      </tr>
+      <tr>
+        <td>Day09：双色球选号 / 骰子统计 / rich 表格</td>
+        <td><span class="tag">跳过</span>纯趣味与终端美化；本课用 RAG 候选排序做载体</td>
+      </tr>
+      <tr>
+        <td>Day09：两个列表做关系运算（<code>&lt;</code>、<code>&gt;=</code> 比较大小）</td>
+        <td><span class="tag">跳过</span>教材自己都说「工作中并不常用」</td>
+      </tr>
+      <tr>
+        <td>Day10：元组定义 / 打包解包 / <code>*rest</code> / 交换 / 元组 vs 列表</td>
+        <td><span class="tag">已内化</span>系统讲解 8 节 + 例7；不可变 → 可哈希留到 0006 讲 dict key</td>
+      </tr>
+      <tr>
+        <td>Day11–13：字符串 / 集合 / 字典</td>
+        <td><span class="tag">下一课</span>字符串方法 + 集合 + 字典（0006）</td>
+      </tr>
+    </table>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>Python</th><th>Java 直觉</th></tr>
+      <tr><td><code>xs = [1, 2, 3]</code></td><td><code>List</code>（Python 允许异构元素，但通常别混用）</td></tr>
+      <tr><td><code>xs[0]</code> / <code>xs[-1]</code></td><td><code>xs.get(0)</code> / <code>xs.get(xs.size()-1)</code>；Python 有负数索引</td></tr>
+      <tr><td><code>xs[1:3]</code></td><td><code>xs.subList(1, 3)</code>；但切片返回<strong>新 list 拷贝</strong>，subList 是共享原列表的视图</td></tr>
+      <tr><td><code>"x" in xs</code></td><td><code>xs.contains(x)</code></td></tr>
+      <tr><td><code>xs.append(x)</code> / <code>xs.extend(ys)</code></td><td><code>add</code> / <code>addAll</code></td></tr>
+      <tr><td><code>xs.pop()</code> / <code>xs.remove(obj)</code></td><td><code>remove(idx)</code> / <code>remove(Object)</code></td></tr>
+      <tr><td><code>sorted(xs)</code> / <code>xs.sort()</code></td><td><code>xs.stream().sorted().toList()</code> / <code>Collections.sort(xs)</code>（sort 也是原地 + 无返回值）</td></tr>
+      <tr><td><code>[f(x) for x in xs if c]</code></td><td><code>xs.stream().filter(c).map(f).toList()</code></td></tr>
+      <tr><td><code>(1, 2)</code></td><td>无直接等价；像不可变的 final List，或 record 的低配版</td></tr>
+      <tr><td><code>a, b = b, a</code></td><td>要临时变量 / 位运算才能交换</td></tr>
+    </table>
+
+    <h2>系统讲解</h2>
+
+    <h3>1. 为什么是这一课</h3>
+    <p>
+      你看过 <code>tools.py</code> 的返回了：<code>{"score": 0.91, "text": "..."}</code> 这种 dict 组成的一个 list。
+      真实检索返回的候选会长这样——顺序是乱的、分数有高有低、还夹着低分的旧文档：
+    </p>
+    <pre>hits = [
+    {"id": "d-03", "text": "Tool 是 harness 暴露的动作", "score": 0.72},
+    {"id": "d-07", "text": "RAG 先检索再生成",           "score": 0.91},
+    {"id": "d-01", "text": "（过期的旧文档）",             "score": 0.31},
+    {"id": "d-09", "text": "上下文窗口装不下整本书",       "score": 0.84},
+    {"id": "d-02", "text": "Permission 决定工具能不能跑", "score": 0.45},
+]</pre>
+    <p>
+      要把它变成「给模型的上下文块」，至少要四步：<strong>过滤</strong>（丢弃低于阈值的）、
+      <strong>排序</strong>（按分数降序）、<strong>截断</strong>（只留 top_k）、
+      <strong>组装</strong>（拼成一段带编号的文本）。这四步全是列表操作。
+      本课先把列表摸熟，然后主脚本 <code>rank_results.py</code> 把四步串起来。
+      <a href="https://docs.python.org/3/tutorial/datastructures.html">Python 官方教程 Data Structures 章</a>是本课规则出处，边学边对。
+    </p>
+
+    <h3>2. 创建与索引</h3>
+    <p>
+      <code>[]</code> 字面量、<code>list(...)</code> 构造器都能造列表。
+      <code>list(range(1, 6))</code>、<code>list("abc")</code> 把别的序列变成 list；
+      <code>[0] * 6</code> 造 6 个 0（乘的是不可变对象 <code>0</code>，所以安全）。
+      <code>len(xs)</code> 拿元素个数；索引从 0 开始，<code>xs[-1]</code> 从末尾数。
+      索引越界会 <code>IndexError: list index out of range</code>——和 Java 的
+      <code>IndexOutOfBoundsException</code> 是同一类：访问了一个不存在的位，直接崩。
+    </p>
+    <pre>chunks = ["chunk-a", "chunk-b", "chunk-c"]
+len(chunks)     # 3
+chunks[0]       # 'chunk-a'
+chunks[-1]      # 'chunk-c'  负索引从末尾数
+chunks[1] = "chunk-b2"   # 列表可变：改已有位置
+# chunks[9]     # IndexError: list index out of range</pre>
+    <p class="muted">
+      <strong>记住下一条再对照它。</strong>索引越界会崩，切片越界不会——这是本课第二个重点。
+    </p>
+
+    <h3>3. 切片：返回新 list，越界不报错</h3>
+    <p>
+      <code>xs[start:end:step]</code>：取从 <code>start</code> 到 <code>end</code>（不含）
+      、每隔 <code>step</code> 一个的元素。<code>start</code> 默认 0、<code>end</code> 默认长度、
+      <code>step</code> 默认 1，所以都能省。切片<strong>永远返回一个新的 list</strong>——
+      这是和 Java <code>subList</code> 最大的差别：subList 是原列表的<strong>视图</strong>，改它会波及原列表；
+      Python 切片是一份拷贝，原列表怎么动都不影响它。
+    </p>
+    <pre>hits = ["a", "b", "c", "d", "e"]
+hits[:3]       # ['a', 'b', 'c']   取前 3 条（截断 top_k 就靠它）
+hits[1:3]      # ['b', 'c']        end 不含
+hits[::2]      # ['a', 'c', 'e']   隔一个取一个
+hits[::-1]     # ['e','d','c','b','a']  负步长 = 反转，得到新 list
+hits[10:]      # []                越界不报错，安安静静给空 list
+copy = hits[:] # 拷贝整个列表
+last_3_backwards = hits[4:0:-1]  # ['e','d','c','b']  从 4 往前走到 0（不含）</pre>
+    <p>
+      0004 里 <code>return hits[:top_k]</code> 你已经见过：<code>top_k</code> 是几就留几条。
+      现在知道为什么它不怕超范围——切片越界只会得到更短的 list 或空 list。
+    </p>
+
+    <h3>4. 遍历与成员</h3>
+    <p>
+      <code>for x in xs</code> 直接拿元素（0003 已会用）。真正读 Agent 代码时常需要<strong>同时拿序号和元素</strong>：
+      <code>enumerate(xs)</code> 每次吐一个 <code>(序号, 元素)</code> 的二元组，<code>for i, h in enumerate(xs)</code>
+      就是把这个二元组解包成两个变量（解包规则第 8 节系统讲）。
+      <code>enumerate(xs, start=1)</code> 让编号从 1 而不是 0 开始——给上下文编号时最常用。
+    </p>
+    <pre>for i, h in enumerate(hits, start=1):
+    print(f"#{i} {h['id']} score={h['score']}")
+# #1 d-07 score=0.91
+# #2 d-03 score=0.72
+# #3 d-01 score=0.31</pre>
+    <p>
+      <code>in</code> / <code>not in</code> 判断成员。<code>"d-03" in ids</code> 是
+      <code>True</code>。<code>zip(a, b)</code> 把两个列表按位置配成一对对二元组：
+      <code>for doc_id, score in zip(ids, scores)</code>。
+      <strong>注意</strong>：list 的 <code>in</code> 是逐项线性扫描；到 0006 你会看到集合 set 的
+      <code>in</code> 是哈希查找，快得多——数据大了别拿 list 当去重工具。
+    </p>
+
+    <h3>5. 增删与拼接：append 和 extend 是两回事</h3>
+    <table>
+      <tr><th>方法</th><th>做什么</th><th>找不到 / 越界时</th></tr>
+      <tr><td><code>xs.append(x)</code></td><td>把 <code>x</code> 作为<strong>一个元素</strong>加到末尾</td><td>—</td></tr>
+      <tr><td><code>xs.extend(ys)</code></td><td>把序列 <code>ys</code> 的<strong>每个元素</strong>逐个并入</td><td>—</td></tr>
+      <tr><td><code>xs.insert(i, x)</code></td><td>插到位置 <code>i</code>，原位置及之后后移</td><td>—</td></tr>
+      <tr><td><code>xs.remove(x)</code></td><td>按<strong>值</strong>删第一个匹配</td><td><code>ValueError</code>（先 <code>in</code> 判断再删）</td></tr>
+      <tr><td><code>xs.pop(i)</code></td><td>按<strong>位置</strong>删，并返回被删元素（默认删末尾）</td><td>越界 <code>IndexError</code></td></tr>
+      <tr><td><code>xs.clear()</code></td><td>清空</td><td>—</td></tr>
+    </table>
+    <p><code>append</code> 和 <code>extend</code> 是最容易混的一对，差别在「把什么当一个元素」：</p>
+    <pre>pool = []
+pool.append(["d-02", "d-03"])     # 整个 list 当一个元素：pool 变成嵌套
+print(pool)                       # [['d-02', 'd-03']]
+
+pool = []
+pool.extend(["d-02", "d-03"])     # 元素逐个并入：展平
+print(pool)                       # ['d-02', 'd-03']</pre>
+    <p class="muted">
+      上面 <code>pool = []</code> 那行是<strong>重新绑定</strong>——不是清空。想要真正清空用
+      <code>pool.clear()</code>；重新绑定后，原来那个 list 对象还在（如果你的函数还引用着它）。
+      <code>append</code> 想要的是「整体收下这份结果」；<code>extend</code> 想要的是「把它里面的结果收进来」。
+      收集候选时常用 extend，把一批结果并进总量。
+    </p>
+    <p>
+      <code>xs + ys</code> 拼出一份<strong>新</strong> list（原两个不动）；<code>xs += ys</code> 原地并入，等价 <code>extend</code>。
+      <code>del xs[i]</code> 也能按位置删（不返回被删的值），底层比 <code>pop</code> 略快，但 Agent 代码里 <code>pop</code> 更常见。
+    </p>
+
+    <h3>6. 排序：sort 原地、sorted 返回新 list，以及按字段排</h3>
+    <p>
+      <code>xs.sort()</code> <strong>原地</strong>改 <code>xs</code>，而且返回 <code>None</code>；
+      <code>sorted(xs)</code> 返回一份<strong>新</strong>排好序的 list，原列表不动。
+      这是本课最该背下来的坑：<code>xs = xs.sort()</code> 会把你的变量从 list 变成 <code>None</code>——
+      对照 Java，<code>Collections.sort</code> 也是原地 + <code>void</code>，但那没有「把返回值赋回变量」的诱惑；
+      Python 里 <code>sorted</code> 和 <code>sort</code> 一个给新、一个原地，先分清再用。
+    </p>
+    <pre>scores = [0.72, 0.91, 0.45]
+print(sorted(scores))    # [0.45, 0.72, 0.91]  新 list，scores 没动
+print(scores)            # [0.72, 0.91, 0.45]  原样
+scores.sort()            # 原地改 scores
+print(scores)            # [0.45, 0.72, 0.91]
+x = scores.sort()        # x 是 None！别把 sort() 的结果赋回去</pre>
+    <p>
+      对 <code>list[dict]</code> 按字段排，用 <code>key=</code> 参数告诉排序逻辑「拿每个元素的哪块当比较键」：
+    </p>
+    <pre>ranked = sorted(hits, key=lambda h: h["score"], reverse=True)
+# 结果：score 从大到小；reverse=True 表示降序
+# lambda 在 Day16 系统讲；这里只要知道它返回「这个元素的排序键」
+# 那句手写 while 树的同款意思：比较时按 h["score"] 而不是按整个 dict</pre>
+    <p>
+      <code>min(xs)</code> / <code>max(xs)</code> / <code>sum(xs)</code> 拿极值和总和。
+      <code>xs.index(x)</code> 找第一处位置（找不到 <code>ValueError</code>）；
+      <code>xs.count(x)</code> 数出现次数（找不到给 <code>0</code>，不异常）。
+    </p>
+
+    <h3>7. 列表生成式：过滤 + 投影一行完成</h3>
+    <p>
+      <code>[表达式 for 变量 in 序列 if 条件]</code> 把「建一个空列表 → 循环 → 判断 →
+      append」折叠成一行。Day09 给的理由：不只是好看，字节码里专门有生成式的指令，比循环 + append 更快。
+      结论记住一条：<strong>生成式造列表，别手写三行空列表 + append。</strong>
+    </p>
+    <pre># 只要 id：投影
+ids = [h["id"] for h in hits]
+# 只要分数够的 text：过滤 + 投影
+ok = [h["text"] for h in hits if h["score"] >= 0.5]
+# 和 Java 对照：filter(...).map(...) 接一个 List.collect，同一件事</pre>
+    <p>
+      嵌套列表（list 里套 list，矩阵、成绩表）访问要两层索引：<code>scores[0][1]</code>。
+      读真实代码最常见的是 <code>list[dict]</code>：<code>hits[0]["score"]</code>、<code>[h["id"] for h in hits]</code>——
+      一层索引拿 dict，再一层拿字段。本课主脚本就是这种形状。
+    </p>
+
+    <h3>8. 元组与解包</h3>
+    <p>
+      元组 <code>(x, y, z)</code> 是<strong>不可变</strong>的序列：能索引、切片、<code>len</code>、
+      <code>in</code>，但 <strong>不能改</strong>——<code>t[0] = ...</code> 直接 <code>TypeError</code>。
+      Java 里没有直译；最接近的是「final 字段组成的 record / 不可变 List」。
+    </p>
+    <pre>pair = ("d-07", 0.91)     # 二元组：id + 分数，通常一批数据结成对
+single = ("only", )       # 一元组：逗号不可省！("only") 是 str 不是 tuple
+empty = ()                # 空元组</pre>
+    <p>元组的招牌动作是<strong>解包</strong>——把元组（其实任何序列）拆开喂给多个变量：</p>
+    <pre>doc_id, score = pair      # doc_id="d-07", score=0.91
+a, b = b, a               # 交换两个变量，不用中间变量
+first, *rest = [1, 2, 3, 4]   # first=1, rest=[2, 3, 4]；*rest 收走剩下的，得到一个 list
+status, data = call_api()     # 函数返回二元组，调用方一行拆开
+# a, b, c = (1, 2)         # ValueError: not enough values to unpack</pre>
+    <p>
+      解包数量对不上立刻 <code>ValueError</code>——这是保护，不是麻烦：函数改签名时，该有的字段少一个都会当场暴露。
+      第 4 节的 <code>for i, h in enumerate(hits)</code> 就是在解包每个 <code>(序号, 元素)</code> 二元组。
+    </p>
+    <p>为什么已有 list 还要元组？教材给了理由，挑三个对 Agent 有用的：</p>
+    <ul>
+      <li><strong>不可变 → 可哈希</strong>：元组以后能直接当 dict 的 key（0006 讲字典时你会用到「(类型, 消息) 当 key」）；list 永远不行。</li>
+      <li><strong>多返回值</strong>：函数只 return 一个对象，但「返回一个二元组」配合调用方解包，就长成了多返回值的用法。</li>
+      <li><strong>更省</strong>：创建元组比 list 快（Day10 有 timeit 对比，数量级差别）；一旦定型、不会再改的数据，用元组是「声明了意图」。</li>
+    </ul>
+    <p class="muted"><code>list(pair)</code>、<code>tuple(xs)</code> 随时互转；克制点用，不要来回倒腾。</p>
+
+    <h3>9. 嵌套：真实数据的形状</h3>
+    <p>
+      真实 harness 里的数据很少是扁平的 <code>[1, 2, 3]</code>，多是「容器套容器」。
+      本课先认熟两种，动手读代码时不要被吓到：
+    </p>
+    <pre># list[dict]：检索结果列表，每个元素是一个「命中」
+hits = [
+    {"id": "d-07", "text": "RAG 先检索再生成", "score": 0.91},
+    ...
+]
+hits[0]["score"]        # 先一层索引拿 dict，再一层拿字段
+ids = [h["id"] for h in hits]   # 俯视整个列表：它就是一批 dict，生成式直接投影
+
+# list[list]：矩阵 / 分批数据
+scores = [[95, 83, 92], [80, 75, 82], [92, 97, 90]]
+scores[0][1]            # 83</pre>
+    <p>
+      读法口诀：<strong>一层花括号一层索引/循环</strong>。list[dict] 就「外层 for 循环，内层用键」；
+      别急着把两层合并成一个动作，先把「哪层是 list、哪层是 dict」指出来。
+    </p>
+
+    <h2>先跑小例</h2>
+    <div class="box steps">
+      <ol>
+        <li>激活 venv：
+          <pre>cd d:\agent-learning\playground\python
+.\.venv\Scripts\Activate.ps1</pre>
+        </li>
+        <li>阅读并运行：
+          <a href="../../playground/python/0005-lists-tuples/examples.py"><code>playground/python/0005-lists-tuples/examples.py</code></a>
+          <pre>python 0005-lists-tuples\examples.py</pre>
+        </li>
+        <li>盯住的点，按例子编号：
+          <ul>
+            <li>例2：<code>chunks[10:]</code> 给 <code>[]</code> 而不是崩；<code>alias 跟着变了: True</code>、<code>拷贝没被波及: True</code>，说明引用共享 vs 拷贝的差别。</li>
+            <li>例4：<code>append</code> 后出现 <code>['d-02', ['d-02', 'd-03']]</code>，<code>extend</code> 后才展平。</li>
+            <li>例5：<code>x = scores.sort()</code> 打印出 <code>None</code>；<code>key=</code> 排出的顺序 <code>['d-07', 'd-03', 'd-01']</code>。</li>
+            <li>例7：<code>('only')</code> 的类型是 <code>str</code>，<code>('only', )</code> 才是 <code>tuple</code>。</li>
+          </ul>
+        </li>
+      </ol>
+    </div>
+
+    <h2>主脚本导读（rank_results.py）</h2>
+    <p>
+      主脚本把「拿到 hits 之后」的四步走一遍。四个文件对齐以后要读的开源 agent / RAG 段：
+      检索层（工具）只负责「找候选」，组装层负责「挑该用的」，最后才是 prompt。
+    </p>
+    <div class="box steps">
+      <ol>
+        <li>跑入口：
+          <pre>python 0005-lists-tuples\rank_results.py</pre>
+          输出五大段：原始候选 → 过滤 → 排序 → top 3 → 上下文块。对照每一步的 id 列表，确认每一步都按预期变了。
+        </li>
+        <li><code>fetch_hits()</code> 返回的是<strong>乱序</strong>候选——故意的。真实检索不会替你排好。
+          0.31 的 d-01 和 0.45 的 d-02 是会拖累回答的旧文档：上下文窗口有限，喂进去越干净，模型回答越准。
+        </li>
+        <li><strong>过滤</strong>（第 1 步）用的就是列表生成式的「过滤」半边：
+          <pre>passed = [h for h in hits if h["score"] &gt;= threshold]</pre>
+          把「不要低分」写成了条件。想多删一类（比如排除过期 id），就在 <code>if</code> 里加一个条件。
+        </li>
+        <li><strong>排序</strong>（第 2 步）：<code>sorted(..., key=...)</code> 不动 <code>passed</code>
+          本身（所以第 3 步还能安全地拿它当原始顺序）；<code>reverse=True</code> 是我们想要的降序。
+          <code>hits.sort()</code> 这种原地版在这里没有意义——我们希望保留一份处理前的顺序做对照。
+        </li>
+        <li><strong>截断</strong>（第 3 步）<code>ranked[:top_k]</code>：和 0004 里 <code>hits[:top_k]</code>
+          一模一样的切片；现在你知道它不怕越界了。
+        </li>
+        <li><strong>组装</strong>（第 4 步）两件东西分别预告 0006：
+          <pre>lines = [f"[{i}] ({h['score']:.2f}) {h['text']}" for i, h in enumerate(top, start=1)]
+context = "\n".join(lines)</pre>
+          <code>enumerate(top, start=1)</code> 吐出 <code>(1, 第一条)</code>、<code>(2, 第二条)</code>，
+          <code>for i, h</code> 解包它们；<code>.join</code> 是字符串方法——把 <code>lines</code>
+          这个 list[str] 用换行拼成一段文本。字符串方法 0006 系统讲，这里先当用法记住。
+          拼出来的就是「要往系统提示词里塞的上下文块」——本课从检索到上下文的最小 RAG 切片。
+        </li>
+      </ol>
+    </div>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>索引越界 vs 切片越界</strong>：<code>xs[10]</code> 崩（IndexError），<code>xs[10:]</code> 给 <code>[]</code>。先分清你写的是哪个。</li>
+        <li><strong><code>xs = xs.sort()</code></strong>：sort 原地改并返回 <code>None</code>，这行把你变量毁了。要新 list 用 <code>sorted</code>、要原地用 <code>sort</code> 然后别接返回值。</li>
+        <li><strong>append 塞进整个列表</strong>：<code>pool.append(["a","b"])</code> 变成嵌套；要展平用 <code>extend</code>。</li>
+        <li><strong><code>ys = xs</code> 是共享不是拷贝</strong>：改 <code>ys</code> 会波及 <code>xs</code>（例2 的 alias）。拷贝用 <code>xs[:]</code> 或 <code>list(xs)</code>。</li>
+        <li><strong><code>[[]] * 3</code> 是三个同一个空列表</strong>：乘号只复制元素的引用，可变对象（list/dict）别用乘法造「一排」；要三份独立的用 <code>[[] for _ in range(3)]</code>。这和 0004 的可变默认值是同一个家族——共享可变对象。</li>
+        <li><strong><code>remove</code> / <code>index</code> 找不到会抛 <code>ValueError</code></strong>：Java 的 <code>List.indexOf</code> 找不到返 <code>-1</code>，Python 直接异常，删人/查找前先 <code>in</code> 判断。</li>
+        <li><strong>解包数量对不上</strong>：<code>a, b, c = (1, 2)</code> 抛 <code>ValueError</code>。需要「收走剩下」用 <code>a, *rest = ...</code>。</li>
+        <li><strong>一元组掉逗号</strong>：<code>("only")</code> 是 str；<code>("only", )</code> 才是 tuple。</li>
+        <li><strong>和 Java 易混</strong>：subList 是视图、切片是拷贝；Python list 允许异构元素但别混用；<code>sort</code> 是原地、<code>sorted</code> 是新 list，两条都得记。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。索引越界崩（IndexError），切片越界安静地给空 list，这是两条不同的规则。"
+      data-bad="索引越界才会崩；切片把越界的部分当不存在，返回能取的再短一截。">
+      <p><code>chunks[10:]</code>（chunks 只有 5 个元素）会发生什么？</p>
+      <button data-correct="true">返回空列表 []，不报错</button>
+      <button data-correct="false">抛 IndexError，程序崩掉</button>
+      <button data-correct="false">返回最后两个元素，自动截断</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。sort 原地改列表并返回 None，赋给变量就把列表毁了。"
+      data-bad="原地改的是列表本身；返回的新列表要交给变量的是 sorted，而不是 sort。">
+      <p>跑完 <code>x = scores.sort()</code> 之后，<code>x</code> 是什么？</p>
+      <button data-correct="true">None，sort 原地改并返回 None</button>
+      <button data-correct="false">一份排好序的新列表</button>
+      <button data-correct="false">原来的列表，没排序</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。append 把整个参数当一个元素，结果嵌套。"
+      data-bad="extend 才是把序列的元素逐个并入；append 收下的是「一个元素」。">
+      <p><code>pool = []; pool.append(["a", "b"])</code> 之后 <code>pool</code> 是？</p>
+      <button data-correct="true">[['a', 'b']]，嵌套的列表</button>
+      <button data-correct="false">['a', 'b']，被展平了</button>
+      <button data-correct="false">['a', 'b', ['a', 'b']]，追加又保留</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。生成式把过滤放在 if 里，投影放前面，一行完成。"
+      data-bad="顺序反了：if 在后是过滤，表达式在前是每个留存元素怎么变。">
+      <p><code>[h["id"] for h in hits if h["score"] &gt;= 0.5]</code> 在做什么？</p>
+      <button data-correct="true">留下分数够的，只取它们的 id</button>
+      <button data-correct="false">留下分数够的，把 id 加进原列表</button>
+      <button data-correct="false">留下 id 开头的，只取分数的值</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。逗号才是元组的标记；不带逗号的括号只是运算优先级。"
+      data-bad="元组单个元素必须带逗号；('only') 就是字符串字面量。">
+      <p><code>t = ("only")</code> 之后 <code>type(t)</code> 是什么？</p>
+      <button data-correct="true">str，括号不是元组的标记</button>
+      <button data-correct="false">tuple，括号就是元组</button>
+      <button data-correct="false">list，统一转成了列表</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。a, b = b, a 是交换；右边打包成元组，左边解包回变量。"
+      data-bad="它做的是交换两个变量，不产生新列表也不反转序列。">
+      <p><code>a, b = b, a</code> 这条语句的效果是？</p>
+      <button data-correct="true">交换 a 和 b 的值，无需中间变量</button>
+      <button data-correct="false">把 b 赋给 a 并保留 b 原值</button>
+      <button data-correct="false">反转一个列表并赋给 a、b</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li><code>examples.py</code> 跑通；能对着例2 讲清「索引越界崩、切片越界不崩」「引用共享 vs 拷贝」</li>
+      <li>能当场写出 <code>[h["text"] for h in hits if h["score"] &gt;= 0.5]</code> 并说清过滤在 if、投影在前</li>
+      <li>能分清：<code>sort()</code> 原地返回 None vs <code>sorted()</code> 返回新 list；<code>append</code> 加一个元素 vs <code>extend</code> 展平</li>
+      <li>能说出 <code>remove</code>/<code>index</code> 找不到会抛什么、和 Java <code>indexOf</code> 返回 -1 的差别</li>
+      <li>能解释元组的两条价值：不可变（可哈希，0006 当 dict key）和多返回值解包</li>
+      <li><code>rank_results.py</code> 跑通，能按块讲清：过滤低分 → 按分排序 → 截断 top_k → 拼上下文块</li>
+    </ul>
+
+    <h2>选读</h2>
+    <div class="box">
+      <p><strong>权威（本课规则的出处）</strong></p>
+      <ul>
+        <li><a href="https://docs.python.org/3/tutorial/datastructures.html">Python Tutorial · Data Structures</a>：More on Lists（方法、生成式、嵌套）、Tuples and Sequences、切片</li>
+      </ul>
+      <p><strong>中文教材（若还想看原书例题；默认不必打开）</strong></p>
+      <ul>
+        <li><a href="../../python-100Days/Day01-20/08.常用数据结构之列表-1.md">Day08 列表-1</a>：骰子统计重构、切片省略规则</li>
+        <li><a href="../../python-100Days/Day01-20/09.常用数据结构之列表-2.md">Day09 列表-2</a>：双色球、生成式为快的字节码理由</li>
+        <li><a href="../../python-100Days/Day01-20/10.常用数据结构之元组.md">Day10 元组</a>：一元组、打包解包、元组 vs 列表 timeit</li>
+      </ul>
+    </div>
+
+    <h2>速查</h2>
+    <p>
+      <a href="../../reference/python-phase0.html">Python 阶段 0 速查</a>（列表与元组）·
+      <a href="../../reference/agent-stack.html">Agent / Harness 用语</a> ·
+      <a href="../../GLOSSARY.md">GLOSSARY.md</a> ·
+      <a href="../../reference/index.html">索引</a>
+    </p>
+
+    <div data-lesson-id-footer="0005"></div>
+
+    <footer>
+      不清楚的立刻问我。跑完或卡住，把输出贴回来。
+      下一课：字符串 / 集合 / 字典（0006，对齐 Day11–13——字符串方法管拼 prompt 和切文本，字典管解析 tool_call）。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

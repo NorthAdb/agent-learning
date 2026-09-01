@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0010 · requests：HTTP JSON 与 Agent 工具调用</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0010"></div>
+    <h1>requests：用 HTTP JSON 调通 Agent 的外部世界</h1>
+    <p class="mission">0008 解决了「对象 ↔ JSON 文本 ↔ 文件」；真实 Agent 还要和<strong>远端服务</strong>说话——模型 API、检索服务、你自己的 Java 业务接口。本课主技能是第三方库 <code>requests</code>；载体是本地假 API（模拟 RAG 检索 + chat completions）。读完应能写出带 <code>timeout</code>、<code>raise_for_status</code>、异常转换的最小 HTTP 客户端。</p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">主来源：<a href="https://docs.python-requests.org/en/stable/user/quickstart/">Requests Quickstart</a>。100-Days 网络章偏爬虫，本课<strong>不走爬虫线</strong>，只取 Agent/RAG 需要的 HTTP JSON 客户端能力。</p>
+    <table>
+      <tr><th>来源要点</th><th>本课处理</th></tr>
+      <tr><td>安装 <code>requests</code>、<code>get</code>/<code>post</code> <strong>参数怎么填</strong></td><td><span class="tag">已内化</span>讲解 1–3（参数手册）</td></tr>
+      <tr><td><code>fake_api_server.py</code> 怎么读（标准库 HTTP 服务）</td><td><span class="tag">已内化</span>练习脚本区「fake_api_server 导读」</td></tr>
+      <tr><td><code>Response</code>：status / headers / text / json</td><td><span class="tag">已内化</span>讲解 4</td></tr>
+      <tr><td><code>params</code> 查询串、<code>json=</code> vs <code>data=</code></td><td><span class="tag">已内化</span>讲解 5–6（三案）</td></tr>
+      <tr><td><code>timeout</code>、<code>raise_for_status</code></td><td><span class="tag">已内化</span>讲解 7–8</td></tr>
+      <tr><td>异常层次与边界转换</td><td><span class="tag">已内化</span>讲解 9</td></tr>
+      <tr><td>Headers / Authorization 怎么写进 post</td><td><span class="tag">已内化</span>讲解 10（加厚）</td></tr>
+      <tr><td>和 Agent 工具怎么接</td><td><span class="tag">已内化</span>讲解 11</td></tr>
+      <tr><td>Session 连接池、流式下载、OAuth 全流程</td><td><span class="tag">跳过</span>阶段 0 够用单次请求；Session 作选读</td></tr>
+      <tr><td>爬虫 / HTML 解析 / 反爬</td><td><span class="tag">跳过</span>与使命无关</td></tr>
+      <tr><td>异步 HTTP（httpx/aiohttp）</td><td><span class="tag">下一课方向</span>异步扫盲时再对照</td></tr>
+    </table>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>Python (requests)</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr><td><code>requests.get(url)</code></td><td>HttpClient / OkHttp / RestTemplate</td><td>API 更短；但仍要自己处理超时与错误码</td></tr>
+      <tr><td><code>response.json()</code></td><td>Jackson 读 body → DTO</td><td>得到松散 dict/list，<strong>不是</strong>编译期 DTO</td></tr>
+      <tr><td><code>json=payload</code></td><td>entity + <code>APPLICATION_JSON</code></td><td>requests 自动 dumps 并设 Content-Type</td></tr>
+      <tr><td><code>raise_for_status()</code></td><td>非 2xx 抛异常的客户端配置</td><td>默认<strong>不会</strong>因 404 自动抛；要显式调用</td></tr>
+      <tr><td><code>timeout=5</code></td><td>connect/read timeout</td><td>不设 timeout 可能永久阻塞——生产禁忌</td></tr>
+    </table>
+
+    <h3 id="dto">旁注：DTO 是什么（Java 同学）</h3>
+    <p><strong>DTO</strong> = <em>Data Transfer Object</em>（数据传输对象）：专门用来在边界之间搬数据的一类对象，通常对应一份 JSON 的字段形状。</p>
+    <ul>
+      <li><strong>Java 里常见样子</strong>：一个带字段的类（或 record），如 <code>ChatCompletionResponse</code>，Jackson 把 JSON 直接反序列化成该类；字段名、类型在编译期就钉死，缺字段/类型错常在绑定阶段暴露。</li>
+      <li><strong>干什么用</strong>：在「网络/文件边界」与「业务核心」之间当稳定契约——入参 DTO、出参 DTO，避免业务方法直接啃原始 <code>Map</code>/<code>JsonNode</code>。</li>
+      <li><strong>和本课的关系</strong>：<code>response.json()</code> 只给你 <code>dict</code>/<code>list</code>（松散、无编译期字段表）。若要对齐 Java 的 DTO 习惯，阶段 0 用手动取键 + <code>isinstance</code>（见 0008/0009）；更接近 DTO 的标注是 <code>TypedDict</code>（0009），真正「类 + 校验」常见于后续的 Pydantic 等，本课不展开。</li>
+    </ul>
+    <pre>// Java 直觉
+ChatCompletionResponse dto = objectMapper.readValue(body, ChatCompletionResponse.class);
+String content = dto.getChoices().get(0).getMessage().getContent();
+
+# Python（本课默认）
+body = response.json()          # dict，不是 ChatCompletionResponse 类
+content = body["choices"][0]["message"]["content"]  # 键写错要到运行时才爆</pre>
+    <p class="muted">后文说「不是 DTO」，意思就是：你手里还是普通 dict，没有自动生成的强类型 Java 类。</p>
+
+    <h2>系统讲解</h2>
+
+    <h3>1. HTTP 请求是什么（Agent 视角）</h3>
+    <p>一次 HTTP 调用 = 你的进程向某个 URL 发消息，对方返回状态码 + 头 + 正文。Agent 里常见形态：</p>
+    <ul>
+      <li><strong>GET</strong>：查资源（检索、拉配置、健康检查）</li>
+      <li><strong>POST</strong>：提交 JSON（chat completions、创建任务、调业务 API）</li>
+    </ul>
+    <pre>客户端 (你的 Python)          服务端 (模型 API / RAG / Java)
+        |  GET /rag/search?q=...          |
+        | -----------------------------&gt; |
+        |  200 + {"hits":[...]}           |
+        | &lt;----------------------------- |</pre>
+    <p><code>requests</code> 不是标准库，需要安装：</p>
+    <pre>pip install requests
+# 本练习场已装在 playground/python/.venv</pre>
+    <p>权威入门：<a href="https://docs.python-requests.org/en/stable/user/quickstart/">Requests Quickstart</a>。</p>
+
+    <h3>2. 最小 GET：先跑通再拆零件</h3>
+    <pre>import requests
+
+response = requests.get(
+    "http://127.0.0.1:8765/health",
+    timeout=5,
+)
+print(response.status_code)   # 200
+print(response.json())        # {'ok': True, ...}</pre>
+    <p>本课所有联网例子默认打<strong>本地假 API</strong>（<code>fake_api_server.py</code>），不依赖外网，也不消耗真实模型额度。</p>
+    <p>下一节是本课最重要的「填空手册」：<code>get</code> / <code>post</code> 括号里每个参数放什么、不放什么。</p>
+
+    <h3>3. 参数填空手册：<code>requests.get</code> / <code>requests.post</code></h3>
+    <p>先记住一句：<strong>位置参数几乎只有 URL；其它一律用关键字参数（<code>名字=值</code>）</strong>，这样读代码不会搞混顺序。</p>
+
+    <h4>3.1 先看完整模板（Agent 里最常见）</h4>
+    <pre># GET：查东西（检索、健康检查）
+response = requests.get(
+    "http://127.0.0.1:8765/rag/search",   # ① 必填：完整 URL（字符串）
+    params={"q": "harness", "top_k": 2}, # ② 可选：拼到 ? 后面的查询参数
+    headers={"User-Agent": "agent-learning"},  # ③ 可选：请求头
+    timeout=5,                           # ④ 强烈建议：超时秒数
+)
+
+# POST：交东西（chat、提交 JSON）
+response = requests.post(
+    "http://127.0.0.1:8765/v1/chat/completions",  # ① URL
+    json={                                        # ② 身体：Python dict → JSON 文本
+        "model": "demo-model",
+        "messages": [{"role": "user", "content": "什么是 RAG？"}],
+    },
+    headers={"Authorization": "Bearer YOUR_TOKEN"},  # ③ 可选头
+    timeout=5,                                    # ④ 超时
+)</pre>
+    <p>对照 Java：有点像 <code>RestTemplate.exchange(url, method, entity, ...)</code>——URL、方法、头、身体、超时是分开设的；<code>requests</code> 把它们收成函数参数。</p>
+
+    <h4>3.2 每个参数：填什么、类型、放哪</h4>
+    <table>
+      <tr><th>参数名</th><th>你填什么</th><th>类型直觉</th><th>GET</th><th>POST</th><th>说明</th></tr>
+      <tr>
+        <td>第 1 个位置参数<br><code>url</code></td>
+        <td>完整地址</td>
+        <td><code>str</code></td>
+        <td>必填</td>
+        <td>必填</td>
+        <td>含协议+主机+路径，如 <code>http://127.0.0.1:8765/health</code>。不要只写 <code>/health</code>（除非自己拼好 BASE）。</td>
+      </tr>
+      <tr>
+        <td><code>params=</code></td>
+        <td>查询参数</td>
+        <td><code>dict</code></td>
+        <td>常用</td>
+        <td>少用</td>
+        <td>变成 URL 上的 <code>?q=...&amp;top_k=2</code>。值可以是 str/int，requests 会转成字符串并做 URL 编码。</td>
+      </tr>
+      <tr>
+        <td><code>json=</code></td>
+        <td>JSON 请求体</td>
+        <td><code>dict</code>/<code>list</code></td>
+        <td>一般不用</td>
+        <td><strong>调 API 首选</strong></td>
+        <td>自动 <code>json.dumps</code>，并设 <code>Content-Type: application/json</code>。身体在 HTTP <strong>body</strong>，不在 URL。</td>
+      </tr>
+      <tr>
+        <td><code>data=</code></td>
+        <td>表单或原始身体</td>
+        <td><code>dict</code>/<code>str</code>/<code>bytes</code></td>
+        <td>少用</td>
+        <td>老式表单</td>
+        <td><code>data=dict</code> → 表单编码，<strong>不是</strong> JSON。别和 <code>json=</code> 同时当「主身体」混用（会打架）。</td>
+      </tr>
+      <tr>
+        <td><code>headers=</code></td>
+        <td>请求头</td>
+        <td><code>dict[str, str]</code></td>
+        <td>可选</td>
+        <td>常用（鉴权）</td>
+        <td>键值都是字符串。如 <code>Authorization</code>、<code>User-Agent</code>。见第 10 节。</td>
+      </tr>
+      <tr>
+        <td><code>timeout=</code></td>
+        <td>最长等待</td>
+        <td><code>float</code> 或 <code>(float, float)</code></td>
+        <td>必设</td>
+        <td>必设</td>
+        <td>单位秒。不设可能永远卡住。见第 7 节三案。</td>
+      </tr>
+    </table>
+    <p>本阶段 Agent 脚本<strong>够用的组合</strong>就三套：</p>
+    <pre># A. 健康检查 / 简单 GET
+requests.get(url, timeout=5)
+
+# B. 带查询的 GET（RAG 检索）
+requests.get(url, params={"q": query, "top_k": 3}, timeout=5)
+
+# C. 提交 JSON 的 POST（chat / 业务 API）
+requests.post(url, json=payload, headers=headers, timeout=5)</pre>
+
+    <h4>3.3 一张「东西放哪」图（别放错抽屉）</h4>
+    <pre>                    ┌──────── URL ─────────┐
+请求发往哪里？        │ http://host/path     │  ← 第 1 参数 url
+                    └──────────┬───────────┘
+                               │
+         ┌─────────────────────┼─────────────────────┐
+         ▼                     ▼                     ▼
+   params=dict            headers=dict            json=dict
+   （贴在 URL 后面         （信封上的便签：          （信封里面的信：
+    ?q=...&amp;top_k=）        Authorization 等）      模型 messages 等）
+         │                     │                     │
+         └─────────── timeout=5（整封信最多等多久）───┘</pre>
+    <p>易混对照：</p>
+    <table>
+      <tr><th>你想表达</th><th>该用</th><th>别用</th></tr>
+      <tr><td>检索词 <code>q</code>、<code>top_k</code></td><td><code>params={...}</code></td><td>塞进 <code>json=</code>（除非 API 文档明确要求 POST body）</td></tr>
+      <tr><td>chat 的 <code>messages</code></td><td><code>json={...}</code></td><td><code>params=</code>（查询串太短、不适合大 JSON）</td></tr>
+      <tr><td>API Key</td><td><code>headers={"Authorization": ...}</code></td><td>写进 URL（易泄露进日志）</td></tr>
+      <tr><td>防止卡死</td><td><code>timeout=5</code></td><td>省略</td></tr>
+    </table>
+
+    <h4>3.4 逐行拆开本课真实的 <code>post</code></h4>
+    <pre>payload = {
+    "model": "demo-model",
+    "messages": [{"role": "user", "content": "什么是 RAG？"}],
+}
+# payload 还是普通 Python dict（0006/0008 的对象）
+
+response = requests.post(
+    f"{BASE}/v1/chat/completions",  # BASE="http://127.0.0.1:8765"
+    # ↑ f-string 拼出完整 URL；假服务路径模仿 OpenAI 风格
+
+    json=payload,
+    # ↑ 关键字参数名必须叫 json（不是 body、不是 payload）
+    #   requests 内部会：json.dumps(payload) + Content-Type: application/json
+
+    timeout=5,
+    # ↑ 5 秒内连不上或读不完 → 抛 Timeout
+)
+# response 是 Response 对象，还没「自动成功」
+response.raise_for_status()   # 非 2xx 在这里变成异常
+body = response.json()        # 正文 JSON → dict
+content = body["choices"][0]["message"]["content"]</pre>
+    <p>若写成 <code>requests.post(url, payload)</code>（少了 <code>json=</code>）：第二个位置参数在 requests 里<strong>不是</strong> JSON 身体，行为会错或报错。所以务必写 <code>json=payload</code>。</p>
+
+    <h4>3.5 返回值不是「结果 dict」，而是 Response</h4>
+    <pre>r = requests.post(...)   # r 的类型是 requests.Response
+# 你还要自己：
+r.status_code            # 看数字
+r.raise_for_status()     # 或让失败变异常
+r.text                   # 原始字符串
+r.json()                 # 再变成 dict/list</pre>
+    <p>和 Java 对照：更像拿到 <code>ResponseEntity&lt;String&gt;</code> 再自己解析，而不是 <code>ResponseEntity&lt;ChatCompletionResponse&gt;</code> 那种已经绑好的 <a href="#dto">DTO</a>。</p>
+
+    <h3>4. Response 对象：四个必读属性/方法</h3>
+    <table>
+      <tr><th>写法</th><th>返回什么</th><th>用途</th></tr>
+      <tr><td><code>response.status_code</code></td><td><code>int</code></td><td>HTTP 状态：200 成功，4xx 客户端错，5xx 服务端错</td></tr>
+      <tr><td><code>response.headers</code></td><td>类 dict</td><td>看 <code>Content-Type</code> 等；键名大小写不敏感</td></tr>
+      <tr><td><code>response.text</code></td><td><code>str</code></td><td>正文当文本；调试时先看它</td></tr>
+      <tr><td><code>response.content</code></td><td><code>bytes</code></td><td>原始字节；下载文件用</td></tr>
+      <tr><td><code>response.json()</code></td><td>dict/list/…</td><td>按 JSON 解码；非法 JSON 会抛错</td></tr>
+      <tr><td><code>response.url</code></td><td><code>str</code></td><td>最终请求 URL（含编码后的查询串）</td></tr>
+    </table>
+    <p><strong>关键提醒（官方 Quickstart）：</strong><code>response.json()</code> 成功<strong>不等于</strong>这次 HTTP 业务成功。有的服务器在 500 时仍返回 JSON 错误体——必须先看状态码或调用 <code>raise_for_status()</code>。</p>
+
+    <h3>5. GET 查询参数：用 <code>params</code>，别手拼字符串</h3>
+    <pre>response = requests.get(
+    "http://127.0.0.1:8765/rag/search",
+    params={"q": "Java 接入", "top_k": 2},
+    timeout=5,
+)
+print(response.url)
+# .../rag/search?q=Java+%E6%8E%A5%E5%85%A5&amp;top_k=2</pre>
+    <p><code>params</code> 会做 URL 编码（中文、空格）。手写 <code>url + "?q=" + query</code> 容易漏编码，Agent 工具里禁止这种拼法。</p>
+    <p>填法口诀：<strong>「出现在浏览器地址栏问号后面的」→ <code>params</code></strong>；「POST 正文里的大 JSON」→ <code>json</code>。</p>
+
+    <h3>6. POST 身体三案：<code>json=</code> / <code>data=dict</code> / 手动 dumps</h3>
+    <p>这是本课最易混的一组（对照可变默认值三案）：</p>
+    <table>
+      <tr><th>写法</th><th>Content-Type</th><th>身体形态</th><th>何时用</th></tr>
+      <tr><td><code>json=payload</code></td><td><code>application/json</code></td><td>JSON 文本</td><td><strong>调模型 API / 现代 JSON API 默认选这个</strong></td></tr>
+      <tr><td><code>data=dict</code></td><td>表单编码</td><td><code>key=value&amp;...</code></td><td>老式表单；不是 JSON API</td></tr>
+      <tr><td><code>data=json.dumps(...)</code> + 自设头</td><td>你自己设</td><td>JSON 文本</td><td>等价于 <code>json=</code>，但更啰嗦</td></tr>
+    </table>
+    <pre># 正确：给 chat API 发 JSON
+requests.post(
+    "http://127.0.0.1:8765/v1/chat/completions",
+    json={
+        "model": "demo-model",
+        "messages": [{"role": "user", "content": "hi"}],
+    },
+    timeout=5,
+)
+
+# 错误直觉：data=dict 并不会自动变成 JSON 对象
+# requests.post(url, data=payload)  →  application/x-www-form-urlencoded</pre>
+    <p>练习脚本 <code>post_body_styles.py</code> 不发网络，只打印三种准备好的请求差异。看输出时盯两行：<code>Content-Type</code> 和 <code>Body</code>。</p>
+
+    <h3>7. <code>timeout</code> 三案：不设 / 单浮点 / 二元组</h3>
+    <table>
+      <tr><th>写法</th><th>行为</th><th>建议</th></tr>
+      <tr><td>不写 <code>timeout</code></td><td>可能<strong>永远等待</strong></td><td>生产与 Agent 工具<strong>禁止</strong></td></tr>
+      <tr><td><code>timeout=5</code></td><td>连接+读取共用上限（秒）</td><td>练习与多数工具够用</td></tr>
+      <tr><td><code>timeout=(3.05, 27)</code></td><td>(连接超时, 读取超时)</td><td>官方文档常见推荐形态；读大响应时分开控</td></tr>
+    </table>
+    <pre>requests.get(url, timeout=5)
+requests.get(url, timeout=(3.05, 10))</pre>
+    <p>超时抛 <code>requests.Timeout</code>（属于 <code>RequestException</code>）。Agent loop 里超时通常转成「工具失败」观察结果，而不是卡死整轮。</p>
+
+    <h3>8. 状态码怎么处理：三策略对齐 0007</h3>
+    <table>
+      <tr><th>策略</th><th>做法</th><th>适用</th></tr>
+      <tr><td>读数字分支</td><td><code>if response.status_code == 200:</code></td><td>同一调用有多种合法状态（少见）</td></tr>
+      <tr><td>失败即异常</td><td><code>response.raise_for_status()</code></td><td><strong>默认推荐</strong>：非 2xx 抛 <code>HTTPError</code></td></tr>
+      <tr><td>转换后上抛</td><td>捕获后 <code>raise AgentHttpError(...) from error</code></td><td>工具边界：给 Agent 看业务语义</td></tr>
+    </table>
+    <pre>response = requests.get(url, timeout=5)
+response.raise_for_status()   # 4xx/5xx 在这里爆
+data = response.json()        # 再解析</pre>
+    <p>顺序口诀：<strong>先超时保护 → 再发请求 → raise_for_status → 再 json()</strong>。</p>
+
+    <h3>9. 异常层次 + 标准范式（套在 HTTP 上）</h3>
+    <pre>RequestException          # 几乎所有 requests 失败的基类
+ ├─ Timeout               # 超时
+ ├─ ConnectionError       # DNS/拒连/断网
+ └─ HTTPError             # raise_for_status 因 4xx/5xx 抛出
+JSON 解码失败 → ValueError / JSONDecodeError（json() 时）</pre>
+    <pre>def get_json(path: str) -&gt; object:
+    try:
+        response = requests.get(BASE + path, timeout=5)
+        response.raise_for_status()
+        return response.json()
+    except requests.Timeout as error:
+        raise AgentHttpError(f"请求超时: GET {path}") from error
+    except requests.HTTPError as error:
+        status = error.response.status_code if error.response else "?"
+        raise AgentHttpError(f"HTTP {status}: GET {path}") from error
+    except requests.RequestException as error:
+        raise AgentHttpError(f"网络失败: GET {path}") from error
+    except ValueError as error:
+        raise AgentHttpError(f"响应不是合法 JSON: GET {path}") from error</pre>
+    <p>这与 0007「转换后上抛」、0008「JSON 边界」是同一条纪律：<strong>底层异常太系统，工具边界要说成人话</strong>。</p>
+
+    <h3>10. Headers 与鉴权：怎么写进 <code>post</code>（加厚）</h3>
+    <p>Header = HTTP <strong>信封上的便签</strong>（元数据），不是正文。鉴权 Token、内容类型、自定义追踪 ID 都放这里。</p>
+
+    <h4 id="bearer">10.0 Bearer 是什么</h4>
+    <p><strong>Bearer</strong> 在英文里有「持票人 / 持有者」的意思。写在 HTTP 头里时，表示一种约定好的<strong>鉴权方案名</strong>：谁持有这张 token（令牌），服务器就暂时把他当成已授权的调用方——不必再传用户名密码。</p>
+    <ul>
+      <li><strong>完整头</strong>：名字叫 <code>Authorization</code>，值的形状固定为 <code>Bearer</code> + <strong>一个空格</strong> + token 字符串。</li>
+      <li><strong>token 从哪来</strong>：模型厂商 / 云控制台发给你的 API Key，或登录后拿到的 access token。本课假服务不校验；真 API 几乎都要。</li>
+      <li><strong>和 Basic 的差别（认即可）</strong>：Basic 是「用户名:密码」再 Base64；Bearer 是「我已经有一张通行证」，更常见于现代 API / OAuth。</li>
+      <li><strong>别漏空格、别改大小写习惯</strong>：写成 <code>BearerYOUR_TOKEN</code> 或 <code>bearer ...</code> 有的服务会拒；照文档写成 <code>Bearer &lt;token&gt;</code>。</li>
+    </ul>
+    <pre># 头名                  值 = 方案名 + 空格 + 令牌
+"Authorization": "Bearer sk-xxxxx"
+
+# 等价拆开看：
+scheme = "Bearer"      # 告诉服务器：我用的是 Bearer 方案
+token  = "sk-xxxxx"    # 真正的密钥/令牌
+headers = {"Authorization": scheme + " " + token}</pre>
+    <p class="muted">Java 对照：Spring Security / 网关里常见 <code>Authorization: Bearer ...</code>；Feign 拦截器往同一头塞字符串，语义相同。</p>
+
+    <h4>10.1 填法（和 json / timeout 一起出现）</h4>
+    <pre>headers = {
+    "Authorization": "Bearer YOUR_TOKEN",  # Bearer + 空格 + token
+    "User-Agent": "agent-learning/0010",   # 可选：表明客户端身份
+    # 一般不必手写 Content-Type：用了 json= 时 requests 会自动设 application/json
+}
+
+response = requests.post(
+    url,                 # ① 去哪
+    json=payload,        # ② 身体（dict → JSON 文本）
+    headers=headers,     # ③ 头：关键字必须叫 headers，值是 dict[str, str]
+    timeout=5,           # ④ 超时
+)</pre>
+    <ul>
+      <li>参数名是 <code>headers=</code>，不要写成 <code>header=</code> / <code>Header=</code>。</li>
+      <li>键和值都应是字符串；Token 用拼接：<code>"Bearer " + token</code>。</li>
+      <li>用了 <code>json=</code> 通常<strong>不要</strong>再手写 <code>Content-Type</code>，以免和自动值冲突。</li>
+      <li>真密钥放环境变量（如 <code>os.environ["API_KEY"]</code>），不要进 git。</li>
+    </ul>
+
+    <h4>10.2 三样东西同时出现时怎么排</h4>
+    <pre>requests.post(
+    "https://api.example.com/v1/chat/completions",
+    params={"api-version": "2024-01-01"},   # 少数云厂商：版本在查询串
+    headers={"Authorization": "Bearer " + token},  # 鉴权在头
+    json={                                  # 对话在身体
+        "model": "gpt-demo",
+        "messages": [{"role": "user", "content": "hi"}],
+    },
+    timeout=30,
+)</pre>
+    <p>本课假服务不校验 Token；真实模型 API 几乎都要 <code>Authorization</code>。以对方 API 文档为准：谁规定放 <code>params</code> / <code>headers</code> / <code>json</code>，就照着填。</p>
+
+    <h4>10.3 三种常见鉴权样子（认即可）</h4>
+    <table>
+      <tr><th>写法</th><th>例子</th></tr>
+      <tr><td>Bearer Token</td><td><code>Authorization: Bearer sk-...</code>（见 <a href="#bearer">§10.0</a>）</td></tr>
+      <tr><td>自定义 API Key 头</td><td><code>X-API-Key: ...</code>（头名看厂商文档）</td></tr>
+      <tr><td>Basic</td><td>见下方 §10.4</td></tr>
+    </table>
+    <p>Java 对照：和 Feign/RestTemplate 用拦截器往 Header 塞 Token 是同一类事；Python 里就是每次调用传 <code>headers=</code>。</p>
+
+    <h4 id="auth-more">10.3.1 还有别的鉴权手段吗？（扫一眼）</h4>
+    <p>有。HTTP/API 世界里常见的不止 Basic / Bearer。对本课 Agent 主线，<strong>认名字 + 知道「凭证放哪」</strong>即可，不必逐个实现。</p>
+    <table>
+      <tr><th>手段</th><th>一句话</th><th>凭证通常放哪</th><th>Agent/模型场景</th></tr>
+      <tr><td>Bearer</td><td>持有令牌即授权</td><td><code>Authorization: Bearer …</code></td><td><strong>最常见</strong>（OpenAI 风格等）</td></tr>
+      <tr><td>自定义 API Key</td><td>厂商自定头名</td><td><code>X-API-Key</code> / <code>api-key</code> 等</td><td>很常见，以文档为准</td></tr>
+      <tr><td>Basic</td><td>用户名+密码（Base64）</td><td><code>Authorization: Basic …</code> 或 <code>auth=(u,p)</code></td><td>老接口/内网多见</td></tr>
+      <tr><td>Query 里的 key</td><td>密钥拼进 URL</td><td><code>?api_key=...</code>（即 <code>params</code>）</td><td>能见到；易进日志，优先避免</td></tr>
+      <tr><td>Cookie / Session</td><td>浏览器登录后会话</td><td><code>Cookie</code> 头</td><td>爬站点/后台页时；工具 API 少用</td></tr>
+      <tr><td>HMAC / 签名</td><td>用密钥对请求做签名</td><td>常在自定义头（如时间戳+签名）</td><td>云厂商开放 API 常见</td></tr>
+      <tr><td>mTLS（双向证书）</td><td>客户端也出示证书</td><td>TLS 层，不是普通 Header</td><td>高安全内网；本课不练</td></tr>
+      <tr><td>OAuth2 流程</td><td>先授权拿 token，再调 API</td><td>最终调用往往仍是 <strong>Bearer</strong></td><td>「登录授权」复杂；拿到 token 后用法同 §10.0</td></tr>
+    </table>
+    <p><strong>实操纪律</strong>：打开对方 API 文档 → 看它规定用哪种 → 把凭证放进文档指定的抽屉（<code>headers</code> / <code>params</code> / <code>auth</code>），不要自己发明。本课假服务不校验任何鉴权；真模型 API 先按文档抄 Bearer 或 API Key 头。</p>
+
+    <h4 id="basic">10.4 Basic 是什么（了解即可）</h4>
+    <p><strong>Basic</strong> = HTTP <em>Basic Authentication</em>（基本认证）：另一种写在 <code>Authorization</code> 头里的<strong>鉴权方案名</strong>。和 Bearer「持有一张令牌」不同，Basic 是把<strong>用户名 + 密码</strong>交给服务器。</p>
+    <ul>
+      <li><strong>头的真实形状</strong>：<code>Authorization: Basic &lt;Base64(用户名:密码)&gt;</code>。Base64 只是编码（可逆），<strong>不是加密</strong>——所以生产环境必须走 HTTPS。</li>
+      <li><strong>requests 写法</strong>：不必自己 Base64，用便捷参数 <code>auth=("user", "pass")</code>，库会自动生成上面的头。</li>
+      <li><strong>和 Bearer 怎么选</strong>：现代模型 API / OAuth 几乎都用 Bearer；Basic 多见于老接口、内网工具、部分文档站。本课 Agent 主线认 Bearer 即可，见到 Basic 能读懂就行。</li>
+    </ul>
+    <pre># 方式 A：便捷参数（推荐认识）
+requests.get(url, auth=("alice", "secret"), timeout=5)
+# → 实际发出的头类似：
+# Authorization: Basic YWxpY2U6c2VjcmV0   （"alice:secret" 的 Base64）
+
+# 方式 B：和 Bearer 对照——方案名不同，后面跟的内容也不同
+# Bearer → Authorization: Bearer &lt;token&gt;
+# Basic  → Authorization: Basic  &lt;base64(user:pass)&gt;</pre>
+    <p class="muted">Java 对照：Spring Security 的 HTTP Basic、或 <code>HttpHeaders.setBasicAuth(user, pass)</code> 同一语义。</p>
+
+    <h3>11. 和 Agent 工具怎么接</h3>
+    <p>一条最小链路：</p>
+    <ol>
+      <li><code>rag_search</code> 工具内部 <code>GET /rag/search</code> → 得到 <strong>hits</strong>（检索命中列表，见下）</li>
+      <li>拼上下文（0006 的 join）</li>
+      <li><code>chat_completion</code> 工具内部 <code>POST /v1/chat/completions</code> → 得到助手文本</li>
+      <li>任一步失败 → <code>AgentHttpError</code> → Agent loop 当作 tool error 观察</li>
+    </ol>
+
+    <h4 id="hits">11.1 <code>hits</code> 是什么</h4>
+    <p><strong>hit</strong> 英文是「命中」；检索场景里 <code>hits</code> = <strong>本次查询命中的文档/片段列表</strong>（通常已按相关度排好，条数受 <code>top_k</code> 限制）。</p>
+    <ul>
+      <li>不是 HTTP 状态，也不是「点击次数」；就是搜索结果数组的一个常用字段名（Elasticsearch 等也爱用 <code>hits</code>）。</li>
+      <li>本课假 API 返回形如：</li>
+    </ul>
+    <pre>{
+  "query": "Java 如何接入 Agent",
+  "hits": [
+    {"id": "d1", "score": 0.91, "text": "Harness 把工具接在模型外：与「Java 如何接入 Agent」相关"},
+    {"id": "d2", "score": 0.77, "text": "RAG 先检索再生成，减少胡编。"}
+  ]
+}</pre>
+    <ul>
+      <li>每一项 hit ≈ 一条候选知识：<code>id</code> 标识、<code>score</code> 相关度、<code>text</code> 正文（真系统里还可能有 title、url、chunk 等）。</li>
+      <li><code>rag_search</code> 做的事：HTTP 拿到整份 JSON → <code>data["hits"]</code> → 返回 <code>list[dict]</code>，供后面 <code>join</code> 成 prompt 上下文。</li>
+    </ul>
+    <pre>hits = rag_search(...)           # list[dict]，例如 2 条
+context = "\n".join(h["text"] for h in hits)   # 拼成给模型看的资料</pre>
+
+    <p>主脚本 <code>http_agent_client.py</code> 里参数对应关系：</p>
+    <pre>get_json(path, params=...)  →  requests.get(url, params=..., timeout=...)
+post_json(path, payload)    →  requests.post(url, json=payload, timeout=...)
+rag_search(query, top_k)    →  GET + params={"q": query, "top_k": top_k}
+chat_completion(text)       →  POST + json={"model", "messages"}</pre>
+    <p>读 <code>post_json</code> 时盯住：身体必须写 <code>json=payload</code>，不能写成 <code>requests.post(url, payload)</code>。</p>
+
+    <h2>练习脚本：阅读顺序与关系</h2>
+    <p>本课 <code>playground/python/0010-requests/</code> 下四个脚本分工不同。按下面顺序读，能看清「对方长什么样 → 身体怎么发 → 裸 requests → 封装成 Agent 工具」。</p>
+
+    <h3>推荐阅读顺序</h3>
+    <table>
+      <tr><th>顺序</th><th>脚本</th><th>要不要先开假服务</th></tr>
+      <tr><td>①</td><td><a href="../../playground/python/0010-requests/fake_api_server.py"><code>fake_api_server.py</code></a></td><td><strong>先读、先跑</strong>（另开终端常驻）</td></tr>
+      <tr><td>②</td><td><a href="../../playground/python/0010-requests/post_body_styles.py"><code>post_body_styles.py</code></a></td><td><strong>不需要</strong>（不联网）</td></tr>
+      <tr><td>③</td><td><a href="../../playground/python/0010-requests/examples.py"><code>examples.py</code></a></td><td>需要假服务</td></tr>
+      <tr><td>④</td><td><a href="../../playground/python/0010-requests/http_agent_client.py"><code>http_agent_client.py</code></a></td><td>需要假服务</td></tr>
+    </table>
+    <p class="muted">② 与 ③ 可互换：若 <code>json=</code> / <code>data=</code> 已清楚，可先跑 <code>examples.py</code>；若 POST 身体仍懵，先跑 <code>post_body_styles.py</code>。</p>
+
+    <h3>四个脚本的关系</h3>
+    <pre>┌─────────────────────────────────────────────────────────┐
+│  fake_api_server.py  （被依赖的「对方」）                  │
+│  定义路由：/health、/rag/search、/v1/chat/completions…    │
+└───────────────────────┬─────────────────────────────────┘
+                        │ HTTP
+          ┌─────────────┴─────────────┐
+          ▼                           ▼
+   examples.py              http_agent_client.py
+   「裸 requests 零件」        「封装成 Agent 工具层」
+          │                           │
+          │  同一套 API               │  get_json / post_json
+          │  同一套参数               │  rag_search → chat_completion
+          └─────────────┬─────────────┘
+                        │
+   post_body_styles.py   │  （独立支线）
+   只讲 POST 身体怎么发   │  不连假服务
+   json= vs data=        │</pre>
+
+    <h3>各脚本干什么</h3>
+    <table>
+      <tr><th>脚本</th><th>角色</th><th>你在学什么</th></tr>
+      <tr>
+        <td><code>fake_api_server.py</code></td>
+        <td>假服务端：本课里的「模型 API + RAG 检索」替身</td>
+        <td>有哪些 URL、返回什么 JSON（尤其 <code>hits</code>、<code>choices</code>）</td>
+      </tr>
+      <tr>
+        <td><code>post_body_styles.py</code></td>
+        <td>支线：用 <code>Request.prepare()</code> 观察 <code>json=</code> 与 <code>data=</code> 发出的头与身体</td>
+        <td>POST 该用 <code>json=</code> 还是 <code>data=</code>；为 <code>post_json</code> 打底</td>
+      </tr>
+      <tr>
+        <td><code>examples.py</code></td>
+        <td>零件练习：直接写 <code>requests.get/post</code>，拆 Response 四件</td>
+        <td>GET+<code>params</code>、POST+<code>json=</code>、状态码三案、<code>timeout</code></td>
+      </tr>
+      <tr>
+        <td><code>http_agent_client.py</code></td>
+        <td>主脚本：收成 <code>get_json</code>/<code>post_json</code>，再做成 RAG→Chat 工具链</td>
+        <td>封装、<code>hits</code> 提取、异常转 <code>AgentHttpError</code>（0007 边界）</td>
+      </tr>
+    </table>
+
+    <h3><code>examples.py</code> 四个函数 ↔ <code>http_agent_client.py</code></h3>
+    <table>
+      <tr><th>examples.py</th><th>对应 client 里</th></tr>
+      <tr><td><code>show_get_basics</code>（GET + <code>params</code>）</td><td><code>get_json</code>、<code>rag_search</code></td></tr>
+      <tr><td><code>show_post_json</code>（POST + <code>json=</code>）</td><td><code>post_json</code>、<code>chat_completion</code></td></tr>
+      <tr><td><code>show_status_three_ways</code></td><td><code>raise_for_status</code> + <code>AgentHttpError</code> 转换</td></tr>
+      <tr><td><code>show_timeout_trap</code></td><td>所有调用的 <code>timeout=</code> 与 <code>Timeout</code> 分支</td></tr>
+    </table>
+    <p>读 <code>http_agent_client.py</code> 时：每个 HTTP 调用都能在 <code>examples.py</code> 找到「裸写版」；client 多了一层封装与 Agent 业务语义。</p>
+
+    <h2><code>fake_api_server.py</code> 导读（① 先读）</h2>
+    <p><strong>先定心态</strong>：本课主线是学<strong>客户端</strong>怎么发 HTTP；这个脚本扮演「对方」——假 RAG + 假 chat API。不必学成 HTTP 服务器开发，但要能看懂：<strong>客户端打的 URL / 参数 / JSON，在这里怎么被接住、怎么回 JSON</strong>。</p>
+    <pre>你跑 client / examples          fake_api_server（本脚本）
+        |  GET /rag/search?q=...     |
+        | ------------------------&gt; |  do_GET 读 path + 查询串
+        |  200 {"hits":[...]}        |  _send_json 写回
+        | &lt;------------------------ |
+
+        |  POST /v1/chat/completions |
+        |  body: {"model","messages"}|
+        | ------------------------&gt; |  do_POST 读 rfile → json.loads
+        |  200 {"choices":[...]}     |  _send_json 写回
+        | &lt;------------------------ |</pre>
+
+    <h3>整体结构（三块）</h3>
+    <ol>
+      <li><strong>启动</strong>（<code>main</code>）：<code>ThreadingHTTPServer</code> 在 <code>127.0.0.1:8765</code> 监听 → <code>serve_forever()</code> 一直等请求。</li>
+      <li><strong>路由</strong>（<code>do_GET</code> / <code>do_POST</code>）：按路径分支，决定返回 200/404/400 和 JSON 内容。</li>
+      <li><strong>发响应</strong>（<code>_send_json</code>）：把 Python dict 变成 JSON 字节，写上状态码和头，通过 <code>wfile</code> 发出去。</li>
+    </ol>
+
+    <h3>第一次见的名字：速查</h3>
+    <table>
+      <tr><th>名字</th><th>是什么</th><th>在本脚本里干什么</th></tr>
+      <tr>
+        <td><code>ThreadingHTTPServer</code></td>
+        <td>标准库里的<strong>小型 HTTP 服务器</strong>（每个请求开一个线程处理）</td>
+        <td><code>ThreadingHTTPServer((HOST, PORT), FakeAgentAPI)</code> 绑定地址并开始接客</td>
+      </tr>
+      <tr>
+        <td><code>BaseHTTPRequestHandler</code></td>
+        <td>处理「一次 HTTP 请求」的基类；子类重写方法即可</td>
+        <td><code>class FakeAgentAPI(BaseHTTPRequestHandler)</code></td>
+      </tr>
+      <tr>
+        <td><code>do_GET</code> / <code>do_POST</code></td>
+        <td>约定俗成的方法名：收到 GET/POST 时框架自动调用</td>
+        <td>里面写「这条路径返回什么」</td>
+      </tr>
+      <tr>
+        <td><code>self.path</code></td>
+        <td>本次请求的 path + 查询串，如 <code>/rag/search?q=harness&amp;top_k=2</code></td>
+        <td>用 <code>urlparse</code> 拆成路径和 <code>?后面</code></td>
+      </tr>
+      <tr>
+        <td><code>urlparse</code></td>
+        <td>把 URL 拆成 path、query 等零件</td>
+        <td><code>parsed.path</code> → <code>/rag/search</code>；<code>parsed.query</code> → <code>q=harness&amp;top_k=2</code></td>
+      </tr>
+      <tr>
+        <td><code>parse_qs</code></td>
+        <td>把查询串解析成 dict；<strong>每个键对应 list</strong>（因为同名参数可出现多次）</td>
+        <td><code>{"q": ["harness"], "top_k": ["2"]}</code></td>
+      </tr>
+      <tr>
+        <td><code>self.headers</code></td>
+        <td>客户端发来的 HTTP 头（类 dict）</td>
+        <td>POST 时读 <code>Content-Length</code> 知道 body 多长</td>
+      </tr>
+      <tr>
+        <td><code>self.rfile</code></td>
+        <td>读客户端发来的<strong>请求体</strong>（bytes 流）</td>
+        <td><code>self.rfile.read(length)</code> 读出 JSON 原文</td>
+      </tr>
+      <tr>
+        <td><code>self.wfile</code></td>
+        <td>写<strong>响应体</strong>给客户端（bytes 流）</td>
+        <td><code>self.wfile.write(body)</code> 发出 JSON 字节</td>
+      </tr>
+      <tr>
+        <td><code>send_response</code> / <code>send_header</code> / <code>end_headers</code></td>
+        <td>组 HTTP 响应：状态码 → 头字段 → 头结束</td>
+        <td>在 <code>wfile.write</code> 之前调用</td>
+      </tr>
+      <tr>
+        <td><code>.encode("utf-8")</code> / <code>.decode("utf-8")</code></td>
+        <td>字符串 ↔ 字节；网络传的是字节</td>
+        <td>发响应前 dumps 后 encode；收 body 后 decode 再 loads</td>
+      </tr>
+      <tr>
+        <td><code>serve_forever()</code></td>
+        <td>阻塞循环：一直处理请求，直到进程结束</td>
+        <td>所以假服务终端要<strong>常驻</strong></td>
+      </tr>
+      <tr>
+        <td><code>KeyboardInterrupt</code></td>
+        <td>按 Ctrl+C 时抛的异常</td>
+        <td>捕获后 <code>server_close()</code> 礼貌关机</td>
+      </tr>
+    </table>
+    <p class="muted">Java 对照：<code>ThreadingHTTPServer</code> ≈ 内嵌 Tomcat/简单 Servlet 容器；<code>do_GET</code> ≈ <code>@GetMapping</code> 处理方法；<code>_send_json</code> ≈ 手动写 <code>ResponseEntity</code> + JSON body。</p>
+
+    <h3>分段读代码</h3>
+
+    <h4>启动：<code>main()</code></h4>
+    <pre>server = ThreadingHTTPServer((HOST, PORT), FakeAgentAPI)
+server.serve_forever()</pre>
+    <ul>
+      <li><code>(HOST, PORT)</code> = 元组：<code>127.0.0.1</code> 是本机回环地址，只有本机能连；<code>8765</code> 是端口。</li>
+      <li>第二个参数 <code>FakeAgentAPI</code>：告诉服务器「每个请求用哪个 Handler 类来处理」。</li>
+      <li><code>if __name__ == "__main__"</code>：只有直接 <code>python fake_api_server.py</code> 时才跑 <code>main()</code>；被 import 时不自动起服务。</li>
+    </ul>
+
+    <h4>发 JSON：<code>_send_json(status, payload)</code></h4>
+    <pre>body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+self.send_response(status)                    # 如 200、404
+self.send_header("Content-Type", "...")     # 告诉对方：正文是 JSON
+self.send_header("Content-Length", str(len(body)))
+self.end_headers()                            # 头结束
+self.wfile.write(body)                        # 正文字节写出</pre>
+    <p>这是「服务端版的响应组装」——和客户端 <code>response.json()</code> 读到的内容对应。客户端 <code>requests</code> 帮你做好了读；这里是手写「怎么发」。</p>
+
+    <h4>GET 路由：<code>do_GET</code></h4>
+    <pre>parsed = urlparse(self.path)
+if parsed.path == "/health": ...
+if parsed.path == "/rag/search":
+    qs = parse_qs(parsed.query)
+    query = (qs.get("q") or [""])[0]      # 见下「易混写法」
+    top_k_raw = (qs.get("top_k") or ["3"])[0]
+    top_k = max(1, min(int(top_k_raw), 10))  # 限制 1～10
+    self._send_json(200, {"query": query, "hits": docs[:top_k]})</pre>
+    <p><strong>易混写法</strong> <code>(qs.get("q") or [""])[0]</code>：因为 <code>parse_qs</code> 返回的是「键 → 列表」，没有 <code>q</code> 时用空字符串列表 <code>[""]</code>，再取第一个元素。等价于「取查询参数 q，缺省为空串」。</p>
+    <p><code>docs[:top_k]</code>：列表切片，只返回前 <code>top_k</code> 条 hit——和客户端 <code>params={"top_k": 2}</code> 对上。</p>
+
+    <h4>POST 路由：<code>do_POST</code></h4>
+    <pre>length = int(self.headers.get("Content-Length", "0"))
+raw = self.rfile.read(length) if length else b"{}"
+data = json.loads(raw.decode("utf-8") or "{}")</pre>
+    <ul>
+      <li>POST 的 JSON 在<strong>身体</strong>里，不在 URL；必须先读长度再 <code>read</code>。</li>
+      <li><code>b"{}"</code>：bytes 字面量；空 body 时当空对象。</li>
+      <li>后面从 <code>data</code> 取 <code>model</code>、<code>messages</code>，拼假回复，形状模仿 OpenAI chat completion（<code>choices[0].message.content</code>），方便 <code>chat_completion</code> 解析。</li>
+    </ul>
+    <pre>for msg in reversed(messages):
+    if msg.get("role") == "user":
+        last_user = str(msg.get("content", ""))
+        break</pre>
+    <p><code>reversed(messages)</code>：从后往前找，取<strong>最后一条 user 消息</strong>（多轮对话时常见需求）。</p>
+
+    <h3>本脚本提供的四条路由（客户端对照表）</h3>
+    <table>
+      <tr><th>方法</th><th>路径</th><th>客户端怎么打</th><th>返回要点</th></tr>
+      <tr><td>GET</td><td><code>/health</code></td><td><code>requests.get(.../health)</code></td><td><code>{"ok": true, ...}</code></td></tr>
+      <tr><td>GET</td><td><code>/rag/search</code></td><td><code>params={"q", "top_k"}</code></td><td><code>{"query", "hits": [...]}</code></td></tr>
+      <tr><td>POST</td><td><code>/v1/chat/completions</code></td><td><code>json={"model","messages"}</code></td><td><code>{"choices": [{"message": {...}}]}</code></td></tr>
+      <tr><td>GET</td><td><code>/status/404</code></td><td>故意练 404</td><td>状态 404 + JSON <code>error</code></td></tr>
+    </table>
+    <p>读 client / examples 时，随时回这张表对照「我打的是什么、假服务在哪一行接住」。</p>
+
+    <h2>主脚本导读</h2>
+    <div class="box steps">
+      <ol>
+        <li>先读课件 <strong>§3 参数填空手册</strong>，再读 <strong>§10 Headers</strong>——搞清 <code>url / params / json / headers / timeout</code> 各填什么。</li>
+        <li>按上表顺序读四个脚本：① 假服务 → ② <code>post_body_styles</code>（或先 ③）→ ③ <code>examples</code> → ④ <code>http_agent_client</code>。</li>
+        <li>启动 <a href="../../playground/python/0010-requests/fake_api_server.py"><code>fake_api_server.py</code></a>（另开终端，保持运行）后再跑 ③、④。</li>
+      </ol>
+    </div>
+
+    <h2>先跑起来</h2>
+    <div class="box steps">
+      <ol>
+        <li>终端 A：<pre>cd D:\agent-learning\playground\python
+.\.venv\Scripts\Activate.ps1
+python 0010-requests\fake_api_server.py</pre></li>
+        <li>终端 B：<pre>cd D:\agent-learning\playground\python
+.\.venv\Scripts\Activate.ps1
+python 0010-requests\post_body_styles.py
+python 0010-requests\examples.py
+python 0010-requests\http_agent_client.py</pre></li>
+        <li>关掉假服务后再跑 <code>examples.py</code>，应看到「连不上假 API」的明确退出信息（转换后的失败路径）。</li>
+      </ol>
+    </div>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>忘记 timeout：</strong>服务挂起 → 脚本假死；Agent 工具必须设超时。</li>
+        <li><strong>只调 <code>json()</code> 不看状态：</strong>错误页也可能是 JSON，业务会误读。</li>
+        <li><strong><code>data=</code> 当 JSON：</strong>Content-Type 变表单，服务端解析失败或字段全空。</li>
+        <li><strong>手拼 query：</strong>中文/空格炸掉；用 <code>params=</code>。</li>
+        <li><strong>密钥进仓库：</strong>Token 放环境变量或本地未跟踪配置，不要写死在课件脚本里。</li>
+        <li><strong>异常范围：</strong>窄 try；不要把整个 agent loop 塞进一个裸 <code>except</code>。</li>
+        <li><strong>Java 易混：</strong>requests 默认宽松（非 2xx 不自动抛）；要显式 <code>raise_for_status</code>。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz data-ok="对。官方明确提醒：json() 成功不等于 HTTP 成功。" data-bad="必须先看状态码或 raise_for_status。"><p>为何不能只靠 <code>response.json()</code> 判断调用成功？</p>
+      <button data-correct="true">错误响应也可能是合法 JSON</button>
+      <button data-correct="false">json() 会自动检查状态码</button>
+      <button data-correct="false">json() 只会在 200 时可用</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。json= 会序列化并设置 application/json。" data-bad="data=dict 走的是表单编码，不是 JSON。"><p>向 chat API 提交 JSON 对象，应优先用？</p>
+      <button data-correct="true">json=payload</button>
+      <button data-correct="false">data=payload</button>
+      <button data-correct="false">params=payload</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。不设 timeout 可能无限等待。" data-bad="timeout 不是可选装饰，是生产必需。"><p>Agent 工具发 HTTP 时，timeout 应该？</p>
+      <button data-correct="true">几乎总是显式设置</button>
+      <button data-correct="false">永远省略更稳定</button>
+      <button data-correct="false">只在 POST 时需要</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。raise_for_status 在非 2xx 时抛 HTTPError。" data-bad="它不会改写 body，也不会自动重试。"><p><code>response.raise_for_status()</code> 的作用是？</p>
+      <button data-correct="true">非 2xx 时抛出 HTTPError</button>
+      <button data-correct="false">把正文自动写成文件</button>
+      <button data-correct="false">把超时时间翻倍重试</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。params 负责查询串编码与拼接。" data-bad="json= 是请求体；headers 是头。"><p>GET 检索接口的 <code>q</code>/<code>top_k</code> 应放在？</p>
+      <button data-correct="true">params 字典</button>
+      <button data-correct="false">json 请求体</button>
+      <button data-correct="false">只能手写进路径</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。Timeout 属于 RequestException 家族。" data-bad="HTTPError 是状态码问题；JSONDecodeError 是正文解析。"><p>连接成功但等待响应过久，通常抛？</p>
+      <button data-correct="true">requests.Timeout</button>
+      <button data-correct="false">requests.HTTPError</button>
+      <button data-correct="false">KeyError</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。工具边界应转换语义并保留原因链。" data-bad="裸 except 和静默空字典会掩盖故障。"><p>工具函数遇到 HTTP 404，更合适的是？</p>
+      <button data-correct="true">转换后上抛业务错误</button>
+      <button data-correct="false">静默返回空字典</button>
+      <button data-correct="false">使用裸 except 忽略</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。顺序应是先保证成功再解析。" data-bad="先 json 再 raise 可能误解析错误页。"><p>推荐调用顺序是？</p>
+      <button data-correct="true">请求 → raise_for_status → json</button>
+      <button data-correct="false">请求 → json → raise_for_status</button>
+      <button data-correct="false">json → 请求 → timeout</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。json= 是关键字参数，必须写参数名。" data-bad="第二个位置参数不是 JSON body。"><p>向 API 提交 dict 身体，正确写法是？</p>
+      <button data-correct="true">requests.post(url, json=payload)</button>
+      <button data-correct="false">requests.post(url, payload)</button>
+      <button data-correct="false">requests.post(json=url, payload)</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。鉴权信息放 headers 字典。" data-bad="Token 不应塞进 json 身体当业务字段（除非文档要求）。"><p>Bearer Token 通常放在哪个参数？</p>
+      <button data-correct="true">headers</button>
+      <button data-correct="false">params</button>
+      <button data-correct="false">timeout</button>
+      <p class="feedback"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能按 §3 口述：<code>url / params / json / data / headers / timeout</code> 各填什么、GET 与 POST 各常用哪几个。</li>
+      <li>能手写一趟 <code>requests.post(url, json=..., headers=..., timeout=...)</code>，并说明为何不能写成 <code>post(url, payload)</code>。</li>
+      <li>能区分 Response 的 <code>status_code</code> / <code>text</code> / <code>json()</code>，并说明为何要先 <code>raise_for_status</code>。</li>
+      <li>能口述 POST 身体三案与 timeout 三案；能说明 Header 与 Body 的分工。</li>
+      <li>能读懂 <code>http_agent_client.py</code> 如何把业务参数映射到 requests 参数。</li>
+      <li>能按课件「练习脚本：阅读顺序与关系」说出四个脚本的顺序与分工。</li>
+      <li>能口述 <code>fake_api_server</code> 三块结构（启动 / do_GET·do_POST 路由 / _send_json）及 <code>rfile</code> vs <code>wfile</code>。</li>
+      <li>假服务启动后，三个客户端脚本（<code>post_body_styles</code> 除外）运行通过。</li>
+    </ul>
+
+    <h2>选读与速查</h2>
+    <div class="box">
+      <p><strong>权威出处</strong></p>
+      <ul>
+        <li><a href="https://docs.python-requests.org/en/stable/user/quickstart/">Requests Quickstart</a>（本课主来源）</li>
+        <li><a href="https://docs.python-requests.org/en/stable/api/">Requests API</a>：Timeout / HTTPError / Response</li>
+      </ul>
+      <p><strong>本地衔接</strong></p>
+      <ul>
+        <li><a href="./0008-json-config-and-tool-call.html">0008 JSON</a>：对象 ↔ 文本</li>
+        <li><a href="./0007-files-and-exceptions.html">0007 异常范式</a>：转换后上抛</li>
+        <li><a href="./0009-type-hints-reading-agent-code.html">0009 类型标注</a>：客户端函数签名</li>
+      </ul>
+    </div>
+    <p><a href="../../reference/python-phase0.html#http">Python 阶段 0 速查：HTTP / requests</a> · <a href="../../GLOSSARY.md">GLOSSARY.md</a> · <a href="../../reference/index.html">速查索引</a></p>
+    <div data-lesson-id-footer="0010"></div>
+    <footer>不清楚的立刻问我。跑完或卡住，把输出贴回来。下一课：<a href="./0011-python-packages-and-venv.html">0011 包管理与 requirements</a>。</footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

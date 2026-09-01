@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0011 · 包管理与虚拟环境：读 Agent 项目的 requirements</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0011"></div>
+    <h1>包管理与虚拟环境：clone 之后先装什么</h1>
+    <p class="mission">0010 用了第三方库 <code>requests</code>——它不是标准库，必须<strong>装进当前项目的 Python 环境</strong>。读任何 Agent/RAG 仓库时，README 几乎都有 <code>pip install -r requirements.txt</code>。本课主技能是 <strong>venv + pip + requirements.txt</strong>；载体是「模仿 Agent 项目依赖清单」的本地练习。</p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">主来源：<a href="https://pip.pypa.io/en/stable/user_guide/">pip User Guide</a>、<a href="https://docs.python.org/3/library/venv.html">venv</a>。100-Days 包管理 / 模块安装相关节作选读；本课<strong>不走</strong>发布 PyPI 包、<code>poetry</code>/<code>uv</code> 全流程（仅作视野）。</p>
+    <table>
+      <tr><th>来源要点</th><th>本课处理</th></tr>
+      <tr><td>为何需要 venv（项目隔离）</td><td><span class="tag">已内化</span>讲解 2（加厚：本仓库结构 + .venv 解剖）</td></tr>
+      <tr><td><code>python -m pip install</code> / <code>install -r</code></td><td><span class="tag">已内化</span>讲解 3–4</td></tr>
+      <tr><td><code>requirements.txt</code> 格式与固定版本</td><td><span class="tag">已内化</span>讲解 5</td></tr>
+      <tr><td><code>pip list</code> / <code>show</code> / <code>freeze</code></td><td><span class="tag">已内化</span>讲解 6</td></tr>
+      <tr><td><code>import</code> 与 pip 包名不一致</td><td><span class="tag">已内化</span>讲解 7（认即可）</td></tr>
+      <tr><td>clone Agent 仓库标准起手式</td><td><span class="tag">已内化</span>讲解 8 + 脚本导读</td></tr>
+      <tr><td>为何 .venv 不进 git、声明 vs 实例</td><td><span class="tag">已内化</span>讲解 2.8</td></tr>
+      <tr><td><code>pyproject.toml</code> / Poetry / uv 项目</td><td><span class="tag">扫一眼</span>见 §9；阶段 0 认 requirements 即可</td></tr>
+      <tr><td>自己发 PyPI、打 wheel</td><td><span class="tag">跳过</span>与使命无关</td></tr>
+    </table>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>Python</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr><td><code>venv</code></td><td>项目级 classpath / 独立 module path</td><td>一个目录里的 Python 副本 + 独立 site-packages</td></tr>
+      <tr><td><code>pip install requests</code></td><td>Maven <code>dependency</code> / Gradle <code>implementation</code></td><td>即时下载安装，无编译期绑定到单一仓库格式</td></tr>
+      <tr><td><code>requirements.txt</code></td><td><code>pom.xml</code> / <code>build.gradle</code> 依赖块</td><td>纯文本清单；常手写或 <code>pip freeze</code> 生成</td></tr>
+      <tr><td><code>python -m pip</code></td><td>用项目 JDK 的 <code>mvn</code></td><td><code>-m pip</code> 绑定「当前 python.exe」</td></tr>
+      <tr><td><code>import requests</code></td><td><code>import</code> 已解析的 jar</td><td>运行时从 site-packages 找模块；名有时 ≠ pip 包名</td></tr>
+    </table>
+
+    <h2>系统讲解</h2>
+
+    <h3>1. 标准库 vs 第三方包</h3>
+    <p><strong>标准库</strong>：装 Python 时自带（<code>json</code>、<code>pathlib</code>、<code>http.server</code>）。<strong>第三方包</strong>：别人发布、你要额外装（<code>requests</code>、<code>langchain</code>、<code>openai</code>）。</p>
+    <pre>import json          # 标准库，不用 pip
+import requests      # 第三方，要先 pip install requests</pre>
+    <p>Agent 项目依赖往往几十个第三方包 → 必须用<strong>清单文件</strong>（如本课 <code>requirements-agent-demo.txt</code>，真仓库常叫 <code>requirements.txt</code>）做可复现安装。</p>
+
+    <h3 id="project-layout">2. 本仓库项目结构与 <code>.venv</code>（加厚）</h3>
+    <p>学包管理不能只会背命令，还要知道<strong>文件在哪、venv 在哪、什么该进 git</strong>。下面全是<strong>你当前这个教学仓</strong>的真实安排。</p>
+
+    <h4>2.1 <code>agent-learning</code> 根目录：两套东西分开</h4>
+    <pre>d:\agent-learning\
+├── lessons\              ← 课件 HTML（进 git，主教材）
+├── assets\               ← 课样式、curriculum.js（进 git）
+├── reference\            ← 速查页（进 git）
+├── GLOSSARY.md           ← 术语（进 git）
+├── learning-records\     ← 过关记录（进 git）
+├── NOTES.md / MISSION.md
+├── python-100Days\       ← 上游教材仓（独立 git，别塞练习脚本）
+├── learn-claude-code-north\  ← 上游实战仓（独立 git）
+└── playground\           ← 你的练习代码 + .venv（.gitignore，不进 git）</pre>
+    <table>
+      <tr><th>区域</th><th>干什么</th><th>是否进教学 git</th></tr>
+      <tr><td><code>lessons/</code>、<code>reference/</code></td><td>读、复习、打印</td><td>是</td></tr>
+      <tr><td><code>playground/python/</code></td><td>跑脚本、装包、写实验</td><td><strong>否</strong>（整目录忽略）</td></tr>
+      <tr><td><code>playground/python/.venv</code></td><td>本练习场专用 Python + 已装第三方包</td><td><strong>绝不提交</strong></td></tr>
+      <tr><td><code>python-100Days/</code></td><td>选读原文</td><td>子项目自己的 git</td></tr>
+    </table>
+    <p class="muted">Java 对照：课件 ≈ 文档仓；<code>playground</code> ≈ 你本地 IDE 工程目录；<code>.venv</code> ≈ 该工程绑定的依赖缓存，不随文档仓分发。</p>
+
+    <h4>2.2 <code>playground/python/</code>：阶段 0 统一练习场</h4>
+    <pre>playground/python/                    ← 所有课共用一个根（先 cd 到这里）
+├── .venv\                            ← 虚拟环境（0001 创建，0011 仍用它）
+│   ├── Scripts\
+│   │   ├── python.exe                ← 激活后「python」指向这里
+│   │   ├── pip.exe
+│   │   └── Activate.ps1              ← PowerShell 激活脚本
+│   └── Lib\site-packages\            ← pip install 落盘处（requests 在这里）
+│       └── requests\ ...
+├── 0001-hello\hello_agent.py
+├── 0010-requests\
+│   ├── fake_api_server.py
+│   ├── examples.py
+│   └── http_agent_client.py
+├── 0011-packages\
+│   ├── requirements-agent-demo.txt   ← 清单文件（模仿 Agent 的 requirements.txt）
+│   ├── parse_requirements.py
+│   └── show_venv_context.py
+└── …（按课号分子目录，越往后越多）</pre>
+    <ul>
+      <li><strong>约定</strong>：脚本按 <code>课号-主题/</code> 分文件夹；<strong>不按课</strong>各建一个 venv——否则每课都要重装 LangChain 类大包，浪费时间。</li>
+      <li><strong>工作目录</strong>：终端先 <code>cd playground\python</code>，再 <code>python 0011-packages\examples.py</code>（相对路径从练习场根算起）。</li>
+      <li><strong>清单文件放哪</strong>：真 Agent 项目多在仓库根 <code>requirements.txt</code>；本课演示放在 <code>0011-packages/requirements-agent-demo.txt</code>，语义相同。</li>
+    </ul>
+
+    <h4>2.3 <code>.venv</code> 里到底有什么</h4>
+    <p><strong>venv</strong>（virtual environment）不是「又一个 Python 安装程序」，而是<strong>一份可复制的运行时布局</strong>：指向你本机已装 Python 的轻量壳 + 独立 <code>site-packages</code>。</p>
+    <table>
+      <tr><th>路径（Windows）</th><th>是什么</th></tr>
+      <tr><td><code>.venv\Scripts\python.exe</code></td><td>激活后你用的解释器；<code>show_venv_context</code> 的 <code>sys.executable</code> 应指向它</td></tr>
+      <tr><td><code>.venv\Scripts\Activate.ps1</code></td><td>激活脚本：改 PATH，让 <code>python</code> / <code>pip</code> 优先用 venv 里那份</td></tr>
+      <tr><td><code>.venv\Lib\site-packages\</code></td><td>第三方包目录；<code>pip install requests</code> 把包装进这里</td></tr>
+      <tr><td><code>sys.prefix</code></td><td>运行时报告的环境根，venv 里通常是 <code>...\playground\python\.venv</code></td></tr>
+    </table>
+    <pre># 激活前（示意）：python 可能指向系统安装
+C:\Users\...\AppData\...\python.exe
+
+# 激活后：同一终端里
+D:\agent-learning\playground\python\.venv\Scripts\python.exe</pre>
+    <p><strong>site-packages</strong>：第三方包落盘文件夹。标准库（<code>json</code>、<code>sys</code>）仍在 Python 安装目录；只有 pip 装的包在 venv 的 site-packages。</p>
+
+    <h4>2.4 什么进 git、什么不进</h4>
+    <table>
+      <tr><th>文件/目录</th><th>进 git？</th><th>原因</th></tr>
+      <tr><td><code>requirements*.txt</code></td><td>真项目：是；本练习场：在 playground 里故也不进教学 git</td><td>记录「要装什么」；体积小、可复现</td></tr>
+      <tr><td><code>.venv/</code></td><td><strong>从不</strong></td><td>体积大、含平台路径；每人 <code>python -m venv .venv</code> + <code>pip install -r</code> 本地生成</td></tr>
+      <tr><td><code>playground/</code> 整目录</td><td>本教学仓：否（.gitignore）</td><td>练习脚本与 venv 都是本地产物</td></tr>
+      <tr><td>你的练习 <code>*.py</code></td><td>本仓：随 playground 忽略；真 Agent 仓：是</td><td>源码要共享；环境不共享</td></tr>
+    </table>
+    <p><strong>不要</strong>把同事的 <code>.venv</code> 文件夹拷过来——路径、平台、小版本都可能不对。正确流程：clone → 自己建 venv → <code>install -r</code>。</p>
+
+    <h4>2.5 激活（activate）到底做了什么</h4>
+    <p>激活<strong>不会</strong>再装一遍 Python；它只是让当前 shell「默认用 <code>.venv\Scripts</code> 里的 python/pip」。</p>
+    <ol>
+      <li>你在 <code>playground\python</code> 执行 <code>.\.venv\Scripts\Activate.ps1</code></li>
+      <li>PATH 前面插入 <code>.venv\Scripts</code></li>
+      <li>此后 <code>python</code>、<code>pip</code> 命令走 venv</li>
+      <li><code>python -m pip install</code> 与 <code>pip install</code> 在激活后通常一致；仍推荐 <code>-m pip</code> 防 IDE/多 Python 混乱</li>
+    </ol>
+    <p>IDE（Cursor）：终端激活 ≠ IDE 解释器自动对齐；若终端能 <code>import requests</code> 但 IDE 红线，在设置里把解释器选为 <code>playground\python\.venv\Scripts\python.exe</code>。</p>
+
+    <h4>2.6 和将来 clone 的 Agent 仓库类比</h4>
+    <table>
+      <tr><th>本教学仓</th><th>典型 Agent 开源仓</th></tr>
+      <tr><td><code>playground/python/</code></td><td>仓库根或 <code>backend/</code>、<code>python/</code></td></tr>
+      <tr><td><code>playground/python/.venv</code></td><td>项目根 <code>.venv</code>（常见名，可自定义）</td></tr>
+      <tr><td><code>0011-packages/requirements-agent-demo.txt</code></td><td><code>requirements.txt</code> 或 <code>pyproject.toml</code></td></tr>
+      <tr><td><code>lessons/phase-0/</code></td><td><code>README.md</code> + 文档站</td></tr>
+    </table>
+    <pre>cd playground\python
+python -m venv .venv          # 创建（0001 已做过，一般不必重复）
+.\.venv\Scripts\Activate.ps1  # 激活
+python 0011-packages\show_venv_context.py   # 核对 executable 含 .venv</pre>
+
+    <h4 id="activate-faq">2.7 三个常问：不激活能用吗？激活干啥？版本怎么同步？</h4>
+
+    <p><strong>Q1：「激活后 python 指向 .venv」——不激活就不能用吗？</strong></p>
+    <p>不是。<code>.venv\Scripts\python.exe</code> <strong>一直存在、一直可用</strong>。激活只是让你在终端里打短命令 <code>python</code> 时，不用每次写全路径。</p>
+    <table>
+      <tr><th>方式</th><th>命令示例</th><th>用的哪个 Python</th></tr>
+      <tr><td>未激活，打 <code>python</code></td><td><code>python script.py</code></td><td>PATH 里<strong>第一个</strong> python——通常是<strong>系统安装</strong>或 py launcher，<strong>不是</strong> .venv</td></tr>
+      <tr><td>未激活，写全路径</td><td><code>.venv\Scripts\python.exe script.py</code></td><td><strong>就是</strong> 练习场 venv，与激活后等价</td></tr>
+      <tr><td>已激活，打 <code>python</code></td><td><code>python script.py</code></td><td>.venv（因为 PATH 前面插了 <code>Scripts</code>）</td></tr>
+      <tr><td>推荐（可不激活）</td><td><code>.\.venv\Scripts\python.exe -m pip install ...</code></td><td>显式绑定 venv，不依赖 PATH</td></tr>
+    </table>
+    <p class="muted">本仓库里你常看到 <code>.\.venv\Scripts\python.exe 0011-packages\examples.py</code>——<strong>没激活也能跑</strong>，因为路径已经写死到 venv 的 python。</p>
+
+    <p><strong>Q2：激活脚本（<code>Activate.ps1</code>）的作用是什么？</strong></p>
+    <p>它<strong>只改当前这个终端会话</strong>的环境，不会修改系统、不会重装 Python、不会写进 git。</p>
+    <ul>
+      <li><strong>主要</strong>：把 <code>.venv\Scripts</code> 插到 <code>PATH</code> 最前面 → <code>python</code> / <code>pip</code> 命令优先找到 venv 里的 exe</li>
+      <li><strong>常见</strong>：设置环境变量 <code>VIRTUAL_ENV</code>（指向 <code>.venv</code> 路径），部分工具靠它识别「我在 venv 里」</li>
+      <li><strong>不会</strong>：复制一份新的 Python 安装包；venv 创建时已经链好本机 Python 3.12</li>
+      <li><strong>关闭终端</strong> 或 <code>deactivate</code> 后，PATH 恢复，又回到「打 python 可能是系统 Python」</li>
+    </ul>
+    <pre># 激活 ≈ 给当前 PowerShell 贴一张便签：「python 请用 .venv\Scripts 里的」
+.\.venv\Scripts\Activate.ps1
+
+# 未激活但等价写法（便签没贴，但手写全路径）
+.\.venv\Scripts\python.exe your_script.py</pre>
+
+    <p><strong>Q3：<code>.venv</code> 进不进 git？Python 版本怎么和大家保持一致？</strong></p>
+    <table>
+      <tr><th>问题</th><th>答案</th></tr>
+      <tr><td><code>.venv</code> 进 git 吗？</td><td><strong>不进</strong>。本教学仓 <code>playground/</code> 与 <code>.venv/</code> 均在 .gitignore；真 Agent 仓也一样只提交源码 + 依赖描述</td></tr>
+      <tr><td>那大家装什么包？</td><td>提交 <code>requirements.txt</code>（或 <code>pyproject.toml</code>）→ 每人本地 <code>pip install -r</code></td></tr>
+      <tr><td>Python <strong>解释器</strong>版本怎么同步？</td><td><strong>不靠 .venv 文件夹</strong>；靠 README / <code>requires-python = "&gt;=3.11"</code> / <code>.python-version</code> 等<strong>文字约定</strong></td></tr>
+      <tr><td>每人具体怎么做？</td><td>先装对版本的系统 Python（如 3.12）→ <code>python3.12 -m venv .venv</code> → <code>pip install -r requirements.txt</code></td></tr>
+    </table>
+    <p><code>requirements.txt</code> 锁定的是<strong>第三方包版本</strong>（requests 2.34.2），<strong>不</strong>自动锁定「你必须用 Python 3.12.9」。解释器大版本由 README 约定；小版本差异（3.12.8 vs 3.12.9）通常可接受。</p>
+    <pre># 真项目 README 常见三行
+Python 3.11+
+python -m venv .venv
+pip install -r requirements.txt</pre>
+
+    <h4 id="why-separate">2.8 辨析：为什么「README + 依赖清单」进 git，<code>.venv</code> 不进？</h4>
+    <p>一句话：<strong>git 管「要什么」；本机 <code>.venv</code> 是「已经装好的那一坨」</strong>，每人按同一清单自己重建。</p>
+
+    <table>
+      <tr><th>进 git（声明）</th><th>不进 git（本机实例）</th></tr>
+      <tr><td><code>requirements.txt</code> / <code>pyproject.toml</code></td><td><code>.venv/</code> 整个目录</td></tr>
+      <tr><td>README：Python 3.11+、建 venv、安装命令</td><td><code>Lib\site-packages</code> 里下载好的 wheel</td></tr>
+      <tr><td>源码 <code>*.py</code>（真 Agent 仓）</td><td>本教学仓整个 <code>playground/</code></td></tr>
+    </table>
+
+    <p><strong>声明 vs 实例</strong></p>
+    <ul>
+      <li><strong>requirements.txt</strong> = 声明：「需要 requests&gt;=2.31」——小文本、可 diff、PR 里能 review（≈ Maven <code>pom.xml</code> 依赖块）</li>
+      <li><strong>.venv</strong> = 实例：pip 已解析、已下载、已落盘的环境（≈ 本机 Maven 缓存 / <code>target/</code>，不当源码分发）</li>
+    </ul>
+
+    <p><strong>为什么不把 <code>.venv</code> 提交进 git？</strong></p>
+    <table>
+      <tr><th>原因</th><th>说明</th></tr>
+      <tr><td>体积</td><td>常几百 MB；拖慢 clone、污染历史</td></tr>
+      <tr><td>平台</td><td>Windows <code>Scripts\</code> vs Linux <code>bin/</code>；路径写死在你机器上，拷到别人电脑易坏</td></tr>
+      <tr><td>可复现方式</td><td>目标是「按清单<strong>重建</strong>等价环境」，不是「共享同一个物理文件夹」；CI 也是每次新建 venv + <code>install -r</code></td></tr>
+      <tr><td>安全与审计</td><td>清单改一行依赖，PR 一眼可见；整包 .venv 难审查</td></tr>
+    </table>
+
+    <p><strong>Python 解释器版本谁管？</strong></p>
+    <ul>
+      <li><code>requirements.txt</code> 锁<strong>第三方包</strong>版本，<strong>不</strong>锁「你必须 Python 3.12.9」</li>
+      <li>解释器<strong>大版本</strong>（3.11 vs 3.12）靠 README、<code>requires-python</code>、<code>.python-version</code> 等<strong>文字约定</strong></li>
+      <li>每人：本机先装对版本的 Python → <code>python -m venv .venv</code> → <code>pip install -r</code></li>
+    </ul>
+    <p class="muted"><code>.venv\pyvenv.cfg</code>（你可打开看）记录「这个 venv 是用哪台机器上的哪个 Python 创建的」——是<strong>本地元数据</strong>，本教学仓随 playground 不进 git；不能代替 README 里的版本说明。</p>
+
+    <p><strong>和 Java 对照</strong></p>
+    <table>
+      <tr><th>Python</th><th>Java</th></tr>
+      <tr><td><code>requirements.txt</code></td><td><code>pom.xml</code> / <code>build.gradle</code> 依赖</td></tr>
+      <tr><td>本地 <code>.venv</code></td><td>本地 <code>~/.m2</code>、<code>target/</code>（不进业务 git）</td></tr>
+      <tr><td>README「Python 3.11+」</td><td>README「JDK 17」</td></tr>
+      <tr><td>clone → venv → <code>install -r</code></td><td>clone → 用约定 JDK → <code>mvn install</code></td></tr>
+    </table>
+
+    <p><strong>标准流程（真 Agent 仓与你本练习场同一逻辑）</strong></p>
+    <pre>git clone ...
+# 读 README → Python 版本、依赖文件名
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1          # 或全路径 .venv\Scripts\python.exe
+python -m pip install -r requirements.txt
+python -m pip list                    # 或跑 README smoke 命令</pre>
+
+    <h3>3. pip 是什么；为什么写 <code>python -m pip</code></h3>
+    <p><strong>pip</strong> = Python 的包安装器（Package Installer for Python）。从 PyPI 等源下载并装进当前环境的 site-packages。</p>
+    <pre>python -m pip install requests     # 推荐：绑定当前 python.exe
+pip install requests               # 可能指向别的 Python（激活错时踩坑）</pre>
+    <p><code>python -m pip</code> 的含义：用「当前这个 Python 解释器」去运行 pip 模块——和 Java 用项目 JDK 跑 <code>mvn</code> 同一纪律。</p>
+
+    <h3>4. 安装命令三案</h3>
+    <table>
+      <tr><th>命令</th><th>干什么</th><th>Agent 场景</th></tr>
+      <tr><td><code>pip install requests</code></td><td>装单个包（最新或 resolver 选的版本）</td><td>临时试一个库</td></tr>
+      <tr><td><code>pip install "requests&gt;=2.31"</code></td><td>带版本约束安装</td><td>README 常见</td></tr>
+      <tr><td><code>pip install -r requirements.txt</code></td><td>按清单批量装</td><td><strong>clone 仓库后第一步</strong></td></tr>
+    </table>
+    <pre>cd playground\python
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r 0011-packages\requirements-agent-demo.txt</pre>
+
+    <h3>5. requirements.txt 怎么读</h3>
+    <p><strong>requirements.txt</strong> = 依赖清单文本文件，一行一个依赖。</p>
+    <pre># 注释行，pip 会跳过
+requests&gt;=2.31.0
+# 常见运算符：== 精确；&gt;= / &lt;= 范围；~= 兼容发布（了解）</pre>
+    <p>本课练习文件 <code>requirements-agent-demo.txt</code> 只有 <code>requests</code>（0010 已用过）。脚本 <code>parse_requirements.py</code> 演示如何<strong>读文件、跳过注释、拆包名</strong>（不调用 pip）。</p>
+
+    <h3>6. 装完之后怎么查：<code>list</code> / <code>show</code> / <code>freeze</code></h3>
+    <table>
+      <tr><th>命令</th><th>输出什么</th></tr>
+      <tr><td><code>pip list</code></td><td>当前环境已装包及版本（表格）</td></tr>
+      <tr><td><code>pip show requests</code></td><td>单个包元数据（版本、依赖、安装位置）</td></tr>
+      <tr><td><code>pip freeze</code></td><td><code>包==版本</code> 行，适合生成锁定清单</td></tr>
+    </table>
+    <p>脚本 <code>pip_commands_demo.py</code> 用 <code>subprocess</code> 跑 <code>python -m pip list/show</code>，避免你记错「当前是哪个 pip」。</p>
+
+    <h3>7. pip 包名 vs <code>import</code> 名（认即可）</h3>
+    <p>多数一致（<code>requests</code>）；少数不同，例如 pip 装 <code>pillow</code>、代码里 <code>import PIL</code>。读 requirements 后验证能否跑，用 <code>check_imports.py</code> 或亲手 <code>import</code>。</p>
+
+    <h3>8. clone Agent 仓库后的标准起手式</h3>
+    <ol>
+      <li>读 README：Python 版本、是否要求 venv</li>
+      <li><code>python -m venv .venv</code> + 激活</li>
+      <li><code>python -m pip install -r requirements.txt</code>（或 README 写的文件名）</li>
+      <li><code>python -m pip list</code> 或跑 README 里的 smoke 命令</li>
+      <li>再读源码 / 跑 agent</li>
+    </ol>
+    <p>二次开发前务必在<strong>独立 venv</strong>里装依赖，不要污染全局 Python。</p>
+
+    <h3>9. 视野：<code>pyproject.toml</code>（本课不考操作）</h3>
+    <p>新项目常用 <code>pyproject.toml</code> + Poetry / uv 管依赖，语义类似 Maven POM。你阶段 0 只要：见到 README 说 <code>pip install -r requirements.txt</code> 能执行；见到 <code>uv sync</code> / <code>poetry install</code> 知道是另一类工具即可。</p>
+
+    <h3>10. 易混三案：包装错地方</h3>
+    <table>
+      <tr><th>情况</th><th>现象</th><th>对策</th></tr>
+      <tr><td>没激活 venv 就 pip install</td><td>装进系统 Python；项目里仍 ImportError</td><td>先激活；用 <code>python -m pip</code></td></tr>
+      <tr><td>激活了但 IDE 用另一个解释器</td><td>终端能跑、IDE 报错</td><td>IDE 选 <code>.venv\Scripts\python.exe</code></td></tr>
+      <tr><td>忘了 <code>-r</code></td><td>只装了部分包</td><td>完整 <code>install -r requirements.txt</code></td></tr>
+    </table>
+
+    <h2>练习脚本：阅读顺序与关系</h2>
+    <table>
+      <tr><th>顺序</th><th>脚本</th><th>学什么</th></tr>
+      <tr><td>①</td><td><a href="../../playground/python/0011-packages/show_venv_context.py"><code>show_venv_context.py</code></a></td><td>练习场路径 + <code>python.exe</code> + site-packages（对照课件 <a href="#project-layout">§2</a>）</td></tr>
+      <tr><td>②</td><td><a href="../../playground/python/0011-packages/parse_requirements.py"><code>parse_requirements.py</code></a></td><td>读 requirements 文本（注释、版本运算符）</td></tr>
+      <tr><td>③</td><td><a href="../../playground/python/0011-packages/check_imports.py"><code>check_imports.py</code></a></td><td>清单里的包能否 <code>import</code></td></tr>
+      <tr><td>④</td><td><a href="../../playground/python/0011-packages/pip_commands_demo.py"><code>pip_commands_demo.py</code></a></td><td><code>pip list</code> / <code>show</code> 长什么样</td></tr>
+      <tr><td>—</td><td><a href="../../playground/python/0011-packages/examples.py"><code>examples.py</code></a></td><td>按序跑 ①–④</td></tr>
+    </table>
+    <pre>playground/python/0011-packages/
+  requirements-agent-demo.txt   ← 模仿 Agent 依赖清单
+  parse_requirements.py         ← 读清单（不调 pip）
+  check_imports.py              ← import 验证
+  show_venv_context.py          ← 环境自检
+  pip_commands_demo.py          ← pip 子命令演示</pre>
+
+    <h2>先跑起来</h2>
+    <div class="box steps">
+      <ol>
+        <li>激活 venv：<pre>cd D:\agent-learning\playground\python
+.\.venv\Scripts\Activate.ps1</pre></li>
+        <li>（若 requests 未装）<pre>python -m pip install -r 0011-packages\requirements-agent-demo.txt</pre></li>
+        <li>跑例程：<pre>python 0011-packages\examples.py</pre></li>
+        <li>对照输出：executable 应含 <code>.venv</code>；<code>check_imports</code> 对 requests 为 OK。</li>
+      </ol>
+    </div>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>全局 pip：</strong>多项目版本地狱；Agent 学习一律 venv。</li>
+        <li><strong>不提交 <code>.venv</code>：</strong>仓库只提交 requirements；每人本地建 venv 再装。</li>
+        <li><strong><code>pip freeze</code> 乱：</strong>会列出所有包；生产清单常只写直接依赖 + 锁定版本策略。</li>
+        <li><strong>密钥进 requirements：</strong>不要；API Key 用环境变量。</li>
+        <li><strong>Windows 中文注释：</strong><code>pip install -r</code> 在中文 Windows 上常按 GBK 读文件；<code>requirements.txt</code> 注释请用<strong>纯 ASCII</strong>（中文放 README），否则会 <code>UnicodeDecodeError</code>。</li>
+        <li><strong>Java 易混：</strong>Python 没有「编译期解析全部依赖」；装错环境要到运行 <code>import</code> 才爆。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz data-ok="对。-m 绑定当前解释器，避免 pip 指到别的 Python。" data-bad="裸 pip 在多 Python 机器上常装错环境。"><p>更稳妥的安装命令是？</p>
+      <button data-correct="true">python -m pip install -r requirements.txt</button>
+      <button data-correct="false">pip install -r requirements.txt（不保证是哪个 Python）</button>
+      <button data-correct="false">python install requirements.txt</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。清单批量安装是 clone 后常态。" data-bad="逐个手敲易漏包、版本不一致。"><p>clone Agent 仓库后，依赖通常怎么装？</p>
+      <button data-correct="true">venv 激活后 pip install -r requirements.txt</button>
+      <button data-correct="false">把 .venv 文件夹从别的机器复制过来</button>
+      <button data-correct="false">只 pip install requests 就够</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。freeze 输出适合锁定当前环境快照。" data-bad="list 是人读表格；freeze 是 requirements 风格行。"><p>想生成「包==版本」行写入文件，用？</p>
+      <button data-correct="true">pip freeze</button>
+      <button data-correct="false">pip list</button>
+      <button data-correct="false">pip show</button>
+      <p class="feedback"></p>
+    </div>
+    <div class="quiz" data-quiz data-ok="对。第三方包进当前环境的 site-packages。" data-bad="标准库不需要 pip install。"><p><code>pip install requests</code> 把包装到哪里？</p>
+      <button data-correct="true">当前激活环境（通常是 .venv）的 site-packages</button>
+      <button data-correct="false">Python 标准库目录，与 json 放一起</button>
+      <button data-correct="false">只装进当前 .py 文件旁边</button>
+      <p class="feedback"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能说明为何 git 只提交依赖<strong>声明</strong>（requirements）而不提交 <code>.venv</code> <strong>实例</strong>（对照课件 <a href="#why-separate">§2.8</a>）。</li>
+      <li>能画出本仓库「课件 vs playground vs .venv」各放哪、什么进 git。</li>
+      <li>能口述 <code>.venv\Scripts\python.exe</code> 与 <code>Lib\site-packages</code> 各干什么。</li>
+      <li>能口述标准库 vs 第三方包；能说明 venv 解决什么问题。</li>
+      <li>能写出 clone 后起手式四步（venv → 激活 → <code>install -r</code> → 验证）。</li>
+      <li>能解释为何用 <code>python -m pip</code> 而不是裸 <code>pip</code>。</li>
+      <li>能读 <code>requirements-agent-demo.txt</code>：注释行、<code>&gt;=</code> 约束。</li>
+      <li>能跑 <code>examples.py</code>，并说明五个脚本各自干什么。</li>
+      <li>知道 <code>pip list</code> / <code>show</code> / <code>freeze</code> 分别查什么。</li>
+    </ul>
+
+    <h2>选读与速查</h2>
+    <div class="box">
+      <p><strong>权威出处</strong></p>
+      <ul>
+        <li><a href="https://pip.pypa.io/en/stable/user_guide/">pip User Guide</a></li>
+        <li><a href="https://docs.python.org/3/library/venv.html">venv 文档</a></li>
+      </ul>
+      <p><strong>本地衔接</strong></p>
+      <ul>
+        <li><a href="./0001-python-env-and-first-script.html">0001 环境</a>：首次建 venv</li>
+        <li><a href="./0010-requests-http-json.html">0010 requests</a>：第三方包实例</li>
+        <li><a href="./0004-functions-and-modules.html">0004 模块</a>：<code>import</code> 机制</li>
+      </ul>
+    </div>
+    <p><a href="../../reference/python-phase0.html#packages">Python 阶段 0 速查：包管理</a> · <a href="../../GLOSSARY.md">GLOSSARY.md</a></p>
+    <div data-lesson-id-footer="0011"></div>
+    <footer>不清楚的立刻问我。跑完把 <code>show_venv_context</code> 的 executable 路径贴回来核对。下一课：0012 class，然后 0013–0016 补齐 North 全套语法，再进阶段 1。</footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

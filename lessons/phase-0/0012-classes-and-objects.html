@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0012 · 类与对象：把工具说明书收成对象</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0012"></div>
+    <h1>类与对象：把工具说明书收成对象</h1>
+    <p class="mission">
+      0001–0011 已经能读函数、dict、loop、HTTP。North <strong>s01 全是函数 + dict</strong>，但 s12 起会出现
+      <code>@dataclass class Task</code>。本课主技能是 <strong>class / 实例 / self / 继承 / dataclass</strong>；
+      载体是把工具注册表从「函数塞进 dict」收成对象。顺手用已学语法对照读一遍 s01 的 Python 表面（不调模型）。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      对应 <a href="../../python-100Days/Day01-20/18.面向对象编程入门.md">Python-100-Days · Day18</a>，
+      压缩 Day19 的继承；dataclass 以
+      <a href="https://docs.python.org/3/library/dataclasses.html">官方 dataclasses</a> 为准。
+      读完本页即可过关，不必先翻原书。100-Days 全书进度见
+      <a href="../../reference/python-100days-map.html">对照表</a>。
+    </p>
+    <table>
+      <tr><th>来源要点</th><th>本课处理</th></tr>
+      <tr><td>Day18：class / 实例 / <code>__init__</code> / <code>self</code> / 方法</td><td><span class="tag">已内化</span>讲解 1–3</td></tr>
+      <tr><td>Day18：封装（对外接口、隐藏细节）</td><td><span class="tag">压缩</span>用 ToolSpec.run 当接口</td></tr>
+      <tr><td>Day18：时钟 / 点与直线案例</td><td><span class="tag">跳过</span>趣味几何；载体换成工具注册表</td></tr>
+      <tr><td>Day19：继承、<code>super</code>、多态</td><td><span class="tag">压缩</span>只留 <code>class E(Exception)</code>；你已在 0010 写过</td></tr>
+      <tr><td>Day19：<code>__slots__</code> / 双下划线私有 / 静态方法 / <code>@property</code></td><td><span class="tag">下一课</span>0013 补齐；不因 s01 不用而跳过</td></tr>
+      <tr><td>Day20：扑克牌 / Enum 长例</td><td><span class="tag">跳过</span>与使命无关</td></tr>
+      <tr><td>Day16：lambda / 高阶函数</td><td><span class="tag">已用过</span>0005 的 <code>key=lambda</code>；不单开一课</td></tr>
+      <tr><td>Day17：自己写装饰器 / 递归</td><td><span class="tag">跳过</span>只认 <code>@dataclass</code> 这一颗糖</td></tr>
+      <tr><td>Day15：函数趣味实战</td><td><span class="tag">跳过</span>纯练习题</td></tr>
+      <tr><td><code>@dataclass</code> / <code>field(default_factory=list)</code></td><td><span class="tag">已内化</span>讲解 6.1；North s12 Task 同款</td></tr>
+      <tr><td><code>Callable[..., str]</code>（handler 标注）</td><td><span class="tag">已内化</span>讲解 6.2；本课<strong>首次</strong>出现，衔接 0004 + 0009</td></tr>
+      <tr><td>对照读 North s01 表面</td><td><span class="tag">已内化</span>讲解 7 + <code>read_s01_surface.py</code></td></tr>
+    </table>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>Python</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr><td><code>class Session:</code></td><td><code>class Session { }</code></td><td>缩进定块；类体里直接写方法</td></tr>
+      <tr><td><code>Session("alice")</code></td><td><code>new Session("alice")</code></td><td><strong>没有 <code>new</code></strong>；类名加括号就是构造</td></tr>
+      <tr><td><code>def __init__(self, user):</code></td><td>构造方法 <code>Session(String user)</code></td><td>名字固定叫 <code>__init__</code>；第一个参数必须写 <code>self</code></td></tr>
+      <tr><td><code>self.user = user</code></td><td><code>this.user = user</code></td><td><code>self</code> 就是 this，但<strong>每次都要显式写</strong></td></tr>
+      <tr><td><code>a.note("…")</code></td><td><code>a.note("…")</code></td><td>点号左边的对象会自动填进 <code>self</code></td></tr>
+      <tr><td>实例属性在 <code>__init__</code> 里赋</td><td>字段先声明再在构造器赋</td><td>Python 通常不先声明字段；赋值即创建</td></tr>
+      <tr><td>写在 class 体上的 <code>calls = []</code></td><td><code>static List</code> 近似</td><td>所有实例共享；不是 Java 的普通实例字段</td></tr>
+      <tr><td><code>class E(Exception)</code></td><td><code>class E extends Exception</code></td><td>父类写在类名后的括号里</td></tr>
+      <tr><td><code>@dataclass</code></td><td>record / Lombok <code>@Data</code></td><td>自动生成 <code>__init__</code> / <code>repr</code>；仍是普通 class</td></tr>
+    </table>
+
+    <h2>系统讲解</h2>
+
+    <h3>1. 类是图纸，实例是造出来的对象</h3>
+    <p>
+      <strong>类（class）</strong>：一类对象的模板（有哪些数据、能接收哪些消息）。
+      <strong>实例（instance）</strong>：按模板在内存里造出来的那一个具体对象。
+      同一张图纸可以造很多个实例，彼此数据独立。
+    </p>
+    <p>0004 用函数 + dict 描述一次会话；当「用户名 + 已走轮数」要绑在一起到处传时，用对象更干净：</p>
+    <pre>class Session:
+    def __init__(self, user: str) -&gt; None:
+        self.user = user
+        self.turns = 0
+
+    def note(self, text: str) -&gt; str:
+        self.turns += 1
+        return f"{self.user}#{self.turns}: {text}"
+
+a = Session("alice")   # 造实例；没有 new
+b = Session("bob")
+a.note("search")       # alice 的 turns 变成 1；bob 仍是 0</pre>
+    <p>
+      <code>a is b</code> 为 False：两个对象、两份内存。
+      <code>c = a</code> 不会克隆，只是同一个地址又多了一个名字（0005 里 <code>ys = xs</code> 同一规则）。
+    </p>
+    <p class="muted">Python 里 <code>list</code> / <code>dict</code> / <code>Path</code> 本身也是类；<code>[]</code>、<code>{}</code> 是造实例的字面量语法。</p>
+
+    <h3>2. <code>__init__</code> 和 <code>self</code></h3>
+    <p>
+      <strong><code>__init__</code></strong>：初始化方法。调用 <code>Session("alice")</code> 时，解释器先分配对象，再自动调用
+      <code>__init__</code>，把 <code>"alice"</code> 传进去。它<strong>不是</strong>随便起的名字，两侧各两条下划线。
+    </p>
+    <p>
+      <strong><code>self</code></strong>：当前这个实例。方法的第一个参数约定叫 <code>self</code>（名字可改，但别改）。
+      Java 的 <code>this</code> 是隐式的；Python 必须写在形参表里。
+    </p>
+    <table>
+      <tr><th>写法</th><th>self 从哪来</th></tr>
+      <tr><td><code>a.note("search")</code></td><td>点号左边的 <code>a</code> 自动填进第一个参数</td></tr>
+      <tr><td><code>Session.note(a, "search")</code></td><td>你自己把实例当第一个参数传入（少见，但能说明机制）</td></tr>
+    </table>
+    <p>两种写法是同一件事。日常只用第一种。</p>
+    <p>
+      <code>self.user = user</code>：在<strong>这个实例</strong>上创建一个叫 <code>user</code> 的属性。
+      左边是对象上的格子，右边是传进来的值。漏写 <code>self.</code> 会变成局部变量，出了 <code>__init__</code> 就丢。
+    </p>
+
+    <h4>2.1 名字：哪些是 Python 的，哪些是你起的</h4>
+    <p>先分清两层，后面就不会和 <code>handler</code> 缠在一起：</p>
+    <table>
+      <tr><th>种类</th><th>例子</th><th>能不能改名</th></tr>
+      <tr>
+        <td>Python / 标准库约定的特殊名</td>
+        <td><code>__init__</code>、<code>__name__</code>、<code>__slots__</code>、<code>self</code>（约定）</td>
+        <td><code>__init__</code> 等改了就失效；<code>self</code> 能改但别改</td>
+      </tr>
+      <tr>
+        <td>作者自己起的属性名</td>
+        <td><code>user</code>、<code>turns</code>、<code>handler</code>、<code>name</code>、<code>_tools</code></td>
+        <td>可以改；全项目一起改引用即可</td>
+      </tr>
+      <tr>
+        <td>作者自己起的方法名</td>
+        <td><code>note</code>、<code>run</code>、<code>register</code>、<code>dispatch</code></td>
+        <td>同上</td>
+      </tr>
+      <tr>
+        <td>作者自己起的函数名</td>
+        <td><code>run_echo</code>、<code>main</code></td>
+        <td>同上</td>
+      </tr>
+    </table>
+    <p>
+      <strong><code>handler</code> 不是 Python 关键字，也不是语言内置属性。</strong>
+      它只是本课 <code>ToolSpec</code> 作者给「存放工具实现函数」那个格子起的名字，和把字段叫 <code>user</code> 一样随意（在合法标识符范围内）。
+    </p>
+
+    <h4>2.2 一个属性 = 一个格子 = 一份值</h4>
+    <p>
+      属性不是「魔法挂钩」，就是对象上的命名格子。
+      <strong>一次赋值只装一份对象</strong>：再赋值会<strong>覆盖</strong>，不会自动「追加第二个函数」。
+    </p>
+    <pre>spec.handler = run_echo
+spec.handler = run_read   # 覆盖：现在只剩 run_read，echo 丢了
+
+# 若真要「一个名字下挂多个函数」，格子里应放容器，而不是反复写 .handler =：
+spec.hooks = [run_a, run_b]          # list：有序多个
+registry._tools = {"echo": spec, ...}  # dict：按名字多个（本课注册表就是这种）</pre>
+    <p>
+      所以：<strong>不是「任何属性都能绑定多个函数」</strong>。
+      默认一个属性绑一份值；要多个，要么多个属性（<code>on_start</code> / <code>on_end</code>），要么一个属性里放 list/dict。
+      本课设计是：<strong>一个 <code>ToolSpec</code> 只有一个 <code>handler</code></strong>；多个工具 = 多份 <code>ToolSpec</code>，收进 <code>ToolRegistry._tools</code>。
+    </p>
+
+    <h4>2.3 本课三类对象各自有哪些格子（作者设计）</h4>
+    <table>
+      <tr><th>类</th><th>作者起的属性名</th><th>格子里通常放什么</th></tr>
+      <tr>
+        <td><code>Session</code></td>
+        <td><code>user</code>、<code>turns</code></td>
+        <td>字符串、整数（普通数据）</td>
+      </tr>
+      <tr>
+        <td><code>ToolSpec</code></td>
+        <td><code>name</code>、<code>description</code>、<code>handler</code>、<code>calls</code></td>
+        <td>str、str、<strong>一个</strong>函数对象、list</td>
+      </tr>
+      <tr>
+        <td><code>ToolRegistry</code></td>
+        <td><code>_tools</code></td>
+        <td>dict：工具名 → 某份 ToolSpec（从而间接管住多个函数）</td>
+      </tr>
+    </table>
+    <p>
+      方法（<code>note</code> / <code>run</code> / <code>register</code>）写在 class 里，是「对象会干什么」，
+      和「格子里碰巧存了一个函数」不是同一种写法：前者用 <code>def</code> 定义；后者用赋值 <code>self.handler = run_echo</code>。
+    </p>
+
+    <h4>2.4 <code>handler</code> 能改名吗？建议改吗？</h4>
+    <table>
+      <tr><th>问题</th><th>答案</th></tr>
+      <tr>
+        <td>语言允不允许改？</td>
+        <td>允许。改成 <code>fn</code> / <code>impl</code> / <code>callback</code> 都行，只要 <code>run</code> 里也改成 <code>self.fn(**arguments)</code>。</td>
+      </tr>
+      <tr>
+        <td>本课建议改吗？</td>
+        <td><strong>不建议。</strong>课件、脚本、检索题都用 <code>handler</code>；改名增加对照成本，没有新知识。</td>
+      </tr>
+      <tr>
+        <td>别的项目一定叫 handler 吗？</td>
+        <td>不一定。North s02 甚至没有这个属性名——函数直接放在 dict：<code>TOOL_HANDLERS["echo"] = run_echo</code>。</td>
+      </tr>
+    </table>
+    <p class="muted">
+      Java 对照：字段名也是你起的；<code>private Function&lt;...&gt; handler</code> 改成 <code>impl</code> 完全合法。
+      构造用 <code>__init__</code>、入口判断用 <code>__name__</code> 才是「平台认的名字」。
+    </p>
+
+    <h3>3. 注册表是什么；为什么要「存函数」</h3>
+    <p>
+      <strong>注册表</strong>：一张「名字 → 怎么执行」的对照表。模型只吐出字符串名字（如 <code>"echo"</code>）和参数 dict；
+      harness 查表找到对应实现，再真正去跑。没有这张表，loop 就只能写死 <code>if name == "echo": ...</code>，每加一个工具改一处分支。
+    </p>
+    <table>
+      <tr><th>形态</th><th>长什么样</th><th>哪里见过</th></tr>
+      <tr>
+        <td>dict 注册表</td>
+        <td><code>TOOLBOX["echo"] = run_echo</code></td>
+        <td>0004 <code>tools.py</code>；North s02 <code>TOOL_HANDLERS</code></td>
+      </tr>
+      <tr>
+        <td>对象注册表</td>
+        <td><code>registry.register(ToolSpec(..., run_echo))</code></td>
+        <td>本课 <code>tool_registry.py</code> 的 <code>ToolRegistry</code></td>
+      </tr>
+    </table>
+    <p>两套写法干的是同一件事：<strong>按名字找到可调用的东西，再传参执行</strong>。</p>
+
+    <h4>3.1 方法 vs 函数</h4>
+    <p>
+      写在 class 里的 <code>def</code> 叫<strong>方法</strong>：必须经由某个实例调用（或显式传入实例）。
+      写在 class 外面的 <code>def</code> 仍是 0004 的函数。North s01 的 <code>run_bash</code> 就是普通函数——工具实现本身常常是普通函数，注册表只是「挂起来」的地方。
+    </p>
+
+    <h4>3.2 「存函数」到底存的是什么</h4>
+    <p>
+      Python 里函数也是对象：名字 <code>run_echo</code> 指向那份可执行代码。
+      <strong>存函数</strong> = 把这份对象放进表里或属性里，<strong>现在不跑</strong>；等模型真的点名再跑。
+      加括号 <code>()</code> 才是调用：立刻执行，得到返回值（常常是 <code>str</code>）。
+    </p>
+    <pre>def run_echo(text: str) -&gt; str:
+    return f"(echo) {text}"
+
+# 注册阶段（准备抽屉）：只要说明书，不要立刻干活
+spec.handler = run_echo       # 对：handler 里是函数对象
+# spec.handler = run_echo()   # 错：立刻调用；缺 text → TypeError
+#                             # 即便写成 run_echo("x")，存进去的也是 str，不是函数
+
+# 调度阶段（模型已经给出 arguments）：这时才调用
+result = spec.handler(**{"text": "pwd"})   # 等价 run_echo(text="pwd")</pre>
+    <p>时间线拆开看就清楚：</p>
+    <table>
+      <tr><th>时刻</th><th>你写什么</th><th>表里 / 属性里实际是什么</th></tr>
+      <tr><td>注册</td><td><code>handler = run_echo</code>（无括号）</td><td>函数对象，以后还能再调</td></tr>
+      <tr><td>误写成调用</td><td><code>handler = run_echo()</code></td><td>要么立刻报错，要么存成返回值 str</td></tr>
+      <tr><td>dispatch</td><td><code>handler(**arguments)</code>（有括号 / **）</td><td>这时才执行，得到工具输出</td></tr>
+    </table>
+    <p>
+      这和 0004 的 <code>TOOLBOX["rag_search"] = rag_search</code> 完全一样；
+      本课只是把「函数」挂到 <code>ToolSpec.handler</code> 属性上，再由 <code>ToolRegistry</code> 按名字保管多份 <code>ToolSpec</code>。
+    </p>
+    <p class="muted">
+      Java 直觉：注册表 ≈ <code>Map&lt;String, Function&gt;</code> 或策略表；
+      <code>run_echo</code> 像方法引用，<code>run_echo()</code> 像立刻 <code>invoke</code>。注册时放引用，调度时才 invoke。
+    </p>
+
+    <h4>3.3 谁进表；合拍约定（呼应 2.1–2.4）</h4>
+    <p>
+      <strong>不是每个函数都要 <code>.handler = ...</code></strong>——只有准备给模型按名字调用的工具实现才进表
+      （<code>run_echo</code> / <code>run_read</code>）。<code>main</code>、<code>build_demo_registry</code> 等直接调用即可。
+    </p>
+    <pre># 进表
+registry.register(ToolSpec("echo", "...", run_echo))
+
+# 不进表
+def main() -&gt; None: ...</pre>
+    <p>
+      赋值很宽松，几乎什么都能塞进 <code>handler</code>；合不合用看 <code>run</code> 怎么调：
+      <code>return self.handler(**arguments)</code>。因此要同时满足：
+    </p>
+    <table>
+      <tr><th>约定</th><th>含义</th><th>反例</th></tr>
+      <tr>
+        <td>可调用</td>
+        <td>后面能加 <code>(**...)</code></td>
+        <td><code>handler = "echo"</code></td>
+      </tr>
+      <tr>
+        <td>参数对得上</td>
+        <td>关键字名对上模型 dict 的键</td>
+        <td>形参叫 <code>text</code>，却传入 <code>{"command": ...}</code></td>
+      </tr>
+      <tr>
+        <td>返回观察文本</td>
+        <td>本课约定返回 <code>str</code></td>
+        <td><code>print</code>（返回 None）</td>
+      </tr>
+    </table>
+    <p>
+      <code>Callable[..., str]</code> 是文档约定，运行时默认不拦（0009）。
+      字段名叫 <code>handler</code> 只是本课起名（见 2.4）；一个格子只装一个函数（见 2.2）。
+    </p>
+    <p class="muted">
+      <code>handler</code> 不是仪式：North s02 用 <code>TOOL_HANDLERS["echo"] = run_echo</code>，没有 <code>.handler</code> 属性，意思相同。
+    </p>
+
+    <h3>4. 可变状态三案（必背）</h3>
+    <p>列表一旦共享，一次 <code>append</code> 会污染别人。三种写法结果不同——<code>examples.py</code> 例 3 可跑对照：</p>
+    <table>
+      <tr><th>写法</th><th>list 何时创建</th><th>两个实例互不影响？</th></tr>
+      <tr><td>① <code>def __init__</code> 里 <code>self.calls = []</code></td><td>每个实例构造时新建</td><td>隔离</td></tr>
+      <tr><td>② 写在 class 体上的 <code>calls = []</code></td><td>定义类时创建一份</td><td>串了（近似 Java static 字段）</td></tr>
+      <tr><td>③ <code>def __init__(self, calls=[])</code></td><td>定义函数时创建一份（0004 同一条）</td><td>串了</td></tr>
+    </table>
+    <pre>① Isolated：每个 __init__ 里 self.calls = []
+② SharedOnClass.calls = []     # 所有实例 self.calls 指向同一 list
+③ SharedDefault(calls=[])      # 没传入时反复用定义时那个 list</pre>
+    <p>
+      独立会话用 ①。同一场对话要累加，把同一份 list <strong>显式传入</strong>，不要靠 ②③ 偷懒。
+      dataclass 里对应 ① 的写法见讲解 6.1 的 <code>field(default_factory=list)</code>。
+    </p>
+
+    <h3>5. 继承：自定义异常</h3>
+    <p>
+      <strong>继承</strong>：在已有类上造新类，获得父类的能力再加自己的。语法：<code>class 子类(父类):</code>。
+      没写括号时，默认父类是 <code>object</code>。
+    </p>
+    <p>读 Agent 代码最常见的继承，是<strong>自定义异常</strong>——0010 已经写过：</p>
+    <pre>class UnknownToolError(Exception):
+    """工具名不在表里。"""
+
+raise UnknownToolError("unknown tool: glob")
+# isinstance(error, Exception) 为 True，所以 except Exception 也能抓住它</pre>
+    <p>
+      子类可以当父类用（loop 仍 <code>except Exception</code>）；专门 <code>except UnknownToolError</code> 时语义更清楚。
+      Day19 的 Person/Student 长例、多重继承、方法重写深挖本课不做。
+    </p>
+
+    <h3>6. <code>@dataclass</code>：装饰器只认这一颗糖</h3>
+    <p>
+      <strong>装饰器</strong>：用一个函数去加工另一个函数或类。语法糖是把 <code>@名字</code> 写在定义上一行。
+      <code>@dataclass</code> 写在 <code>class ToolSpec:</code> 上方，等价于事后执行 <code>ToolSpec = dataclass(ToolSpec)</code>。
+      加工结果：按标注好的字段自动生成 <code>__init__</code>、<code>repr</code> 等。你不必手写 <code>self.name = name</code>。
+    </p>
+    <pre>from dataclasses import dataclass, field
+
+@dataclass
+class ToolSpec:
+    name: str                      # 模型点名用的字符串
+    description: str               # 给模型看的说明
+    handler: Callable[..., str]    # 真正执行的函数（见讲解 3.3）
+    calls: list[str] = field(default_factory=list)  # 本实例调用记录
+
+# 上面四行 = 作者设计的属性清单（不是 Python 强制的）
+# 自动得到：
+# ToolSpec("echo", "…", run_echo)  这种 __init__
+# print(spec)  能看见字段，而不是 &lt;ToolSpec object at 0x…&gt;</pre>
+    <p>
+      North s12 的 <code>@dataclass class Task:</code> 就是这种：一堆字段 + 自动构造——字段同样是<strong>那一章作者按任务系统需要选的</strong>，不是语言自带的。
+      <strong>本课不要求自己写装饰器函数</strong>（Day17）；见到任意 <code>@foo</code> 先读成「下一行的定义被 foo 加工过」。
+    </p>
+
+    <h4>6.1 <code>field</code> / <code>default_factory</code>：不是关键字，从哪来</h4>
+    <p>
+      很多同学在这里卡住：<strong><code>default_factory</code> 不是 Python 关键字</strong>，也和 <code>handler</code> 一样不是语言内置属性名。
+      它来自标准库，要先 <code>from dataclasses import field</code>，再写在字段默认值的位置。
+    </p>
+    <table>
+      <tr><th>片段</th><th>是什么</th></tr>
+      <tr><td><code>field</code></td><td><code>dataclasses</code> 模块里的<strong>函数</strong>，用来给某个字段加规则</td></tr>
+      <tr><td><code>default_factory</code></td><td>传给 <code>field()</code> 的<strong>参数名</strong>（库作者起的）</td></tr>
+      <tr><td><code>= list</code></td><td>传<strong>函数对象</strong> <code>list</code>（无括号），表示「需要默认值时调用它造新对象」</td></tr>
+    </table>
+    <pre>from dataclasses import dataclass, field
+
+@dataclass
+class ToolSpec:
+    # 危险：看起来像 ①，其实是 ③——定义 class 时那一个 [] 被所有实例共用
+    # calls: list[str] = []
+
+    # 安全：对应三案 ①——每次 ToolSpec(...) 时执行 list()，得到新空列表
+    calls: list[str] = field(default_factory=list)
+
+    # 错：default_factory=list() 在定义 class 时就建了一个 list，又变共用
+    # calls: list[str] = field(default_factory=list())</pre>
+    <p>和手写 class 的对应关系：</p>
+    <table>
+      <tr><th>目标</th><th>普通 class</th><th>dataclass</th></tr>
+      <tr><td>三案 ① 每实例一份 list</td><td><code>def __init__(self): self.calls = []</code></td><td><code>field(default_factory=list)</code></td></tr>
+      <tr><td>三案 ③ 共用默认 list</td><td><code>def __init__(self, calls=[])</code></td><td><code>calls: list = []</code>（同样危险）</td></tr>
+    </table>
+    <p>
+      为什么 dataclass 不能简单写 <code>= []</code>？因为它自动生成 <code>__init__</code>，字段上的 <code>= []</code> 会掉进和 0004「默认值只求值一次」同一条坑（讲解 4）。
+      <code>field(default_factory=list)</code> 就是官方给的<strong>安全写法</strong>：把「每次构造时 <code>list()</code>」写进字段声明里。
+    </p>
+    <p>
+      跑 <code>examples.py</code> 例 5 可对照：两个 <code>ToolSpec</code> 实例的 <code>calls</code> 互不影响；若改成 <code>= []</code> 会串。
+    </p>
+
+    <h4>6.2 <code>Callable[..., str]</code>：本课首次出现（衔接 0004 + 0009）</h4>
+    <p>
+      0009 见过 <code>list[str]</code>、<code>-&gt; str</code>；0004 见过把函数存进注册表。
+      <strong>本课第一次</strong>把两者合在一起：用 <code>Callable[..., str]</code> 标注「这个格子里应存函数」。
+    </p>
+    <table>
+      <tr><th>课</th><th>你已会</th><th>本课新增</th></tr>
+      <tr><td>0004</td><td><code>TOOLBOX["echo"] = run_echo</code>（存函数对象）</td><td>—</td></tr>
+      <tr><td>0009</td><td><code>name: str</code>、<code>-&gt; str</code>（标注给人看）</td><td>—</td></tr>
+      <tr><td>0012</td><td>—</td><td><code>handler: Callable[..., str]</code> = 标注 + 存函数叠在同一字段</td></tr>
+    </table>
+
+    <h5>6.2.1 拆开读</h5>
+    <pre>from collections.abc import Callable   # abc = Abstract Base Classes，不是字母表
+
+handler: Callable[..., str]
+#       ↑        ↑    ↑
+#       │        │    └── 标注：调用后应返回 str（本课工具观察文本）
+#       │        └── ... = 省略号：参数形状在类型里先不写死
+#       └── 标注：这里应是「可调用」对象</pre>
+    <p>
+      若只描述 <code>run_echo</code> 一种工具，可以写得更死：
+      <code>Callable[[str], str]</code>（一个 str 位置参数，返回 str）。
+      注册表要兼容 echo / read 等不同 keyword，所以在类型里用 <code>...</code> 占位；<strong>运行时</strong>仍靠
+      <code>self.handler(**arguments)</code> 对上形参，键不对会 <code>TypeError</code>。
+    </p>
+
+    <h5>6.2.2 存的是什么？不是 <code>Callable</code> 本身</h5>
+    <p>和 <code>age: int = 18</code> 一样：<strong>标注是说明书，格子里的值才是真的。</strong></p>
+    <table>
+      <tr><th>写法</th><th>格子里的真值</th><th><code>Callable[..., str]</code> 的角色</th></tr>
+      <tr><td><code>handler: Callable[..., str] = run_echo</code></td><td><code>run_echo</code> 函数对象</td><td>只说「这里应像可调用且返回 str」</td></tr>
+      <tr><td><code>self.handler(**arguments)</code></td><td>调的是 <code>run_echo</code> 等</td><td>标注不参与调用</td></tr>
+    </table>
+    <pre># 错的理解：把 **arguments 传给 Callable[..., str]
+# 对的理解：传给 self.handler 里存着的 run_echo
+
+self.handler(**arguments)
+# 若 handler 是 run_echo，arguments 是 {"text": "pwd"}
+# 等价 run_echo(text="pwd")</pre>
+    <p class="muted">
+      0009 仍成立：标注默认<strong>不在运行时拦截</strong>。挂错函数可能赋值成功，真正调用时才炸。
+    </p>
+
+    <h5>6.2.3 函数「合拍」要求（来自用法，不只来自 Callable 三个字）</h5>
+    <table>
+      <tr><th>要求</th><th>从哪来</th></tr>
+      <tr><td>可调用</td><td><code>run</code> 里要写 <code>handler(**...)</code></td></tr>
+      <tr><td><code>**arguments</code> 的键对得上形参</td><td>echo 要 <code>text=</code>，read 要 <code>path=</code></td></tr>
+      <tr><td>返回观察用 <code>str</code></td><td>本课约定；后面当工具输出文本用</td></tr>
+    </table>
+
+    <h4>6.3 构造 <code>ToolSpec</code>：传几个参数</h4>
+    <p>
+      先分清两件事：类上有 <strong>4 个字段</strong>；这一行调用 <strong>只传了 3 个实参</strong>。
+      第 4 个字段 <code>calls</code> 写了 <code>field(default_factory=list)</code>，所以可以不传，解释器自动建空 list。
+    </p>
+    <pre>ToolSpec("echo", "Echo a string; fake bash.", run_echo)
+#        ↑ 1      ↑ 2                            ↑ 3
+#        name     description                    handler（无括号）
+# 第 4 个字段 calls：本行没写 → 自动 list() 得到 []
+
+# 若真要手填第 4 个（一般不需要）：
+# ToolSpec("echo", "说明", run_echo, ["already"])
+# 或 ToolSpec(name="echo", description="说明", handler=run_echo, calls=["already"])</pre>
+    <table>
+      <tr><th>字段（共 4）</th><th>本行有没有传</th><th>结果</th></tr>
+      <tr><td><code>name</code></td><td>传了 <code>"echo"</code></td><td>必填</td></tr>
+      <tr><td><code>description</code></td><td>传了说明字符串</td><td>必填</td></tr>
+      <tr><td><code>handler</code></td><td>传了 <code>run_echo</code></td><td>必填</td></tr>
+      <tr><td><code>calls</code></td><td><strong>没传</strong></td><td>用默认 → 新 <code>[]</code></td></tr>
+    </table>
+    <p>检索题「传了几个」指的是<strong>括号里写了几个实参（3）</strong>；「加一个默认」指类上还有第 4 个字段可省略。不是括号里写了四个值。</p>
+    <p>也可全用关键字，顺序无关：</p>
+    <pre>ToolSpec(name="echo", description="...", handler=run_echo)</pre>
+
+    <h4>6.4 其它</h4>
+    <p class="muted">North s12 的 <code>@dataclass class Task</code> 字段同样是作者按任务系统选的，不是语言自带清单。</p>
+
+    <h3>7. 对照读 North s01 的 Python 表面</h3>
+    <p>
+      打开 <code>learn-claude-code-north/s01_agent_loop/code.py</code>（137 行）。<strong>不要</strong>本课去申请 API、不要跑它。
+      s01 <strong>一个 class 都没有</strong>。你已经会的东西对得上：
+    </p>
+    <table>
+      <tr><th>s01 里</th><th>你哪一课会的</th></tr>
+      <tr><td><code>import os</code> / <code>from anthropic import Anthropic</code></td><td>0004 模块；0011 第三方包（本课不装 anthropic）</td></tr>
+      <tr><td><code>TOOLS = [{ "name": "bash", ...}]</code></td><td>0006 dict；0008 JSON 形状</td></tr>
+      <tr><td><code>def run_bash(command: str) -&gt; str</code></td><td>0004 函数；0009 标注</td></tr>
+      <tr><td><code>except (FileNotFoundError, OSError)</code></td><td>0007 具体 except</td></tr>
+      <tr><td><code>while True:</code> + <code>if stop_reason != "tool_use": return</code></td><td>0003 agent loop</td></tr>
+      <tr><td><code>messages.append({...})</code></td><td>0005 list</td></tr>
+      <tr><td><code>block.input["command"]</code></td><td>0006 嵌套 dict</td></tr>
+      <tr><td><code>if __name__ == "__main__":</code></td><td>0004 入口</td></tr>
+      <tr><td><code>history = []</code> 再传入 <code>agent_loop(history)</code></td><td>0004 三案里「显式传入同一份 list 才累加」</td></tr>
+    </table>
+    <p>
+      跑 <code>read_s01_surface.py</code> 会按行号打印这些落点。
+      主脚本 <code>tool_registry.py</code> 则演示：同一套 dispatch，用 class 来写会长什么样——这是 s02 的 dict 分发在后半仓库里的进化方向。
+    </p>
+
+    <h2>主脚本导读</h2>
+    <p>先跑 <code>examples.py</code> 看五例（例 3 三案、例 5 <code>default_factory</code>），再读 <code>tool_registry.py</code>。按块：</p>
+    <ol>
+      <li>
+        <strong><code>UnknownToolError(Exception)</code></strong>：讲解 5。loop 应把它当 tool error，而不是让进程崩溃却不说明「名字错了」。
+      </li>
+      <li>
+        <strong><code>@dataclass class ToolSpec</code></strong>：四个字段；构造常传 3 个（讲解 6.3）。
+        <code>handler: Callable[..., str]</code> 是 0009 标注 + 0004 函数对象（讲解 6.2）；
+        <code>calls</code> 用 <code>field(default_factory=list)</code> 走三案 ①。
+      </li>
+      <li>
+        <strong><code>schema</code> / <code>run</code></strong>：对外接口。
+        <code>run</code> 里 <code>self.handler(**arguments)</code> 就是 0004 的 dict 展开。
+      </li>
+      <li>
+        <strong><code>ToolRegistry</code></strong>：讲解 3 的「对象注册表」。手写 class（没有 dataclass），因为要藏一个 <code>_tools: dict[str, ToolSpec]</code>，并提供 <code>register</code> / <code>dispatch</code>。
+        下划线前缀 <code>_tools</code> 是「请把我当内部实现」的约定，不是强制私有（Day19 双下划线本课不展开）。
+      </li>
+      <li>
+        <strong><code>register</code></strong>：把一份 <code>ToolSpec</code>（含函数对象 <code>handler</code>）按 <code>name</code> 放进表。注意构造时写 <code>run_echo</code> 无括号——这就是「存函数」。
+      </li>
+      <li>
+        <strong><code>dispatch</code></strong>：查表 → 没有就 <code>raise UnknownToolError</code> → 有就 <code>spec.run(**arguments)</code> → 内部再 <code>self.handler(**arguments)</code>。
+        North s02 的 <code>TOOL_HANDLERS[name](**input)</code> 是同一句话的 dict 版。
+      </li>
+      <li>
+        <strong><code>main</code></strong>：注册 echo / read 两个假工具（不调真 shell）。看 <code>echo.calls</code> 与 <code>read.calls</code> 互不污染；看 dataclass 的 <code>repr</code>。
+      </li>
+    </ol>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>忘了 <code>self</code></strong>：<code>def note(text):</code> 会在 <code>a.note("x")</code> 时把实例塞进 <code>text</code>，立刻对不上。</li>
+        <li><strong>漏 <code>self.</code></strong>：<code>user = user</code> 在 <code>__init__</code> 里是局部变量，实例上没有 <code>.user</code>。</li>
+        <li><strong>写成 <code>new Session()</code></strong>：SyntaxError 或 NameError。Python 没有 <code>new</code>。</li>
+        <li><strong>三案 ②③ / dataclass 写 <code>= []</code></strong>：可变默认值只求值一次。dataclass 要用 <code>field(default_factory=list)</code>（讲解 6.1），不是关键字。</li>
+        <li><strong><code>default_factory=list()</code></strong>：定义 class 时就建 list，又变共用；要传 <code>list</code> 函数本身。</li>
+        <li><strong>注册时 <code>handler()</code> 多写了括号</strong>：立刻调用；缺参会 TypeError；有参则把 str 存进表，dispatch 再 <code>(**args)</code> 时变成「对字符串当函数调」。</li>
+        <li><strong>把注册表当成「已经跑完的结果表」</strong>：表里应是可调用对象；结果是 dispatch <em>之后</em> 才有的。</li>
+        <li><strong>以为 class 自带固定属性清单</strong>：<code>user</code>/<code>handler</code> 都是作者起名；Python 认的是 <code>__init__</code> 这类特殊名（讲解 2.1）。</li>
+        <li><strong>以为一个属性能自动绑多个函数</strong>：一次赋值一份值，再赋就覆盖；多个要用 list/dict 或多种 ToolSpec（讲解 2.2）。</li>
+        <li><strong>以为任意函数都要 <code>.handler =</code></strong>：只有进注册表的工具实现才挂；合拍约定见讲解 3.3。</li>
+        <li><strong>以为 <code>handler</code> 里存的是 <code>Callable</code></strong>：存的是 <code>run_echo</code> 等函数；<code>Callable[..., str]</code> 只是标注（讲解 6.2）。</li>
+        <li><strong>以为 <code>Callable[..., str]</code> 表示「只要返回 str 任意函数都行」</strong>：参数仍要对上 <code>**arguments</code>；标注默认不拦运行时。</li>
+        <li><strong>以为标注会拦错类型</strong>：0009 仍成立。<code>Session(1)</code> 运行时不会因为 <code>user: str</code> 而拒绝。</li>
+        <li><strong>和 Java 易混</strong>：实例字段通常不在类顶声明；类顶的赋值更像 static。构造函数不叫类名，叫 <code>__init__</code>。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。点号左边的对象会填进第一个参数。"
+      data-bad="self 不是类名，也不是模块名。">
+      <p><code>a.note("x")</code> 里的 <code>self</code> 是谁？</p>
+      <button data-correct="true">当前这个实例自己</button>
+      <button data-correct="false">当前这个类的名字</button>
+      <button data-correct="false">当前这个模块名字</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。每个 __init__ 新建 list，两个实例互不影响。"
+      data-bad="类体上的 list、以及默认参数 list，都会被所有没传入的调用共享。">
+      <p>两个实例互不污染调用记录，应该怎么写？</p>
+      <button data-correct="true">每个对象自己一份列表</button>
+      <button data-correct="false">所有对象共用一份列表</button>
+      <button data-correct="false">定义时创建共用列表</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。@ 加工的是紧跟在下一行的那一个定义。"
+      data-bad="装饰器不发网络，也不删除上一行。">
+      <p><code>@dataclass</code> 写在 <code>class Task</code> 上一行，在做什么？</p>
+      <button data-correct="true">把下一行定义加工一遍</button>
+      <button data-correct="false">给下一行定义加上网络</button>
+      <button data-correct="false">把上一行定义删除干净</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。s01 用函数 + dict + while；class 是后半仓库的写法。"
+      data-bad="s01 里没有 class / dataclass。">
+      <p>North <code>s01_agent_loop/code.py</code> 的 Python 表面主要是？</p>
+      <button data-correct="true">函数字典再加循环</button>
+      <button data-correct="false">数据类再加装饰器</button>
+      <button data-correct="false">继承树再加多态</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。注册时存函数对象；dispatch 时才调用。"
+      data-bad="加括号是立刻执行；注册表要的是以后还能调的函数。">
+      <p>往注册表里挂工具时，该写哪一种？</p>
+      <button data-correct="true">名字指向函数本身</button>
+      <button data-correct="false">名字指向立刻调用</button>
+      <button data-correct="false">名字指向调用结果</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。handler 是作者起的字段名；一个格子装一个函数。"
+      data-bad="handler 不是关键字；再赋值会覆盖，不会自动追加。">
+      <p>关于 <code>ToolSpec.handler</code>，哪句对？</p>
+      <button data-correct="true">作者起名一格一函数</button>
+      <button data-correct="false">语言关键字必须叫它</button>
+      <button data-correct="false">一格自动挂多个函数</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。格子存 run_echo；Callable 只是类型标注。"
+      data-bad="Callable 是标注名，不是被调用的函数对象。">
+      <p><code>self.handler(**arguments)</code> 实际调用的是谁？</p>
+      <button data-correct="true">格子里存的函数对象</button>
+      <button data-correct="false">Callable类型标注本身</button>
+      <button data-correct="false">ToolSpec类本身对象</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。括号里 3 个实参；第 4 字段 calls 有默认，本行没写。"
+      data-bad="类有 4 字段，但这一行只写了 name/description/handler。">
+      <p><code>ToolSpec("echo", "…", run_echo)</code> 括号里写了几个实参？</p>
+      <button data-correct="true">三个实参第四用默认</button>
+      <button data-correct="false">四个实参全部写齐</button>
+      <button data-correct="false">只要一个函数参数</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能用一句话对 Java 同事说：class 是图纸、实例是对象、<code>self</code> 是必须写出来的 <code>this</code>、构造不用 <code>new</code>。</li>
+      <li>能区分「Python 特殊名」与「作者起的属性名」；知道 <code>handler</code> 可改但不建议在本课改。</li>
+      <li>能说明一个属性一次只装一份值；多工具靠多份 ToolSpec / 注册表 dict，不是一个 handler 堆多个函数。</li>
+      <li>能说明只有工具实现进注册表；能区分「存函数」与「立刻调用」。</li>
+      <li>能区分三案：<code>__init__</code> 里新建 list / 类属性 list / 默认参数 list；dataclass 用 <code>default_factory</code> 走第一案。</li>
+      <li><code>examples.py</code> 跑通；能指着例 3 说明谁串了、例 5 说明 <code>field(default_factory=list)</code> 为何不是关键字。</li>
+      <li><code>tool_registry.py</code> 跑通；能讲清 <code>register</code> / <code>dispatch</code> / <code>**arguments</code> / <code>UnknownToolError</code>。</li>
+      <li>能说明 <code>Callable[..., str]</code> 是本课首次出现的标注；格子存 <code>run_echo</code> 不是存 Callable；<code>ToolSpec</code> 常传 3 个构造参数（讲解 6.2–6.3）。</li>
+      <li><code>read_s01_surface.py</code> 跑通；能指着 s01 说出「这里还没有 class，loop 仍是 while + 函数」。</li>
+      <li>见到 <code>@dataclass</code> 能说出它是装饰器语法糖，不必会自己写装饰器。</li>
+    </ul>
+
+    <h2>选读</h2>
+    <div class="box">
+      <p><strong>权威（本课规则的出处）</strong></p>
+      <ul>
+        <li><a href="https://docs.python.org/3/tutorial/classes.html">Python Tutorial · Classes</a>：class / 实例 / <code>self</code></li>
+        <li><a href="https://docs.python.org/3/library/dataclasses.html">dataclasses</a>：<code>@dataclass</code>、<code>field(default_factory=...)</code></li>
+        <li><a href="https://docs.python.org/3/library/typing.html#typing.Callable">typing · Callable</a>；本课脚本用 <code>collections.abc.Callable</code>，读法相同</li>
+      </ul>
+      <p><strong>中文教材（若还想看原书例题；默认不必打开）</strong></p>
+      <ul>
+        <li><a href="../../python-100Days/Day01-20/18.面向对象编程入门.md">Day18 面向对象入门</a>：Student / 时钟</li>
+        <li><a href="../../python-100Days/Day01-20/19.面向对象编程进阶.md">Day19 进阶</a>：继承原文；slots / property / 三种方法见 0013</li>
+      </ul>
+      <p><strong>对照</strong></p>
+      <ul>
+        <li>本地 North：<code>learn-claude-code-north/s01_agent_loop/code.py</code>（只读表面）</li>
+        <li>以后会见到：<code>s12_task_system/code.py</code> 里的 <code>@dataclass class Task</code></li>
+      </ul>
+    </div>
+
+    <h2>速查</h2>
+    <p>
+      <a href="../../reference/python-phase0.html#oop">Python 阶段 0 速查：类与对象</a> ·
+      <a href="../../reference/python-100days-map.html">100-Days 对照</a> ·
+      <a href="../../GLOSSARY.md">GLOSSARY.md</a> ·
+      <a href="../../reference/index.html">索引</a>
+    </p>
+
+    <div data-lesson-id-footer="0012"></div>
+    <footer>
+      不清楚的立刻问我。跑完或卡住，把输出贴回来。
+      下一课：0013 面向对象进阶（Day19）。进 North 之前还有 0014–0016 把全套 <code>code.py</code> 用到的标准库补齐。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

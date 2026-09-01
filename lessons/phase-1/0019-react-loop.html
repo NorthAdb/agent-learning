@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0019 · 最小循环：想 → 做 → 看</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0019"></div>
+    <h1>最小循环：想 → 做 → 看</h1>
+    <p class="mission">
+      0017 给了零件，0018 分清驾驶者和载具。
+      本课把它们<strong>转起来</strong>：模型想下一步，Harness 去做，Environment 给看，看完再想。
+      代码只执行模型的要求，不替它规划路径。不跑 North <code>code.py</code>。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      书 <strong>§1.1.5 ReAct 循环</strong>（三环节、轨迹、最小骨架）+
+      North <code>README-zh.md</code> 最小循环图与一段伪代码。
+      对照已过关的
+      <a href="../phase-0/0003-control-flow-agent-loop.html">0003 while</a>
+      （形状预习，不是本课新语法）。
+      读完本页即可过关。
+    </p>
+    <p class="muted">
+      点带行号的链接会在 Cursor 里打开该行。
+      文件名是仓库里的 Markdown，也可以直接打开。
+    </p>
+    <h3>本课新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>去哪看</th></tr>
+      <tr>
+        <td><strong>ReAct</strong></td>
+        <td>Reasoning + Acting；实际是想 → 做 → 看，再循环</td>
+        <td>
+          <a href="../../AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md">书 第01章</a>
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:168">L168</a>
+          节标题；定义在
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:172">L172</a>。<br>
+          North README <strong>没有</strong>这个词，只说「最小循环」。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>轨迹</strong>（trajectory）</td>
+        <td>执行过程中不断追加的消息历史</td>
+        <td>
+          书 §1.1.5
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:174">L174</a>
+        </td>
+      </tr>
+      <tr>
+        <td><strong>静态前缀</strong></td>
+        <td>每次调用都拼在轨迹前面的系统提示词 + 工具定义</td>
+        <td>
+          同一段 L174；「轨迹里不显示前缀」在
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:226">L226</a>
+        </td>
+      </tr>
+      <tr>
+        <td><strong>stop_reason</strong></td>
+        <td>模型这轮为什么停：还要工具，还是说完了</td>
+        <td>
+          North 循环图
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:146">L146</a>
+          ；骨架
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:219">L219</a>。
+          书不写这个字段，写成「没有 tool call 就返回」
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:189">L189</a>。
+        </td>
+      </tr>
+    </table>
+    <table>
+      <tr><th>来源要点</th><th>本课</th></tr>
+      <tr><td>想 → 做 → 看；名字只有 Reason + Act，实际三环节</td><td><span class="tag">已内化</span>讲解 1</td></tr>
+      <tr><td>上下文 = 静态前缀 + 轨迹；响应再追加进轨迹</td><td><span class="tag">已内化</span>讲解 2</td></tr>
+      <tr><td>Model 决定；Harness 组装上下文并执行工具</td><td><span class="tag">已内化</span>讲解 3</td></tr>
+      <tr><td>代码只执行模型的要求（North 循环图旁那句）</td><td><span class="tag">已内化</span>讲解 3</td></tr>
+      <tr><td>0003 while 是形状；fake_model(turn) 不是看轨迹</td><td><span class="tag">已内化</span>讲解 4</td></tr>
+      <tr><td>退出：无 tool call / 最大轮数 / 不可恢复错误</td><td><span class="tag">已内化</span>讲解 5</td></tr>
+      <tr><td>多币种汇总轨迹全文、图 1-4 细读</td><td><span class="tag">跳过</span>机制已用三行骨架讲清</td></tr>
+      <tr><td>缓存随轮数二次方增长、Kimi / GPT 实验</td><td><span class="tag">跳过</span>与本课主技能无关</td></tr>
+      <tr><td>跑 North s01 <code>code.py</code></td><td><span class="tag">跳过</span>阶段 2；本课只读 README 图</td></tr>
+      <tr><td>L01 能力鸿沟</td><td><span class="tag">见 0020</span> <a href="./0020-fail-check-harness.html">失败先查 harness</a></td></tr>
+    </table>
+
+    <h2>为什么要学？（动机）</h2>
+    <p>
+      你在 Cursor 里看到的「先读文件、再改、再跑测试」，不是提示词里写死的四步舞。
+      是模型看当前轨迹，一轮一轮决定。
+      分不清，就会把 0003 的剧本 while 当成已经懂了 Agent，或者把节点图当成循环。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>本课概念</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr>
+        <td>ReAct 循环</td>
+        <td><code>while</code> 直到终止条件</td>
+        <td>下一圈做什么由模型选，不是 <code>switch (step)</code> 写死</td>
+      </tr>
+      <tr>
+        <td>轨迹</td>
+        <td>会话日志 / 审计列表，每次请求都带上</td>
+        <td>不是一次 HTTP body；会随工具结果变长</td>
+      </tr>
+      <tr>
+        <td>静态前缀</td>
+        <td>每次都附带的接口说明书</td>
+        <td>通常不进那份「消息历史」列表，但每次都会拼在前面</td>
+      </tr>
+      <tr>
+        <td><code>stop_reason</code></td>
+        <td>完成原因码（还要不要继续）</td>
+        <td>不是 HTTP 状态码；本课只对比「要工具 / 说完了」</td>
+      </tr>
+      <tr>
+        <td>0003 的 <code>fake_model(turn)</code></td>
+        <td>按序号取测试夹具</td>
+        <td>形状像循环，决策者不看轨迹</td>
+      </tr>
+    </table>
+
+    <h2>系统讲解</h2>
+
+    <h3>1. 名字两个词，循环三个环节</h3>
+    <p>
+      <strong>ReAct</strong> = Reasoning + Acting（推理 + 行动）。
+      书立刻补了一刀：实际还有「看」。
+    </p>
+    <blockquote>
+      模型先思考当前应该做什么，然后调用工具行动，再观察工具返回的结果并继续思考下一步。
+      这个“想 → 做 → 看 → 想 → 做 → 看”的循环不断重复，直到任务完成。
+    </blockquote>
+    <p class="src">
+      原文：书 §1.1.5
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:172">L172</a>
+      。North README 搜 ReAct 会空——它画的是同一件事，叫「最小循环」。
+    </p>
+    <table>
+      <tr><th>环节</th><th>谁干</th><th>0017 / 0018 落点</th></tr>
+      <tr><td>想</td><td>Model 看上下文，决定调不调工具、调哪个</td><td>Agency / 大脑</td></tr>
+      <tr><td>做</td><td>Harness 执行 tool_call（真读文件、真跑命令）</td><td>最小 Harness：工具接口</td></tr>
+      <tr><td>看</td><td>Environment 给出观察；Harness 追加进轨迹</td><td>观察 → 上下文；环境仍在公式外</td></tr>
+    </table>
+    <p>
+      工具调用的 API 展开是四步：先在上下文里<strong>声明</strong>有哪些工具，再让模型选，再执行并追加，再决策。
+      后三步就是想 / 做 / 看；第一步是静态前缀里的工具定义。
+    </p>
+    <p class="src">
+      四步：书
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:72">L72</a>
+      （它说这是后文 ReAct 的基础）。
+    </p>
+
+    <h3>2. 每次看见的上下文 = 静态前缀 + 轨迹</h3>
+    <p>
+      <strong>轨迹</strong>：用户消息、模型回复（思考 + 工具调用）、工具结果，随交互变长。
+      <strong>静态前缀</strong>：系统提示词 + 工具定义；每次调模型都拼在轨迹前面，所以轨迹列表里往往看不到它们。
+    </p>
+    <p class="src">
+      「Agent 的上下文 = 静态前缀 + 轨迹」：书
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:174">L174</a>
+      ；前缀不写进轨迹示例：
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:226">L226</a>。
+    </p>
+    <p>
+      关键事实（接 0017）：工具结果如果没被追加进轨迹，下一轮「想」就等于没发生过这次「看」。
+      磁盘上有文件，不等于模型看见了。
+    </p>
+    <pre>context = stable_prefix + trajectory
+decision = Model(context)
+trajectory.append(decision)
+# 若有 tool_call：执行 → observation 再 append</pre>
+    <p class="src">
+      书最小骨架
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:181">L181–195</a>
+      。伪代码不能当 SDK 跑。
+    </p>
+
+    <h3>3. 代码只执行模型的要求</h3>
+    <p>North 把最小循环画成：用户消息进列表 → 调 LLM → 看停因为什么。</p>
+    <pre>User --> messages[] --> LLM --> response
+                              stop_reason == "tool_use"?
+                         yes /              \ no
+                  执行工具、追加结果           返回文本
+                  再 loop 回 messages[]</pre>
+    <p class="src">
+      原文图：
+      <a href="../../learn-claude-code-north/README-zh.md">README-zh.md</a>
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:140">L140–159</a>。
+      定性句在
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:156">L156–157</a>：
+      「模型决定何时调用工具、何时停止。代码只是执行模型的要求。」
+    </p>
+    <p>
+      <strong>stop_reason</strong>：模型结束本轮生成时附带的原因。
+      本课只认对比：值为 <code>tool_use</code> → 还要做；不是 → 说完了，把文本当答案返回。
+      书用「没有 tool call 就返回」，不绑某一家 API 字段名。
+    </p>
+    <p class="src">
+      North 骨架用 <code>if response.stop_reason != "tool_use": return</code>：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:219">L219–220</a>。
+      书：
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:189">L189–190</a>。
+    </p>
+    <p>
+      叠回 0018：循环属于把驾驶者一遍遍送上赛道；
+      权限、压缩、hooks 是挂在循环上的机制，<strong>不改这根骨架</strong>。
+      README 也写了：「循环属于 agent。机制属于 harness。」阶段 2 从 s01 起往上叠，本课不动它。
+    </p>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:234">L234</a>
+      ；s01 格言「一个工具 + 一个循环」在
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:165">L165</a>
+      （只记句子，不打开 <code>code.py</code>）。
+    </p>
+
+    <h3>4. 下一步谁决定：三种情况</h3>
+    <p>形状都可以像 while。要看<strong>下一发 tool_call 从哪来</strong>。</p>
+    <table>
+      <tr><th>案</th><th>下一步从哪来</th><th>判定</th></tr>
+      <tr>
+        <td>①</td>
+        <td>Model 读完整轨迹（含上次观察）再输出</td>
+        <td>ReAct / 自主 Agent。本课要认的这一种</td>
+      </tr>
+      <tr>
+        <td>②</td>
+        <td><code>fake_model(turn)</code>：第 0 轮、第 1 轮作者写死</td>
+        <td>0003 预习。有 while、有工具，但决策者不看轨迹</td>
+      </tr>
+      <tr>
+        <td>③</td>
+        <td>代码写死：先 read，再数 TODO，再拼答案</td>
+        <td>工作流（0017）。LLM 即使出现也只在节点内填字</td>
+      </tr>
+    </table>
+    <p>
+      ① 和 ② 跑完都可能得到「2 个 TODO」。
+      差别不在答案，在<strong>假如观察变了，下一步会不会变</strong>。
+      ② 的第 1 轮照样念剧本；① 会按新的轨迹想。
+    </p>
+    <p class="src">
+      自主 Agent「本质上就是在一个循环中使用工具的 LLM」：书 §1.2.4.2
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:415">L415</a>
+      （一句话指针，不展开框架表）。
+    </p>
+
+    <h3>5. 怎么停：三种情况</h3>
+    <p>自主不等于转到地老天荒。停止条件要设计。</p>
+    <table>
+      <tr><th>案</th><th>条件</th><th>出现在哪</th></tr>
+      <tr>
+        <td>① 正常完成</td>
+        <td>没有 tool call / <code>stop_reason != tool_use</code></td>
+        <td>书 L189；North L219。本课主出口</td>
+      </tr>
+      <tr>
+        <td>② 安全带</td>
+        <td>达到最大轮数（0003 的 <code>max_turns</code>）</td>
+        <td>书
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:413">L413</a>
+          「最大迭代次数」。North 这段骨架是 <code>while True</code>，没写触顶——缺了要自己补</td>
+      </tr>
+      <tr>
+        <td>③ 失败停</td>
+        <td>不可恢复错误</td>
+        <td>同一句 L413；细节 0020 / 阶段 2</td>
+      </tr>
+    </table>
+    <p class="src">
+      常见退出条件并列：书
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:415">L415</a>
+      （最终输出工具 / 无工具调用 / 错误或最大轮数）。
+    </p>
+
+    <h2>主脚本导读</h2>
+    <p>
+      打开并运行
+      <a href="../../playground/phase-1/0019-react-loop/trace_loop.py"><code>playground/phase-1/0019-react-loop/trace_loop.py</code></a>。
+      同一问句「app.py 里有几个 TODO？」走三遍。
+    </p>
+    <table>
+      <tr><th>函数</th><th>对照讲解</th><th>看什么</th></tr>
+      <tr><td><code>react_model(trajectory)</code></td><td>1–3</td><td>有用户消息就 read；有工具结果才数 TODO</td></tr>
+      <tr><td><code>scripted_model(turn)</code></td><td>4 案②</td><td>只看回合号；观察不参与「下一步」</td></tr>
+      <tr><td><code>run_workflow</code></td><td>4 案③</td><td>三个节点写死，没有模型选型</td></tr>
+    </table>
+    <pre>cd d:\agent-learning\playground\phase-1\0019-react-loop
+python trace_loop.py</pre>
+    <p class="muted">无第三方包。解释器可用阶段 0 的 <code>playground/python/.venv</code>。</p>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>0003 已经会了循环</strong>：会的是 Python while。ReAct 问的是谁看轨迹做决定。</li>
+        <li><strong>在循环里写 if 规划步骤</strong>：那是工作流 / 水管工。最小循环里代码执行调用，不选路。</li>
+        <li><strong>North 里搜不到 ReAct</strong>：书用这个词；README 用「最小循环」。同一根骨架。</li>
+        <li><strong>轨迹丢了工具结果</strong>：下一轮想等于没看。不是模型「忘了」，是你没喂。</li>
+        <li><strong>README 骨架 while True 就够了</strong>：正常出口靠 stop_reason；最大轮数书要求有，骨架没写，生产要补。</li>
+        <li><strong>本课去跑 s01 / 去读 L01</strong>：过密。真循环阶段 2；失败归因已在 <a href="./0020-fail-check-harness.html">0020</a>。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。名字只有 Reason + Act，书补了「看」。"
+      data-bad="ReAct 不是两个字母游戏，也不是订票那四个固定节点。">
+      <p>书里的 ReAct 实际转几步？</p>
+      <button data-correct="true">想完去做，再看结果</button>
+      <button data-correct="false">只思考和行动两步</button>
+      <button data-correct="false">代码写死四个节点</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。模型决定何时调工具、何时停。"
+      data-bad="规划下一步是驾驶者的事；代码是载具。">
+      <p>最小循环里，代码主要干什么？</p>
+      <button data-correct="true">执行模型要求的工具调用</button>
+      <button data-correct="false">替模型决定下一步做什么</button>
+      <button data-correct="false">在循环里微调模型权重</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。0003 练的是 while 形状，决策按回合号。"
+      data-bad="两边都有 while 和工具；差在下一步看不看轨迹。">
+      <p>0003 的 <code>fake_model(turn)</code> 和本课 ReAct 差在哪？</p>
+      <button data-correct="true">下一步按回合剧本，不看轨迹</button>
+      <button data-correct="false">那边没有 while，形状完全不同</button>
+      <button data-correct="false">那边没有工具，只是单次补全</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。这是正常完成，不是必须再调工具。"
+      data-bad="无 tool call 就是说完了；那不是工作流节点。">
+      <p>模型这轮没有 tool call，循环该怎样？</p>
+      <button data-correct="true">把文本当答案，停下来</button>
+      <button data-correct="false">必须再调一次工具才算数</button>
+      <button data-correct="false">改走工作流的四个节点</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能说出 ReAct = 想 → 做 → 看，并指出定义在书 L172；North README 没有这个词，循环图在 L140。</li>
+      <li>能区分静态前缀和轨迹；知道没追加的观察等于没看。</li>
+      <li>能用自己的话讲「代码只执行模型的要求」（README L156–157）。</li>
+      <li>能用三案区分：看轨迹的 ReAct / 按回合的 0003 剧本 / 写死节点的工作流。</li>
+      <li>能说出三种停法：无 tool call、最大轮数、不可恢复错误。</li>
+      <li><code>trace_loop.py</code> 跑通，三种走法能对上表。</li>
+    </ul>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>书 §1.1.5：
+          <a href="../../AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md">第01章.md</a>
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:168">L168</a>
+          到骨架结束（
+          <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:196">L196</a>
+          ）。多币种轨迹示例、后面的模型实验先别读。</li>
+        <li>North
+          <a href="../../learn-claude-code-north/README-zh.md">README-zh.md</a>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:140">L140</a>
+          循环图到
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:234">L234</a>
+          「循环属于 agent」。s01–s20 格言可扫一眼 L165，不要打开 <code>code.py</code>。</li>
+        <li>压缩：<a href="../../reference/phase-1/react-loop.html">ReAct 循环速查</a> ·
+          <a href="../../reference/phase-1/agency-harness.html">Agency / Harness</a></li>
+      </ul>
+    </div>
+    <p>
+      <a href="./index.html">阶段 1 分册</a>
+      · <a href="./0018-agency-vs-harness.html">上一课 0018</a>
+    </p>
+    <div data-lesson-id-footer="0019"></div>
+    <footer>
+      不清楚的立刻问我。0019 已过关。下一课 0020（失败先查 harness），仍不要跑 North s01。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

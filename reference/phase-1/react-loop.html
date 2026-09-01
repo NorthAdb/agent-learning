@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>阶段 1 · ReAct 循环速查</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+  <link rel="stylesheet" href="../../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="../index.html">速查索引</a> · 课 0019 · 打印友好</p>
+    <h1>最小循环：想 → 做 → 看</h1>
+    <p class="mission">零件（0017）和载具（0018）怎么转起来。代码只执行模型的要求。</p>
+    <p class="src">
+      ReAct 定义：书 §1.1.5
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:168">L168</a>
+      标题、
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:172">L172</a>
+      三环节。North README <strong>不用</strong> ReAct 这个词；循环图
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:140">L140</a>，
+      「代码只是执行模型的要求」
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:157">L157</a>。
+    </p>
+
+    <pre>想  Model(静态前缀 + 轨迹) → 决策
+做  Harness 执行 tool_call（校验留给生产层）
+看  Environment 观察 → 追加进轨迹 → 再想
+
+无 tool call / stop_reason ≠ tool_use  → 停，返回文本
+最大轮数 / 不可恢复错误                 → 也要停</pre>
+
+    <h2>下一步谁决定（三案）</h2>
+    <table>
+      <tr><th>走法</th><th>谁选下一步</th><th>本仓库怎么叫</th></tr>
+      <tr><td>看整段轨迹再调模型</td><td>Model</td><td>ReAct / 自主 Agent</td></tr>
+      <tr><td><code>fake_model(turn)</code></td><td>作者按回合写的剧本</td><td>0003 形状预习，不是 ReAct</td></tr>
+      <tr><td>节点顺序写死</td><td>代码</td><td>工作流（0017）</td></tr>
+    </table>
+
+    <p>
+      <a href="../../lessons/phase-1/0019-react-loop.html">打开 0019</a>
+      · <a href="./formula.html">公式</a>
+      · <a href="./agency-harness.html">Agency / Harness</a>
+    </p>
+    <footer>失败归因见 <a href="./fail-check.html">0020 速查</a>。仍不要跑 North s01。</footer>
+  </main>
+  <script src="../../assets/lesson-nav.js"></script>
+</body>
+</html>
