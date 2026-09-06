@@ -1,0 +1,1198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0022 · s02 Tool Use</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0022"></div>
+    <h1>s02：加一个工具，只加一个 handler</h1>
+    <p class="mission">
+      0021 钉死了「一个循环 + 一个 bash」。本课在<strong>同一根循环</strong>上扩成五个工具：
+      模型仍决定调哪个，Harness 用查表执行。主技能是
+      <strong>dispatch map</strong>，不是再学一遍 Messages API。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      主材料：North
+      <a href="../../learn-claude-code-north/s02_tool_use/README.zh.md">s02 README</a>
+      （问题
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/README.zh.md:12">L12–16</a>，
+      分发
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/README.zh.md:20">L20–31</a>，
+      循环改一行
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/README.zh.md:87">L87–105</a>）
+      +
+      <a href="../../learn-claude-code-north/s02_tool_use/code.py"><code>s02_tool_use/code.py</code></a>
+      全文（
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:1">L1–197</a>
+      ）。
+      和 0021 相同的配置 / REPL / 循环出口只对照差异，不整段重讲。当前脚本用 <code>tool_calls</code> 列表判断，不再读 <code>stop_reason</code>。
+    </p>
+    <p class="muted">
+      <strong>已内化</strong>：五个 schema、四个文件工具、
+      <code>safe_path</code>、<code>TOOL_HANDLERS</code>、
+      <code>handler(**block.input)</code>、一轮多个 <code>tool_use</code> 串行；
+      <code>create</code> 发出的五段请求（<code>model</code> / <code>system</code> /
+      <code>messages</code> / <code>tools</code> / <code>max_tokens</code>）。
+      <strong>故意跳过</strong>：README 附录里的 CC 并发 batch、Zod、流式执行、结果落盘；权限留给 s03。
+      请求侧不背 <code>temperature</code> / <code>tool_choice</code> / <code>thinking</code> 等未传参数。
+      书第04章整章不塞进本课，卡住再选读。
+      <strong>不另写</strong> playground 假模型；过关以跑通本章 <code>code.py</code> 为准。
+    </p>
+
+    <h3>本课新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>出处</th></tr>
+      <tr>
+        <td><strong><code>response</code></strong> / Message</td>
+        <td>
+          <code>messages.create</code> 的返回对象（完整字段见节 F）。循环筛
+          <code>content</code> 里的 <code>tool_use</code>；<code>stop_reason</code> 仍在对象上，当前脚本不读
+        </td>
+        <td>
+          创建
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:155">L155–158</a>；
+          拆块
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:161">L161–165</a>。
+          0021 已见过；本课把请求五段写在节 E′，响应写在节 F。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>REPL</strong></td>
+        <td>Read-Eval-Print Loop：读一行 → 执行 → 打印 → 再等。外层 <code>s02 &gt;&gt;</code> 对人，不是 API</td>
+        <td>
+          入口
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:182">code.py L182–196</a>。
+          书 / s02 README <strong>没有</strong>这个缩写；0021 已用过。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>handler</strong></td>
+        <td>真正干活的处理函数，如 <code>run_read</code>。模型不直接调用它</td>
+        <td>
+          五个函数在
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:53">L53–123</a>；
+          取出来的变量名在
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:170">L170–171</a>。
+          README 格言「只加一个 handler」
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/README.zh.md:6">L6</a>。
+          不是 0012 对象上那个叫 <code>handler</code> 的字段名。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>dispatch map</strong> / <code>TOOL_HANDLERS</code></td>
+        <td>分发表：工具名 → handler 的字典。表是地图，不是执行动作</td>
+        <td>
+          README
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/README.zh.md:90">L90–103</a>；
+          代码
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:143">code.py L143–146</a>。
+          书第04章不用这个英文名。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>dispatch</strong></td>
+        <td>查表派单这一动作：按 <code>block.name</code> 取出 handler 再调用</td>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:170">L170–171</a>。
+          README 节名「工具分发」
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/README.zh.md:20">L20–24</a>、
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/README.zh.md:87">L87</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong><code>safe_path</code></strong></td>
+        <td>把相对路径接到工作区并 <code>resolve</code>，拒绝逃出工作区的路径</td>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:71">code.py L71–75</a>。
+          README「路径安全」
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/README.zh.md:134">L134</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong><code>Path.is_relative_to</code></strong></td>
+        <td>判断解析后的路径是否落在某个目录之下；用来挡 <code>../</code> 逃逸</td>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:73">L73</a>。
+          官方
+          <a href="https://docs.python.org/3/library/pathlib.html#pathlib.PurePath.is_relative_to">PurePath.is_relative_to</a>。
+          0007 讲过 <code>Path</code>，本课第一次用这个方法。
+        </td>
+      </tr>
+      <tr>
+        <td><strong><code>**</code> 解包</strong></td>
+        <td><code>fn(**{"path": "a.py"})</code> 等价 <code>fn(path="a.py")</code>；把模型给的参数字典拆成关键字参数</td>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:171">code.py L171</a>。
+          语法见 0004 / 官方
+          <a href="https://docs.python.org/3/tutorial/controlflow.html#unpacking-argument-lists">Unpacking argument lists</a>。
+        </td>
+      </tr>
+    </table>
+
+    <h2>为什么现在学？</h2>
+    <p>
+      只有 bash 时，模型心里是「读文件」，嘴里却要拼 <code>cat</code> / <code>type</code>。
+      多一层翻译，浪费 token，Windows 上还容易拼成 Unix 命令卡住（0021 的 <code>date</code>）。
+      专用工具让模型直接说 <code>read_file</code>。扩展方式必须是<strong>注册</strong>，不能每加一个工具就改循环骨架。
+    </p>
+    <p class="src">
+      README「只有 bash 一个工具」
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/README.zh.md:12">L12–16</a>。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>s02 概念</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr>
+        <td>handler</td>
+        <td>实现某一接口的处理类 / 方法</td>
+        <td>s02 的 handler 是普通函数对象，不是 Java 接口名。</td>
+      </tr>
+      <tr>
+        <td>dispatch map</td>
+        <td><code>Map&lt;String, Handler&gt;</code></td>
+        <td>键必须等于 schema 的 <code>name</code>，不等于 Python 函数名 <code>run_read</code>。</td>
+      </tr>
+      <tr>
+        <td>dispatch</td>
+        <td><code>map.get(name).handle(args)</code></td>
+        <td>是查表调用，不是第二套 Agent loop。</td>
+      </tr>
+      <tr>
+        <td>REPL</td>
+        <td>控制台里反复读一行再处理</td>
+        <td>外层 <code>s02 &gt;&gt;</code>；内层才是工具循环。</td>
+      </tr>
+      <tr>
+        <td><code>TOOL_HANDLERS</code></td>
+        <td><code>Map&lt;String, Function&gt;</code> / 策略表</td>
+        <td>就是本课的 dispatch map，不是另一张表。</td>
+      </tr>
+      <tr>
+        <td><code>handler(**block.input)</code></td>
+        <td>反射按参数名调用，或 DTO 再拆字段</td>
+        <td>模型给的 JSON 键必须对上函数形参名。</td>
+      </tr>
+      <tr>
+        <td><code>safe_path</code></td>
+        <td>把用户路径规范到工作根下，拒绝 <code>..</code></td>
+        <td>只罩 file 工具；bash 仍可乱走，那是 s03。</td>
+      </tr>
+      <tr>
+        <td>多个 <code>tool_use</code></td>
+        <td>for 循环按列表顺序调用</td>
+        <td>教学版不并行；生产 CC 会按 batch 并发，本课不实现。</td>
+      </tr>
+    </table>
+
+    <h2>系统讲解</h2>
+
+    <h3>1. 问题：一个 bash，模型在翻译</h3>
+    <p>
+      s01 能做事，但读 / 写 / 改 / 找文件都要绕 shell。
+      模型想的是动作，给的却是命令字符串。专用工具把「动作」写进 schema，少一层翻译。
+    </p>
+
+    <h3>2. 三个词：handler、dispatch map、dispatch</h3>
+    <p>
+      不要把它们当成一个东西。map 是表，handler 是表上的人，dispatch 是查表派单。
+    </p>
+    <table>
+      <tr><th>词</th><th>是什么</th><th>s02 落点</th></tr>
+      <tr>
+        <td><strong>handler</strong></td>
+        <td>真正干活的处理函数</td>
+        <td><code>run_bash</code> / <code>run_read</code> / <code>run_write</code> / <code>run_edit</code> / <code>run_glob</code></td>
+      </tr>
+      <tr>
+        <td><strong>dispatch map</strong></td>
+        <td>「名字 → handler」的对照表</td>
+        <td>字典 <code>TOOL_HANDLERS</code></td>
+      </tr>
+      <tr>
+        <td><strong>dispatch</strong></td>
+        <td>按模型给的工具名查表并调用</td>
+        <td><code>handler = TOOL_HANDLERS.get(block.name)</code> 再 <code>handler(**block.input)</code></td>
+      </tr>
+    </table>
+    <p>
+      可以想成分诊：客人说「read_file」，前台（dispatch）查表（map），把单子递给
+      <code>run_read</code>（handler）。模型不会自己去调 Python 函数。
+    </p>
+    <p>
+      键是 schema 的 <code>name</code>（<code>read_file</code>），值才是函数对象
+      <code>run_read</code>（<strong>无括号</strong>）。两边名字可以不同，靠这张表缝合。
+    </p>
+    <p class="src">
+      表：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:143">L143–146</a>。
+      派单：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:170">L170–171</a>。
+    </p>
+
+    <h3>3. 规则：加一个工具 = 两条注册，循环不动</h3>
+    <ol>
+      <li>在 <code>TOOLS</code> 里加一条 schema（给模型看）。</li>
+      <li>在 <code>TOOL_HANDLERS</code> 里加 <code>"名字": 函数</code>（给 Harness 执行）。</li>
+    </ol>
+    <p>
+      README 格言：<em>加一个工具，只加一个 handler</em>。
+      循环里那一行从硬编码 <code>run_bash(...)</code> 换成查表。
+    </p>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/README.zh.md:6">README L6–7</a>、
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/README.zh.md:24">L24–29</a>。
+    </p>
+
+    <h3>4. 三种接法（易混）</h3>
+    <table>
+      <tr><th>案</th><th>执行那一行</th><th>判定</th></tr>
+      <tr>
+        <td>① s01</td>
+        <td><code>output = run_bash(block.input["command"])</code></td>
+        <td>写死一个工具。再加 read 就要改 if/else，循环发胖。</td>
+      </tr>
+      <tr>
+        <td>② s02（要认）</td>
+        <td><code>handler = TOOL_HANDLERS.get(block.name)</code> 再 <code>handler(**block.input)</code></td>
+        <td>循环形状不变，扩展走注册表。</td>
+      </tr>
+      <tr>
+        <td>③ 错法</td>
+        <td>为每个工具复制一个 <code>agent_loop</code></td>
+        <td>骨架被拆碎。North 后面 18 章都叠在同一根循环上。</td>
+      </tr>
+    </table>
+    <p>
+      0012 的 ToolRegistry「存函数、按名调用」是同一肌肉；本课是它在真实 Messages 循环里的落地。
+    </p>
+
+    <h3>5. 一轮里多个 tool_use：教学版串行</h3>
+    <p>
+      模型可以一次返回「读 a.py、读 b.py、glob *.py」。
+      s02 按 <code>response.content</code> 出现顺序 <strong>一个接一个</strong> 跑，每个都有自己的
+      <code>tool_use_id</code>，结果打进同一条 <code>tool_result</code> 列表。
+      这不是并行，也不是三个循环。
+    </p>
+    <p class="src">
+      README
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/README.zh.md:105">L105–109</a>。
+      CC 的并发 batch 见附录，本课不实现。
+    </p>
+
+    <h3>6. <code>safe_path</code> 不是权限系统</h3>
+    <p>
+      文件工具走 <code>safe_path</code>：接到 <code>WORKDIR</code>、解析符号链接和 <code>..</code>，
+      再用 <code>is_relative_to(WORKDIR)</code>。逃出工作区就 <code>ValueError</code>，handler 收成
+      <code>Error: ...</code> 字符串喂回模型。
+    </p>
+    <p>
+      <strong>bash 不走 <code>safe_path</code></strong>。README 写明：<code>rm -rf</code> 仍可能跑
+      （s01 那点字符串黑名单挡不住改写）。真正的门在 s03。
+    </p>
+
+    <h2>主脚本导读：<code>s02_tool_use/code.py</code></h2>
+    <p>
+      打开
+      <a href="../../learn-claude-code-north/s02_tool_use/code.py"><code>learn-claude-code-north/s02_tool_use/code.py</code></a>。
+      文件头自己说了：本文件 = s01 全部 + 四个工具 + 分发 + <code>safe_path</code>。
+    </p>
+    <table>
+      <tr><th>块</th><th>行</th><th>相对 s01</th></tr>
+      <tr>
+        <td>头 / 配置 / REPL</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:1">L1–48</a>、
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:178">L178–196</a></td>
+        <td>同形。提示符改成 <code>s02 &gt;&gt;</code>；<code>WORKDIR = Path.cwd()</code></td>
+      </tr>
+      <tr>
+        <td><code>run_bash</code></td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:53">L53–66</a></td>
+        <td>几乎同；<code>cwd=WORKDIR</code>，多了 <code>encoding="utf-8", errors="replace"</code></td>
+      </tr>
+      <tr>
+        <td><code>safe_path</code> + 四工具</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:71">L71–123</a></td>
+        <td><strong>新</strong></td>
+      </tr>
+      <tr>
+        <td><code>TOOLS</code> / <code>TOOL_HANDLERS</code></td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:128">L128–146</a></td>
+        <td><strong>新</strong>（schema 从 1 条变 5 条）</td>
+      </tr>
+      <tr>
+        <td><code>agent_loop</code></td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:153">L153–175</a></td>
+        <td>骨架同；执行那一行改成查表</td>
+      </tr>
+    </table>
+
+    <h3>A. 配置里多了 <code>WORKDIR</code>（L24–48）</h3>
+    <p>
+      <code>from pathlib import Path</code> + <code>WORKDIR = Path.cwd()</code>：
+      工作区钉成 Path 对象，后面拼接路径、设 subprocess 的 <code>cwd</code> 都用它。
+      0007 已过关 <code>Path.cwd()</code>。
+      <code>SYSTEM</code> 改口：<code>Use tools</code> 不再只说 bash。
+    </p>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:24">L24–48</a>。
+    </p>
+
+    <h3>B. <code>run_bash</code> 的两处小补丁（L53–66）</h3>
+    <p>
+      相对 s01：<code>cwd=WORKDIR</code>；并指定
+      <code>encoding="utf-8", errors="replace"</code>。
+      后者：按 UTF-8 解码子进程输出，遇到非法字节用替换字符，避免 Windows 本地编码把循环炸死。
+      黑名单、120s 超时、拼 stdout/stderr，规则与 0021 相同。
+    </p>
+
+    <h3>C. <code>safe_path</code>（L71–75）</h3>
+    <pre>def safe_path(p: str) -> Path:
+    path = (WORKDIR / p).resolve()
+    if not path.is_relative_to(WORKDIR):
+        raise ValueError(f"Path escapes workspace: {p}")
+    return path</pre>
+    <p>
+      <code>WORKDIR / p</code>：相对路径接到工作区。已经是绝对路径时，Path 的 <code>/</code> 会换成那条绝对路径
+      （仍要过下一行检查）。
+    </p>
+    <p>
+      <code>.resolve()</code>：展开 <code>..</code> 和符号链接，得到真实绝对路径。
+      不问「字符串长什么样」，问「最终落在哪」。
+    </p>
+    <p>
+      <code>is_relative_to(WORKDIR)</code>：解析后是否仍在工作区树下。
+    </p>
+    <table>
+      <tr><th>案</th><th>输入</th><th>结果</th></tr>
+      <tr><td>① 正常</td><td><code>README.md</code></td><td>工作区内的文件，放行</td></tr>
+      <tr><td>② 逃逸</td><td><code>../secret.txt</code></td><td>resolve 后跑出 WORKDIR，抛 <code>ValueError</code></td></tr>
+      <tr><td>③ 盘符外</td><td>Windows 下另一盘的绝对路径</td><td>同样不是 relative_to，拒绝</td></tr>
+    </table>
+    <p>
+      handler 里 <code>try/except Exception</code> 会把这次异常变成 <code>Error: ...</code> 字符串，循环不崩。
+    </p>
+
+    <h3>D. 四个文件工具逐行（L78–123）</h3>
+    <p>
+      schema 名是 <code>read_file</code> 等，函数名是 <code>run_read</code> 等，靠
+      <code>TOOL_HANDLERS</code> 缝合。四个函数都是：先 <code>safe_path</code>（glob 在循环里再滤），
+      出错一律变成 <code>Error: ...</code> 字符串，循环不崩。
+    </p>
+
+    <h4>D1. <code>run_read</code> → 工具名 <code>read_file</code></h4>
+    <pre>def run_read(path: str, limit: int | None = None) -&gt; str:
+    try:
+        lines = safe_path(path).read_text().splitlines()
+        if limit and limit &lt; len(lines):
+            lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error: {e}"</pre>
+    <table>
+      <tr><th>行</th><th>在干什么</th></tr>
+      <tr>
+        <td>L78</td>
+        <td>
+          形参 <code>path</code> 对应 schema 的 required 字段。
+          <code>limit: int | None = None</code> 是联合类型：整数或 <code>None</code>（0009 见过 <code>|</code>）。
+          默认 <code>None</code> = 不截断。schema 里 <code>limit</code> 不是 required，模型可以不传。
+        </td>
+      </tr>
+      <tr>
+        <td>L80</td>
+        <td>
+          <code>safe_path(path)</code> 得到工作区内的 <code>Path</code>，
+          <code>read_text()</code> 读成一个字符串（默认 UTF-8），
+          <code>splitlines()</code> 按行切成列表，去掉行尾换行符。
+        </td>
+      </tr>
+      <tr>
+        <td>L81–82</td>
+        <td>
+          <code>if limit and limit &lt; len(lines)</code>：
+          <code>limit</code> 为 <code>None</code> 或 <code>0</code> 时左边为假，不截断。
+          真要截时只留前 <code>limit</code> 行，再追加一行说明还剩多少行。
+          这是给模型看的预览，不是把文件从磁盘删掉。
+        </td>
+      </tr>
+      <tr>
+        <td>L83</td>
+        <td><code>"\n".join(lines)</code> 把行列表拼回一块文本，作为 tool_result。</td>
+      </tr>
+      <tr>
+        <td>L84–85</td>
+        <td>
+          文件不存在、<code>safe_path</code> 拒绝、解码失败，都进这里。
+          返回字符串，不把异常甩出循环。
+        </td>
+      </tr>
+    </table>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:78">L78–86</a>。
+      <code>Path.read_text</code>：
+      <a href="https://docs.python.org/3/library/pathlib.html#pathlib.Path.read_text">官方</a>。
+    </p>
+
+    <h4>D2. <code>run_write</code> → 工具名 <code>write_file</code></h4>
+    <pre>def run_write(path: str, content: str) -&gt; str:
+    try:
+        file_path = safe_path(path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content)
+        return f"Wrote {len(content)} bytes to {path}"
+    except Exception as e:
+        return f"Error: {e}"</pre>
+    <table>
+      <tr><th>行</th><th>在干什么</th></tr>
+      <tr>
+        <td>L88</td>
+        <td>两个必填形参，对齐 schema 的 <code>path</code> + <code>content</code>。</td>
+      </tr>
+      <tr>
+        <td>L90</td>
+        <td>先过路径围栏，得到要写的那个 <code>Path</code>。</td>
+      </tr>
+      <tr>
+        <td>L91</td>
+        <td>
+          <code>parent</code> 是文件所在目录。
+          <code>mkdir(parents=True, exist_ok=True)</code>：中间目录没有就建，已经有也不报错（0007）。
+          这样 <code>a/b/c.py</code> 在 <code>a/b</code> 不存在时也能写。
+        </td>
+      </tr>
+      <tr>
+        <td>L92</td>
+        <td>
+          <code>write_text(content)</code>：<strong>整文件覆盖</strong>，不是追加。
+          原内容会被换成 <code>content</code>。
+        </td>
+      </tr>
+      <tr>
+        <td>L93</td>
+        <td>
+          成功观察用 <code>len(content)</code> 当字节数近似（UTF-8 下中文一字符多字节，这是字符数不是严格 UTF-8 字节数；教学上够用）。
+          返回给模型的是确认语，不是文件正文。
+        </td>
+      </tr>
+      <tr>
+        <td>L94–95</td>
+        <td>路径非法、磁盘满、权限不够 → <code>Error:</code> 字符串。</td>
+      </tr>
+    </table>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:88">L88–95</a>。
+    </p>
+
+    <h4>D3. <code>run_edit</code> → 工具名 <code>edit_file</code></h4>
+    <pre>def run_edit(path: str, old_text: str, new_text: str) -&gt; str:
+    try:
+        file_path = safe_path(path)
+        text = file_path.read_text()
+        if old_text not in text:
+            return f"Error: text not found in {path}"
+        file_path.write_text(text.replace(old_text, new_text, 1))
+        return f"Edited {path}"
+    except Exception as e:
+        return f"Error: {e}"</pre>
+    <table>
+      <tr><th>行</th><th>在干什么</th></tr>
+      <tr>
+        <td>L98</td>
+        <td>三个必填：路径、要换成的旧片段、新片段。对齐 schema 的 <code>old_text</code> / <code>new_text</code>。</td>
+      </tr>
+      <tr>
+        <td>L100–101</td>
+        <td>围栏之后读出<strong>全文</strong>到内存。大文件会很重；s02 不处理这一点。</td>
+      </tr>
+      <tr>
+        <td>L102–103</td>
+        <td>
+          <code>old_text not in text</code>：子串精确匹配，不是正则、不是按行。
+          找不到就返回错误字符串（走 <code>return</code>，不是 raise），模型下一轮能看到「没找到」。
+        </td>
+      </tr>
+      <tr>
+        <td>L104</td>
+        <td>
+          <code>str.replace(old, new, 1)</code> 的 <code>1</code> 是最多替换次数：只改<strong>第一处</strong>。
+          文件里两段相同旧文本时，第二段不动。改完立刻写回磁盘。
+        </td>
+      </tr>
+      <tr>
+        <td>L105</td>
+        <td>成功只回文件名确认，不把新全文再塞进轨迹。</td>
+      </tr>
+      <tr>
+        <td>L106–107</td>
+        <td>读失败、围栏拒绝等进通用 <code>except</code>。</td>
+      </tr>
+    </table>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:98">L98–107</a>。
+      <code>str.replace</code> 第三参数：
+      <a href="https://docs.python.org/3/library/stdtypes.html#str.replace">官方</a>。
+    </p>
+
+    <h4>D4. <code>run_glob</code> → 工具名 <code>glob</code></h4>
+    <pre>def run_glob(pattern: str) -&gt; str:
+    import glob as g
+    try:
+        matches = sorted({
+            match for match in g.glob(
+                pattern, root_dir=WORKDIR, recursive=True)
+            if (WORKDIR / match).resolve().is_relative_to(WORKDIR)
+        })
+        shown = matches[:200]
+        if len(matches) > 200:
+            shown.append("... (more matches omitted; narrow the pattern)")
+        return "\n".join(shown) if shown else "(no matches)"
+    except Exception as e:
+        return f"Error: {e}"</pre>
+    <table>
+      <tr><th>行</th><th>在干什么</th></tr>
+      <tr>
+        <td>L110</td>
+        <td>只要一个 <code>pattern</code>，如 <code>*.py</code>、<code>**/*.md</code>。</td>
+      </tr>
+      <tr>
+        <td>L111</td>
+        <td>
+          函数内部 <code>import glob as g</code>：标准库模块也叫 glob，工具对外也叫
+          <code>glob</code>。改名 <code>g</code> 避免和工具名、函数名搅在一起。
+          0014 已过关 glob。
+        </td>
+      </tr>
+      <tr>
+        <td>L113–117</td>
+        <td>
+          <code>g.glob(..., root_dir=WORKDIR, recursive=True)</code>：从工作区当根匹配，
+          <code>**</code> 才能递归。每个命中再 <code>resolve</code> + <code>is_relative_to</code>，
+          用集合去重后排序。
+          <code>root_dir</code> 是 3.10+ 的参数
+          （<a href="https://docs.python.org/3/library/glob.html#glob.glob">glob.glob</a>）。
+        </td>
+      </tr>
+      <tr>
+        <td>L118–120</td>
+        <td>
+          最多回 200 条；更多就追加一行提示，让模型把 pattern 收窄。
+        </td>
+      </tr>
+      <tr>
+        <td>L121</td>
+        <td>
+          有命中：每条路径一行。零命中：<code>(no matches)</code>，<strong>不是</strong>异常、也不是空字符串
+          （空串对模型更难读）。
+        </td>
+      </tr>
+      <tr>
+        <td>L122–123</td>
+        <td>非法 pattern 等进 <code>Error:</code>。</td>
+      </tr>
+    </table>
+    <p>
+      这四个都不经过 <code>run_bash</code>。bash 仍在表里，但读文件应走 <code>read_file</code>，
+      这正是本课要观察的黄字 <code>&gt; read_file</code>。
+    </p>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:110">L110–123</a>。
+    </p>
+
+    <h3>E. 五条 schema 必须对上五个键（L128–146）</h3>
+    <p>
+      <code>TOOLS</code> 里每条的 <code>name</code> 是模型会写在 <code>tool_use</code> 里的名字：
+      <code>bash</code> / <code>read_file</code> / <code>write_file</code> / <code>edit_file</code> / <code>glob</code>。
+    </p>
+    <p>
+      <code>TOOL_HANDLERS</code> 的<strong>键</strong>必须是这些名字，<strong>值</strong>才是
+      <code>run_read</code> 这类函数对象（无括号，0012 存函数）。
+    </p>
+    <table>
+      <tr><th>案</th><th>发生什么</th></tr>
+      <tr><td>① 两边 <code>read_file</code> 对齐</td><td>查表成功，<code>**input</code> 调 <code>run_read</code></td></tr>
+      <tr><td>② schema 有、字典漏了</td><td><code>.get</code> 得到 <code>None</code>，返回 <code>Unknown: ...</code></td></tr>
+      <tr><td>③ 字典有、schema 没有</td><td>模型根本不会调这个名字</td></tr>
+    </table>
+    <p>
+      函数名叫 <code>run_read</code>、<code>name</code> 叫 <code>read_file</code> 是故意的：
+      对外契约名和对内实现名可以不同，靠字典缝合。
+    </p>
+    <p class="src">
+      schema
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:128">L128–139</a>；
+      分发表
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:143">L143–146</a>。
+    </p>
+
+    <h3>E′. 请求：<code>create</code> 发出去的（L155–158）</h3>
+    <p>
+      需要掌握。<strong>要会读、会对照循环怎么把下一轮请求攒出来</strong>；
+      不必背 Messages API 里所有可选字段。
+      0021 已点过这五个名字，这里把形状钉死，好和后面的 <code>response</code> 对照。
+    </p>
+    <p>
+      分两层：客户端配置（打到哪、用哪把钥匙）和本次调用的请求体。
+      钥匙在 <code>Anthropic()</code> 构造时从环境变量读，<strong>不在</strong>
+      <code>create(...)</code> 的参数里。
+    </p>
+    <pre>response = client.messages.create(
+    model=MODEL, system=SYSTEM, messages=messages,
+    tools=TOOLS, max_tokens=8000,
+)</pre>
+    <table>
+      <tr><th>参数</th><th>从哪来</th><th>进不进 <code>messages</code> 列表</th></tr>
+      <tr>
+        <td><code>model</code></td>
+        <td><code>MODEL_ID</code> 环境变量</td>
+        <td>不进。顶层字段。</td>
+      </tr>
+      <tr>
+        <td><code>system</code></td>
+        <td>L48 的 <code>SYSTEM</code> 字符串</td>
+        <td>
+          <strong>不进</strong>。Messages API 没有 <code>role: "system"</code> 这种消息；
+          系统提示是顶层 <code>system</code>，属于 0019 的静态前缀，每圈原样再发一次。
+        </td>
+      </tr>
+      <tr>
+        <td><code>messages</code></td>
+        <td>外层 <code>history</code>，循环里不断 <code>append</code></td>
+        <td>就是这份列表。轨迹（可变部分）。</td>
+      </tr>
+      <tr>
+        <td><code>tools</code></td>
+        <td>L128 的 <code>TOOLS</code>（五条 schema）</td>
+        <td>
+          不进列表。也是静态前缀。
+          <code>TOOL_HANDLERS</code> <strong>从不发送</strong>——那是本机查表用的。
+        </td>
+      </tr>
+      <tr>
+        <td><code>max_tokens</code></td>
+        <td>写死 8000</td>
+        <td>不进。限制这一轮生成多长，不是轮数。</td>
+      </tr>
+    </table>
+    <p>
+      API 还认 <code>temperature</code>、<code>stream</code>、<code>tool_choice</code>、
+      <code>thinking</code>、<code>stop_sequences</code>、<code>metadata</code> 等。
+      s02 <strong>一个都没传</strong>，本课不要求记住它们的合法值。
+    </p>
+    <p>
+      <code>messages</code> 里每一项只有 <code>role</code> + <code>content</code>。
+      <code>content</code> 三种写法 s02 都会用到：
+    </p>
+    <table>
+      <tr><th>谁 append</th><th><code>role</code></th><th><code>content</code> 形状</th></tr>
+      <tr>
+        <td>REPL L186：你敲的一行</td>
+        <td><code>user</code></td>
+        <td>普通字符串（API 视为一段 text）</td>
+      </tr>
+      <tr>
+        <td>L159：刚拿到的回复</td>
+        <td><code>assistant</code></td>
+        <td><code>response.content</code> 原样（块列表）</td>
+      </tr>
+      <tr>
+        <td>L175：工具观察</td>
+        <td><code>user</code></td>
+        <td>
+          <code>tool_result</code> 块列表。角色仍是 user，因为协议规定观察从外侧送回，
+          不是你又打了一行。
+        </td>
+      </tr>
+    </table>
+    <p>第一圈（你刚回车，还没工具）发出去的形状：</p>
+    <pre>{
+  "model": "deepseek-v4-pro",
+  "system": "You are a coding agent at ... Use tools ...",
+  "max_tokens": 8000,
+  "tools": [ { "name": "bash", ... }, { "name": "read_file", ... }, ... ],
+  "messages": [
+    { "role": "user", "content": "Read the file README.md" }
+  ]
+}</pre>
+    <p>执行完工具、第二圈再调模型时，<code>model</code> / <code>system</code> / <code>tools</code> / <code>max_tokens</code> 不变，只变长 <code>messages</code>：</p>
+    <pre>"messages": [
+  { "role": "user",      "content": "Read the file README.md" },
+  { "role": "assistant", "content": [ /* 上一轮 response.content */ ] },
+  { "role": "user",      "content": [
+      { "type": "tool_result", "tool_use_id": "toolu_u1", "content": "文件正文..." }
+    ]
+  }
+]</pre>
+    <p>
+      所以：<strong>请求不是另一套神秘格式</strong>。顶层五段几乎固定；循环改的是
+      <code>messages</code> 越来越长。看懂响应，是为了把对的块 append 回去，变成下一轮请求。
+    </p>
+    <p class="src">
+      调用
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:155">L155–158</a>；
+      攒轨迹
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:159">L159</a>、
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:175">L175</a>、
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:186">L186</a>。
+      系统提示不进消息列表：SDK
+      <code>MessageCreateParamsBase.system</code>；
+      <a href="https://docs.anthropic.com/en/api/messages">Messages API</a>。
+      0021 节 F 第一步已提过这五个名字。
+    </p>
+
+    <h3>F. <code>response</code> 的完整结构</h3>
+    <p>
+      <code>client.messages.create(...)</code> 返回 SDK 的
+      <strong>Message 对象</strong>（本课变量名 <code>response</code>）。
+      HTTP JSON 与 Python 属性同名；读的时候用 <code>response.content</code>，不是
+      <code>response["content"]</code>。
+    </p>
+    <p>
+      对象上仍有 <code>stop_reason</code>；当前循环只筛 <code>content</code> 里的 <code>tool_use</code>。其余字段每次都在，循环不碰。
+      DeepSeek 兼容端点核心形状相同；<code>container</code> / <code>stop_details</code> / 缓存用量等可选字段经常是
+      <code>null</code> 或根本没有。
+    </p>
+    <pre>response                          # Message
+├─ id                 str         # 本条消息 ID，常见 msg_...
+├─ type               "message"   # 对象种类；别和 block.type 搞混
+├─ role               "assistant" # 永远是助手，不会是 user
+├─ model              str         # 实际用的模型名
+├─ content            list        # 内容块，按出现顺序
+├─ stop_reason        str | null  # 为何停（见下表）
+├─ stop_sequence      str | null  # 命中了哪条自定义停词；没配就是 null
+├─ usage              object      # token 账
+│   ├─ input_tokens
+│   ├─ output_tokens
+│   ├─ cache_creation_input_tokens   # 可选
+│   ├─ cache_read_input_tokens       # 可选
+│   ├─ cache_creation                # 可选，按 TTL 拆
+│   ├─ output_tokens_details         # 可选
+│   ├─ server_tool_use               # 可选
+│   ├─ service_tier                  # 可选 standard / priority / batch
+│   └─ inference_geo                 # 可选
+├─ container          object | null  # 代码执行容器；s02 不用
+└─ stop_details       object | null  # 拒答细项；s02 不用</pre>
+    <table>
+      <tr><th>顶层字段</th><th>含义</th><th>s02 用不用</th></tr>
+      <tr>
+        <td><code>id</code></td>
+        <td>这一条 assistant 消息的 ID。和下面 <code>tool_use</code> 块自己的 <code>id</code>（常见 <code>toolu_...</code>）不是同一个。</td>
+        <td>不用</td>
+      </tr>
+      <tr>
+        <td><code>type</code></td>
+        <td>固定 <code>"message"</code>。表示「这是一条 Message」，不是内容块种类。</td>
+        <td>不用</td>
+      </tr>
+      <tr>
+        <td><code>role</code></td>
+        <td>固定 <code>"assistant"</code>。L159 自己再写一遍 <code>"role": "assistant"</code> 放进轨迹。</td>
+        <td>不用（轨迹里手写）</td>
+      </tr>
+      <tr>
+        <td><code>model</code></td>
+        <td>服务端实际用的模型字符串。</td>
+        <td>不用</td>
+      </tr>
+      <tr>
+        <td><code>content</code></td>
+        <td>块列表。L159 整表追加；L161–163 筛 <code>tool_use</code>。</td>
+        <td><strong>用</strong></td>
+      </tr>
+      <tr>
+        <td><code>stop_reason</code></td>
+        <td>本轮为什么停。非流式调用里应有值。</td>
+        <td><strong>用</strong>（L158）</td>
+      </tr>
+      <tr>
+        <td><code>stop_sequence</code></td>
+        <td>仅当 <code>stop_reason == "stop_sequence"</code> 时，这里是命中的那串自定义停词。</td>
+        <td>不用（s02 没配 stop_sequences）</td>
+      </tr>
+      <tr>
+        <td><code>usage</code></td>
+        <td>本请求的 token 计数。文档写明：账上的 token 不必和可见字符一一对应。</td>
+        <td>不用</td>
+      </tr>
+      <tr>
+        <td><code>container</code></td>
+        <td>官方代码执行工具用的容器信息（id / 过期时间 / skills）。</td>
+        <td>不用</td>
+      </tr>
+      <tr>
+        <td><code>stop_details</code></td>
+        <td>拒答时的结构化说明（如策略类别）。</td>
+        <td>不用</td>
+      </tr>
+    </table>
+    <p><code>stop_reason</code> 官方枚举（本机 SDK <code>StopReason</code>）：</p>
+    <table>
+      <tr><th>值</th><th>含义</th><th>s02 循环</th></tr>
+      <tr><td><code>tool_use</code></td><td>模型发起了一次或多次工具调用</td><td>通常此时 <code>content</code> 里有 <code>tool_use</code>，进入 L161 筛表</td></tr>
+      <tr><td><code>end_turn</code></td><td>自然说完</td><td>通常筛完为空，L164–165 <code>return</code></td></tr>
+      <tr><td><code>max_tokens</code></td><td>碰到请求的 <code>max_tokens</code> 或模型上限，输出被截断</td><td>同样 return（当「说完」处理，可能话没说完）</td></tr>
+      <tr><td><code>stop_sequence</code></td><td>生成了你提供的自定义停词</td><td>return</td></tr>
+      <tr><td><code>pause_turn</code></td><td>长轮次暂停，可把当前回复原样送回让模型接着生成</td><td>s02 没处理，会当成说完</td></tr>
+      <tr><td><code>refusal</code></td><td>安全分类器介入拒答</td><td>同上</td></tr>
+      <tr><td><code>model_context_window_exceeded</code></td><td>超出模型上下文窗口</td><td>同上</td></tr>
+    </table>
+    <p>
+      L159 把整个 <code>response.content</code> 原样追加进轨迹。
+      循环出口看 L161–165：筛出 <code>tool_use</code> 块；列表空就 <code>return</code>。
+      <strong>不再读</strong> <code>stop_reason</code>。字段仍在对象上，和筛表结果通常一致，但脚本认的是块列表。
+    </p>
+    <p>
+      想看见本机真实对象，可在 L159 前临时加
+      <code>print(response.model_dump())</code>（Pydantic 转 dict），看完删掉。
+    </p>
+    <p class="src">
+      创建与停判：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:155">L155–165</a>。
+      字段以本机 SDK
+      <code>anthropic.types.Message</code> 为准，与
+      <a href="https://docs.anthropic.com/en/api/messages">Messages API</a>
+      同名。书不写 SDK 对象名，只说「工具调用」。
+    </p>
+
+    <h4>F1. <code>content[]</code>：每一项由 <code>type</code> 决定形状</h4>
+    <p>
+      每个 <code>block</code> 是对象，用属性（<code>block.type</code>）而不是
+      <code>block["type"]</code>。SDK 里 <code>ContentBlock</code> 是一堆联合类型；
+      <strong>s02 只认两种</strong>，其余本课请求没开，一般不会出现：
+    </p>
+    <table>
+      <tr><th><code>block.type</code></th><th>块上还有什么</th><th>s02</th></tr>
+      <tr>
+        <td><code>"text"</code></td>
+        <td><code>text</code>（字符串）；可选 <code>citations</code></td>
+        <td>L161–163 筛掉。文字已在 L159 进轨迹。REPL 末尾才打印 <code>block.text</code></td>
+      </tr>
+      <tr>
+        <td><code>"tool_use"</code></td>
+        <td>
+          <code>id</code>（本次调用 ID，常见 <code>toolu_...</code>）；
+          <code>name</code>（工具名）；
+          <code>input</code>（参数映射）；
+          可选 <code>caller</code> / <code>toolset_name</code>
+        </td>
+        <td><strong>进 <code>tool_calls</code></strong>：打印、dispatch、收集 <code>tool_result</code></td>
+      </tr>
+      <tr>
+        <td><code>"thinking"</code></td>
+        <td><code>thinking</code> + <code>signature</code>（扩展思考）</td>
+        <td>本课没开，跳过</td>
+      </tr>
+      <tr>
+        <td><code>"redacted_thinking"</code></td>
+        <td>被打码的思考块</td>
+        <td>跳过</td>
+      </tr>
+      <tr>
+        <td>其它</td>
+        <td>
+          服务端工具相关：<code>server_tool_use</code>、
+          <code>web_search_tool_result</code>、<code>web_fetch_tool_result</code>、
+          <code>code_execution_tool_result</code>、<code>bash_code_execution_tool_result</code>、
+          <code>text_editor_code_execution_tool_result</code>、
+          <code>tool_search_tool_result</code>、<code>container_upload</code>
+        </td>
+        <td>s02 的 <code>TOOLS</code> 全是客户端工具，不会走到这些</td>
+      </tr>
+    </table>
+    <p>
+      一轮可以是：先一段 text，再两个 tool_use。列表长度不固定。
+      下面是<strong>一次调工具时</strong>你大概会拿到的整棵对象
+      （省略 <code>null</code> 的可选字段；真实 SDK 是对象，不是手写 dict）：
+    </p>
+    <pre>response = {
+  "id":            "msg_...",
+  "type":          "message",
+  "role":          "assistant",
+  "model":         "deepseek-v4-pro",   # 以你 .env 的 MODEL_ID 为准
+  "stop_reason":   "tool_use",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens":  1200,
+    "output_tokens": 80
+  },
+  "content": [
+    { "type": "text", "text": "我先读两个文件。" },
+    {
+      "type":  "tool_use",
+      "id":    "toolu_u1",
+      "name":  "read_file",
+      "input": { "path": "README.md" }
+    },
+    {
+      "type":  "tool_use",
+      "id":    "toolu_u2",
+      "name":  "read_file",
+      "input": { "path": "requirements.txt" }
+    }
+  ]
+}</pre>
+    <p>
+      这个例子里 L161–163 先筛出两个 <code>tool_use</code>（text 不进表）；
+      <code>for</code> 再转两圈，各执行一次
+      <code>run_read</code>。<code>results</code> 最后有两项，ID 分别是 <code>u1</code> / <code>u2</code>。
+    </p>
+
+    <h4>F2. L161–175 对着上面那份 <code>content</code> 走</h4>
+    <pre>tool_calls = [
+    block for block in response.content if block.type == "tool_use"
+]
+if not tool_calls:
+    return
+
+results = []
+for block in tool_calls:
+    print(f"\033[33m> {block.name}\033[0m")
+    handler = TOOL_HANDLERS.get(block.name)
+    output = handler(**block.input) if handler else f"Unknown: {block.name}"
+    print(str(output)[:200])
+    results.append({
+        "type": "tool_result",
+        "tool_use_id": block.id,
+        "content": output,
+    })
+messages.append({"role": "user", "content": results})</pre>
+    <table>
+      <tr><th>行</th><th>在干什么</th></tr>
+      <tr>
+        <td>L161–163</td>
+        <td>
+          从 <code>content</code> 里筛出 <code>tool_use</code> 块，保持原始顺序。
+          text 不进这张表，但已经在 L159 进轨迹了。
+        </td>
+      </tr>
+      <tr>
+        <td>L164–165</td>
+        <td>
+          表是空的 = 本轮没有工具调用，<code>return</code>。
+          这是当前脚本的循环出口，<strong>不读</strong> <code>stop_reason</code>。
+        </td>
+      </tr>
+      <tr>
+        <td>L167–168</td>
+        <td>
+          准备观察列表，按筛出的块串行执行。教学版不并行。
+        </td>
+      </tr>
+      <tr>
+        <td>L169</td>
+        <td>
+          黄字打印 <code>block.name</code>（<code>read_file</code>），不再打印
+          <code>$ command</code>：五个工具的参数字段不同，不能假定都有 <code>command</code>。
+        </td>
+      </tr>
+      <tr>
+        <td>L170</td>
+        <td>
+          用名字去 dispatch map 取 handler。
+          <code>.get</code> 找不到返回 <code>None</code>，不会 <code>KeyError</code>。
+        </td>
+      </tr>
+      <tr>
+        <td>L171</td>
+        <td>
+          有 handler：<code>**block.input</code> 拆成关键字参数再调用
+          （<code>run_read(path="README.md")</code>）。
+          没有：观察写成 <code>Unknown: 那个名字</code>，循环继续。
+        </td>
+      </tr>
+      <tr>
+        <td>L172</td>
+        <td>
+          把观察的前 200 个字符打到你的终端（人看的）；完整 <code>output</code> 仍进
+          <code>results</code> 给模型。
+        </td>
+      </tr>
+      <tr>
+        <td>L173</td>
+        <td>
+          一条 <code>tool_result</code>：<code>tool_use_id</code> 必须等于这个块的
+          <code>block.id</code>，模型才知道「哪一次调用」对应这段输出。
+          <code>content</code> 是字符串（handler 的返回值）。
+        </td>
+      </tr>
+    </table>
+    <p>
+      循环结束后 L175：
+      <code>messages.append({"role": "user", "content": results})</code>。
+      这里的 <code>user</code> 仍是协议里的「工具观察从外侧送回」，不是你又打了一行。
+      然后 <code>while True</code> 回到 L155，带着更长的轨迹再调模型。
+    </p>
+    <p>
+      对照：s01 的 L104–114 是同一段结构，只是把 L170–171 写成写死的
+      <code>run_bash(block.input["command"])</code>。
+    </p>
+    <p class="src">
+      s02：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:161">L161–175</a>。
+      s01 对照：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:104">L104–117</a>。
+    </p>
+
+    <h3>G. REPL（L178–196）</h3>
+    <p>
+      <strong>REPL</strong> = Read-Eval-Print Loop，不是 API 字段。外层 <code>s02 &gt;&gt;</code> 跟人对话；
+      内层 <code>agent_loop</code> 才跟模型和工具转圈。两个都是 <code>while True</code>，职责不同。
+    </p>
+    <table>
+      <tr><th>字母</th><th>意思</th><th>s02 外层</th></tr>
+      <tr><td>Read</td><td>读你敲的一行</td><td><code>query = input("s02 >> ")</code></td></tr>
+      <tr><td>Eval</td><td>拿去跑</td><td><code>agent_loop(history)</code></td></tr>
+      <tr><td>Print</td><td>把结果印出来</td><td>打印最终 text 块</td></tr>
+      <tr><td>Loop</td><td>再回到 Read</td><td>外层 <code>while True</code></td></tr>
+    </table>
+    <p>
+      Python 的 <code>&gt;&gt;&gt;</code> 也是 REPL。<code>q</code> / 空回车 / Ctrl+C 结束的是这个 REPL。
+      打印最终 text 时这里没有 <code>isinstance(..., list)</code>，默认最后一条 content 已是块列表。
+    </p>
+
+    <h2>动手：跑本章 <code>code.py</code></h2>
+    <p>
+      沿用 s01 的 North <code>.venv</code> 和 <code>.env</code>（DeepSeek 即可）。不要把 key 发到聊天。
+      建议在 North 仓库根目录启动，这样 <code>WORKDIR</code> 就是仓库根，方便读 README。
+    </p>
+    <pre>cd D:\agent-learning\learn-claude-code-north
+.\.venv\Scripts\Activate.ps1
+python s02_tool_use\code.py</pre>
+    <p>观察重点（README「试一下」）：</p>
+    <ol>
+      <li>只读：<code>Read the file README.md and tell me what this project is about</code> —— 应看到黄字 <code>&gt; read_file</code>，不是 <code>bash</code> + <code>cat</code>。</li>
+      <li>写再读：让它建一个可丢弃的小文件再读回来（不要改你的课件仓）。</li>
+      <li>查找：<code>Find all Python files in this directory</code> —— 走 <code>glob</code>。</li>
+      <li>一次多工具：让它读两个现成文件再总结 —— 一轮里可能连续两个 <code>&gt; read_file</code>。</li>
+    </ol>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/README.zh.md:139">README L139–153</a>。
+    </p>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>加工具就要改 while</strong>：错。改 <code>TOOLS</code> + <code>TOOL_HANDLERS</code>。</li>
+        <li><strong>函数名必须等于工具名</strong>：错。对齐的是字典的键和 schema 的 <code>name</code>。</li>
+        <li><strong><code>safe_path</code> = 已经安全</strong>：只罩文件工具；bash 仍是洞，s03 才关门。</li>
+        <li><strong><code>**</code> 是乘法</strong>：在调用处是解包关键字参数。</li>
+        <li><strong>多个 tool_use 就是并行</strong>：教学版严格按列表顺序串行。</li>
+        <li><strong>dispatch map = dispatch = handler</strong>：map 是表，handler 是函数，dispatch 是查表调用。</li>
+        <li><strong>以为 <code>response</code> 就是一段字符串</strong>：它是 Message 对象；要执行的工具在 <code>content</code> 列表的 <code>tool_use</code> 块里。</li>
+        <li><strong><code>system</code> 是一条 <code>role: system</code> 消息</strong>：错。它是 <code>create</code> 的顶层参数，不进 <code>messages</code>。</li>
+        <li><strong><code>TOOL_HANDLERS</code> 会发给模型</strong>：错。发出去的是 <code>TOOLS</code> schema；handlers 只在本机。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。循环骨架不动，扩展走两条注册。"
+      data-bad="不要为每个工具复制 agent_loop，也不必重写 while。">
+      <p>s02 再加一个工具，循环要怎样？</p>
+      <button data-correct="true">只加 schema 和 handler 映射</button>
+      <button data-correct="false">必须重写 while 才能加工具</button>
+      <button data-correct="false">再复制一份完整 agent_loop</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。模型写的名字是 schema 的 name，用来查字典。"
+      data-bad="Python 函数名 run_read 不必等于工具对外的名字。">
+      <p><code>TOOL_HANDLERS</code> 的键应该对齐什么？</p>
+      <button data-correct="true">TOOLS 里那条的 name</button>
+      <button data-correct="false">实现函数的 Python 名字</button>
+      <button data-correct="false">当前 MODEL_ID 字符串</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。** 把参数字典拆成关键字参数传给 handler。"
+      data-bad="解包的是这一次工具的 input，不是整段轨迹。">
+      <p><code>handler(**block.input)</code> 在干什么？</p>
+      <button data-correct="true">按参数名调用处理函数</button>
+      <button data-correct="false">把整段 history 传给工具</button>
+      <button data-correct="false">把 stop_reason 换成整数</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。路径围栏只罩 file 工具；bash 仍可能乱跑。"
+      data-bad="safe_path 不是 s01 那串危险命令黑名单，也不是 API 鉴权。">
+      <p><code>safe_path</code> 主要防什么？</p>
+      <button data-correct="true">文件工具把路径逃出工作区</button>
+      <button data-correct="false">bash 里出现的所有危险串</button>
+      <button data-correct="false">Messages API 的错误令牌</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。map 是表，handler 是表上的函数。"
+      data-bad="dispatch 是查表动作；REPL 是外层对人，不是这张表。">
+      <p>s02 里 <code>run_read</code> 和 <code>TOOL_HANDLERS</code> 各是什么？</p>
+      <button data-correct="true">前者是 handler，后者是 dispatch map</button>
+      <button data-correct="false">前者是 REPL，后者是 stop_reason</button>
+      <button data-correct="false">两者都是 Messages API 的字段</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。L161–163 先从 content 筛出 tool_use；for 只走这张表。"
+      data-bad="response 不是字符串；text 不进 tool_calls，但已经在 L159 进轨迹了。">
+      <p>L168 的 <code>for block in tool_calls</code> 在遍历什么？</p>
+      <button data-correct="true">本轮筛出的 tool_use 块（text 不在这张表里）</button>
+      <button data-correct="false">整段 HTTP 响应原文</button>
+      <button data-correct="false">history 里所有 user 消息</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。SYSTEM 和 TOOLS 是顶层静态前缀；列表里只有对话轨迹。"
+      data-bad="system 不是 messages 里的一条；handlers 从不发送。">
+      <p>s02 每次 <code>create</code>，<code>system</code> 和 <code>TOOLS</code> 放在哪？</p>
+      <button data-correct="true">create 的顶层参数，不进 messages 列表</button>
+      <button data-correct="false">messages 里 role 为 system 的那一条</button>
+      <button data-correct="false">塞进 TOOL_HANDLERS 发给模型</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能分清 handler（函数）、dispatch map（表）、dispatch（查表调用），以及 REPL 不是 agent loop。</li>
+      <li>能指出 <code>create</code> 的五段：<code>model</code> / <code>system</code> / <code>messages</code> / <code>tools</code> / <code>max_tokens</code>；<code>system</code> 与 <code>TOOLS</code> 不进列表；<code>TOOL_HANDLERS</code> 不发送。</li>
+      <li>能指出 <code>response.content</code> 是块列表，L163 只处理 <code>tool_use</code>，<code>tool_use_id</code> 对齐 <code>block.id</code>。</li>
+      <li>能指出 s01 硬编码 <code>run_bash</code> 和 s02 查表差在哪一行。</li>
+      <li>能解释 <code>**block.input</code>、<code>safe_path</code> / <code>is_relative_to</code>，以及 bash 仍不受 <code>safe_path</code> 约束。</li>
+      <li>能说明一轮多个 <code>tool_use</code> 在教学版里是串行。</li>
+      <li>真跑 <code>python s02_tool_use/code.py</code>，至少看到一次非 bash 的黄字工具名（如 <code>read_file</code> / <code>glob</code>）。</li>
+    </ul>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>主阅读：
+          <a href="../../learn-claude-code-north/s02_tool_use/README.zh.md">s02 README</a>
+          到「试一下」即可；附录 CC 源码可略。</li>
+        <li>对照上一课：
+          <a href="./0021-agent-loop.html">0021 s01</a>。</li>
+        <li>压缩：
+          <a href="../../reference/phase-2/s02-tool-use.html">阶段 2 · s02 速查</a>。</li>
+        <li>书第04章工具：卡住「工具在公式里哪一层」再打开，不当本课主阅读。
+          <a href="../../AI-Agents-in-Depth-md/%E7%AC%AC04%E7%AB%A0%20%E5%B7%A5%E5%85%B7/%E7%AC%AC04%E7%AB%A0%20%E5%B7%A5%E5%85%B7.md">第04章.md</a></li>
+      </ul>
+    </div>
+
+    <p>
+      <a href="./index.html">阶段 2 分册</a>
+      · <a href="./0021-agent-loop.html">上一课 0021</a>
+    </p>
+    <div data-lesson-id-footer="0022"></div>
+    <footer>
+      不清楚的立刻问我。下一课
+      <a href="./0023-permission.html">0023 s03</a>：执行前划边界。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

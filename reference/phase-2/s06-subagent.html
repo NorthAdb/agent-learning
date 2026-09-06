@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>阶段 2 · s06 Subagent 速查</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+  <link rel="stylesheet" href="../../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="../index.html">速查索引</a> · 课 0026 · 打印友好</p>
+    <h1>s06：Subagent</h1>
+    <p class="mission">
+      子 Agent 使用独立 messages 处理明确子任务；父子共享进程、WORKDIR 和文件副作用，
+      但父只收到子 Agent 的最终文本。
+    </p>
+    <p class="src">
+      来源：
+      <a href="../../learn-claude-code-north/s06_subagent/README.zh.md">s06 README</a>
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/README.zh.md:23">L23–29</a>；
+      <a href="../../learn-claude-code-north/s06_subagent/code.py">code.py</a>
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:240">L240–322</a>。
+    </p>
+
+    <h2>一张图</h2>
+    <pre>父 messages
+    ↓ task(prompt)
+run_subagent
+    ↓ 新建 child messages
+子 Agent：模型 → 基础工具 → tool_result → 模型
+    ↓ 最终 text
+父侧 task tool_result → 父 messages</pre>
+
+    <h2>三条边界</h2>
+    <table>
+      <tr><th>边界</th><th>当前实现</th></tr>
+      <tr><td>消息</td><td>父 / 子各自有 messages；子内部工具结果不复制给父。</td></tr>
+      <tr><td>进程与工作区</td><td>同一 Python 进程、同一 WORKDIR；子写文件，父随后可读。</td></tr>
+      <tr><td>能力</td><td>父有 BASE_TOOLS + task；子只有 BASE_TOOLS，没有 task。</td></tr>
+    </table>
+
+    <h2>工具表</h2>
+    <pre>SUB_TOOLS = list(BASE_TOOLS)
+SUB_HANDLERS = dict(BASE_HANDLERS)
+
+TASK_TOOL = {"name": "task", ...}
+TOOLS = [*BASE_TOOLS, TASK_TOOL]
+TOOL_HANDLERS = {**BASE_HANDLERS, "task": run_subagent}</pre>
+    <ul>
+      <li><code>TOOLS</code> / <code>SUB_TOOLS</code>：发给模型看的工具说明。</li>
+      <li><code>TOOL_HANDLERS</code> / <code>SUB_HANDLERS</code>：本地按工具名执行的函数表。</li>
+      <li>父的 map 有 <code>"task": run_subagent</code>；子的 map 没有 task，因此只有一层委派。</li>
+      <li><code>list(BASE_TOOLS)</code> / <code>dict(BASE_HANDLERS)</code> 新建外层容器，不创建新进程。</li>
+    </ul>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:256">源码 L256–257</a>；
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:310">L310–322</a>。
+    </p>
+
+    <h2>execute_tool 共用边界</h2>
+    <pre>blocked = trigger_hooks("PreToolUse", block)
+if blocked:
+    return str(blocked)
+
+handler = handlers.get(block.name)
+output = handler(**block.input) if handler else f"Unknown: {block.name}"
+trigger_hooks("PostToolUse", block, output)
+return str(output)</pre>
+    <ul>
+      <li>父传 <code>TOOL_HANDLERS</code>，子传 <code>SUB_HANDLERS</code>。</li>
+      <li>父子基础工具都经过共享的 PreToolUse / PostToolUse hooks。</li>
+      <li>Pre 被拒绝时提前返回，不执行 handler，也不触发 Post。</li>
+    </ul>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:240">源码 L240–252</a>。
+    </p>
+
+    <h2>子循环算法</h2>
+    <ol>
+      <li>打印 started，创建 <code>messages = [{"role": "user", "content": prompt}]</code>。</li>
+      <li>最多 <code>for _ in range(30)</code> 次请求模型，使用 <code>SUB_SYSTEM</code>、子 messages、SUB_TOOLS。</li>
+      <li>把 assistant response 追加到子 messages，并筛选 <code>tool_use</code>。</li>
+      <li>有 tool_use：逐个执行、用原 id 组装 tool_result，一批回填子 messages。</li>
+      <li>无 tool_use：触发 Stop；放行后提取 text 并返回。</li>
+      <li>30 轮仍未最终回答：返回 <code>Subagent stopped after 30 turns without a final answer.</code>。</li>
+    </ol>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:270">源码 L270–307</a>。
+    </p>
+
+    <h2>extract_text</h2>
+    <pre>if not isinstance(content, list):
+    return str(content)
+return "\n".join(
+    getattr(block, "text", "")
+    for block in content
+    if getattr(block, "type", None) == "text"
+)</pre>
+    <ul>
+      <li>只在没有 tool_use 的结束分支拿最终文本。</li>
+      <li>只拼接 <code>type == "text"</code> 的 block；不返回子 messages。</li>
+      <li>没有文本时，调用方用 <code>or "(no summary)"</code> 提供兜底。</li>
+    </ul>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:260">源码 L260–267</a>。
+    </p>
+
+    <h2>父侧回填</h2>
+    <pre>for block in tool_calls:
+    output = execute_tool(block, TOOL_HANDLERS)
+    results.append({
+        "type": "tool_result",
+        "tool_use_id": block.id,
+        "content": output,
+    })
+messages.append({"role": "user", "content": results})</pre>
+    <p>
+      对父循环来说，task 仍是普通工具：handler 返回子最终文本后，
+      父用原 <code>task</code> 的 id 回填 tool_result，再请求父模型。
+      子的中间调用不会自动进入父 messages。
+    </p>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:328">父循环 L328–358</a>。
+    </p>
+
+    <h2>最容易混淆的六组关系</h2>
+    <ul>
+      <li>fresh messages ≠ 新进程：只隔离对话。</li>
+      <li>消息隔离 ≠ 文件隔离：WORKDIR 共享。</li>
+      <li>task ≠ bash：task 开一个子循环，子循环再决定是否调用 bash。</li>
+      <li>最终 text ≠ 验证证据：父仍要 read / bash / test。</li>
+      <li>30 turns ≠ 全局 max_turns：只限制一次子循环，父仍是 while True。</li>
+      <li>子没有 task ≠ 子不能执行工具：子仍拥有五个基础工具。</li>
+    </ul>
+
+    <h2>调用时机</h2>
+    <table>
+      <tr><th>事件</th><th>父</th><th>子</th></tr>
+      <tr><td>UserPromptSubmit</td><td>外层 REPL 提交用户输入时</td><td>本实现不会因子 prompt 自动触发</td></tr>
+      <tr><td>Pre / Post</td><td>task 或其他父工具前后</td><td>子基础工具前后；共用 hooks</td></tr>
+      <tr><td>Stop</td><td>父无 tool_use、准备退出</td><td>子无 tool_use、准备返回文本</td></tr>
+    </table>
+
+    <h2>脚本地图</h2>
+    <ul>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:40">L40–54</a>：父 / 子 system 与配置。</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:119">L119–137</a>：基础工具 schema 与 handlers。</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:140">L140–238</a>：共享 hooks 与权限。</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:240">L240–252</a>：公共执行边界。</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:256">L256–307</a>：子工具表、文本提取、子循环。</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:310">L310–358</a>：task 接线与父循环。</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:360">L360–373</a>：外层 REPL。</li>
+    </ul>
+
+    <p>
+      <a href="../../lessons/phase-2/0026-subagent.html">打开 0026 课件</a>
+      · <a href="./s05-todo-write.html">s05 TodoWrite</a>
+    </p>
+    <footer>下一课：s07 Skill Loading。按需加载知识，不把所有文档塞进 system prompt。</footer>
+  </main>
+</body>
+</html>

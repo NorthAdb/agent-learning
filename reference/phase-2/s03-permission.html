@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>阶段 2 · s03 Permission 速查</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+  <link rel="stylesheet" href="../../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="../index.html">速查索引</a> · 课 0023 · 打印友好</p>
+    <h1>s03：三道闸门</h1>
+    <p class="mission">执行前判断。硬拒绝优先，规则命中才问人，默认拒绝。</p>
+    <p class="src">
+      格言：
+      <a href="../../learn-claude-code-north/s03_permission/README.md">s03 README</a>
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/README.zh.md:6">L6</a>。
+    </p>
+
+    <pre>Tool call → Gate1 deny? → Gate2 match? → Gate3 allow? → Exec
+                |               |              |
+             blocked         ask user      user says no?</pre>
+
+    <h2>四种结局</h2>
+    <table>
+      <tr><th>路径</th><th>handler</th><th>观察</th></tr>
+      <tr><td>闸门 1 命中</td><td>不跑</td><td><code>Permission denied.</code></td></tr>
+      <tr><td>闸门 2 + 你否</td><td>不跑</td><td>同上</td></tr>
+      <tr><td>闸门 2 + 你允</td><td>跑</td><td>真实输出（文件可能写出工作区）</td></tr>
+      <tr><td>都没命中</td><td>跑</td><td>真实输出</td></tr>
+    </table>
+
+    <h2>和 s02 的锁</h2>
+    <p>s02 <code>safe_path</code> = 硬围栏，不问人。s03 文件工具无 <code>safe_path</code>：出界先问，y 则真写。</p>
+    <p>闸门 1 只扫 bash 子串。拒绝也必须回填 <code>tool_result</code>。</p>
+    <p>fail-closed：<code>Allow? [y/N]</code> 空回车 = deny。</p>
+
+    <h2>脚本地图</h2>
+    <ul>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:145">L145–152</a> DENY_LIST</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:156">L156–179</a> 命令词 + PERMISSION_RULES</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:183">L183–202</a> ask_user / check_permission</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:226">L226–229</a> 拒绝回填 + continue</li>
+    </ul>
+
+    <p>
+      <a href="../../lessons/phase-2/0023-permission.html">打开 0023</a>
+      · <a href="./s02-tool-use.html">s02 查表</a>
+    </p>
+    <footer>下一课：s04 Hooks。教学版三道闸 ≠ CC 生产管线。</footer>
+  </main>
+</body>
+</html>

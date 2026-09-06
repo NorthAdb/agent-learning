@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>阶段 2 · s02 Tool Use 速查</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+  <link rel="stylesheet" href="../../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="../index.html">速查索引</a> · 课 0022 · 打印友好</p>
+    <h1>s02：dispatch map</h1>
+    <p class="mission">循环不动。加一个工具 = schema 一条 + handler 一行。</p>
+    <p class="src">
+      格言：
+      <a href="../../learn-claude-code-north/s02_tool_use/README.zh.md">s02 README</a>
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/README.zh.md:6">L6</a>。
+    </p>
+
+    <pre>s01:  output = run_bash(block.input["command"])
+s02:  handler = TOOL_HANDLERS.get(block.name)
+      output = handler(**block.input)   # 或 Unknown</pre>
+
+    <h2>三个词</h2>
+    <table>
+      <tr><th>词</th><th>是什么</th></tr>
+      <tr><td>handler</td><td>干活的函数，如 <code>run_read</code></td></tr>
+      <tr><td>dispatch map / <code>TOOL_HANDLERS</code></td><td>名字 → handler 的表</td></tr>
+      <tr><td>dispatch</td><td>按 <code>block.name</code> 查表并调用</td></tr>
+    </table>
+    <p>REPL = 外层 <code>s02 &gt;&gt;</code>（对人）。agent loop = 内层（对模型和工具）。</p>
+
+    <h2>请求：create 五段（L155–158）</h2>
+    <pre>model / system / messages / tools / max_tokens
+system、TOOLS 是静态前缀，不进 messages
+TOOL_HANDLERS 不发送
+messages[].content:
+  字符串（你敲的） | assistant 块列表 | tool_result 列表
+# 完整对照：课 0022 节 E′</pre>
+
+    <h2>response = Message 对象</h2>
+    <pre>id / type="message" / role="assistant" / model
+content[]          # 块列表。s02 认 text（跳过）与 tool_use（dispatch）
+stop_reason        # 筛 content 里的 tool_use；常见 stop_reason 还有 end_turn / max_tokens
+stop_sequence      # 仅 stop_reason=stop_sequence 时有值
+usage              # input_tokens / output_tokens（其余缓存字段可选）
+container          # 可选，s02 不用
+stop_details       # 可选，拒答细项，s02 不用
+
+tool_use 块:  type / id / name / input
+text 块:      type / text
+# 完整表：课 0022 节 F</pre>
+
+    <h2>注册对齐</h2>
+    <p><code>TOOLS[].name</code> == <code>TOOL_HANDLERS</code> 的键。函数名可以是 <code>run_read</code>。</p>
+
+    <h2>safe_path</h2>
+    <pre>(WORKDIR / p).resolve()
+is_relative_to(WORKDIR) 否则 ValueError</pre>
+    <p>只罩 file 工具。bash 不走这里 → s03。</p>
+
+    <h2>脚本地图</h2>
+    <ul>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:71">L71–75</a> safe_path</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:78">L78–123</a> read/write/edit/glob</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:128">L128–146</a> TOOLS / HANDLERS</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:167">L167–173</a> 查表执行</li>
+    </ul>
+
+    <p>
+      <a href="../../lessons/phase-2/0022-tool-use.html">打开 0022</a>
+      · <a href="./s01-agent-loop.html">s01 循环</a>
+    </p>
+    <footer>下一课：s03 权限（0023 已出）。多个 tool_use 在教学版里串行。</footer>
+  </main>
+</body>
+</html>

@@ -1,0 +1,1365 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0027 · s07 Skill Loading</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0027"></div>
+    <h1>s07：需要时再加载技能</h1>
+    <p class="mission">
+      s06 解决了“一个任务太大，交给干净上下文”的问题；但即使上下文是干净的，
+      system prompt 仍可能被一大堆与当前任务无关的说明占满。假设 Agent 既要改
+      React，又要写 SQL，还要设计 API：如果三份规范在启动时全部塞进 system prompt，
+      模型每次请求都要带上三份全文。本课给 Harness 增加一种更细的知识边界：
+      启动时只告诉模型“有哪些技能以及各自的一句话简介”，模型确定需要某项技能后，
+      再调用 <code>load_skill(name)</code> 取回完整的 <code>SKILL.md</code>。
+      主技能是<strong>读懂知识何时进入 system、何时进入消息轨迹</strong>，不是把
+      “skill”误解成一个会自动执行的工具。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      主材料：North
+      <a href="../../learn-claude-code-north/s07_skill_loading/README.zh.md">s07 中文 README</a>
+      （问题
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/README.zh.md:13">L13–26</a>，
+      解决方案
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/README.zh.md:30">L30–40</a>，
+      工作原理
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/README.zh.md:43">L43–116</a>，
+      试运行
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/README.zh.md:119">L119–137</a>）
+      +
+      <a href="../../learn-claude-code-north/s07_skill_loading/code.py"><code>s07_skill_loading/code.py</code></a>
+      全文（
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:1">L1–378</a>
+      ）。
+      书中关于“上下文是每次模型调用的输入”的原理，继续回看
+      <a href="../phase-1/0017-agent-formula.html">0017 Agent 公式</a>；本课的
+      <code>SkillLoader</code>、<code>load_skill</code> 和目录注册表是 North 的教学实现，
+      不是某个云服务的统一 API。
+    </p>
+    <p class="muted">
+      <strong>本课已内化</strong>：技能目录和完整技能正文的区别；
+      <code>SkillLoader</code> 启动扫描；
+      YAML frontmatter 的读取；
+      <code>skills</code> 注册表；
+      <code>catalog()</code> 如何生成 system prompt 中的短目录；
+      <code>load(name)</code> 如何按名称取回完整内容；
+      <code>load_skill</code> 的 schema / handler 双接线；
+      技能正文如何作为 <code>tool_result</code> 回到原有 Agent loop；
+      启动时缓存、精确名称匹配和路径安全边界。
+      <strong>故意跳过</strong>：按任务自动分类技能、技能依赖图、技能版本与热更新、
+      远程技能仓库、技能权限隔离、技能之间的冲突解决、向量检索和生产级插件发现。
+      本章只实现“启动扫描、按名称读取、同步注入”的最小知识加载版本。
+      <strong>不另写</strong> playground；过关以真跑本章 <code>code.py</code> 为准。
+    </p>
+    <p class="muted">
+      <strong>行号约定：</strong>后文源码块中的 <code>L90</code> 等前缀是 North 源码导航标记，
+      不属于 Python 代码。标成“本例行号”的代码只是为了帮助阅读，不是上游源码。
+      需要核对真实实现时，点击旁边的 <code>cursor://file/...</code> 链接。
+    </p>
+
+    <h3>本课新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>出处</th></tr>
+      <tr>
+        <td><strong>Skill</strong> / 技能</td>
+        <td>
+          一个目录中的 <code>SKILL.md</code> 指令文档；它提供做某类任务时要遵守的知识和步骤，
+          不是自动运行的 Python 函数。
+        </td>
+        <td>
+          North s07 的技能目录结构
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/README.zh.md:43">README L43–53</a>；
+          示例文件
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/skills/code-review/SKILL.md:1">code-review/SKILL.md L1–8</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>知识加载</strong>（skill loading）</td>
+        <td>
+          先向模型提供可用知识的目录，需要时再把某项知识的完整正文加入当前消息轨迹。
+        </td>
+        <td>
+          North s07 标题与方案
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/README.zh.md:1">README L1–9</a>、
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/README.zh.md:30">L30–40</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>技能目录</strong>（catalog）</td>
+        <td>
+          只包含技能名称和简短描述的字符串；本课把它放进 system prompt，而不是把所有正文放进去。
+        </td>
+        <td>
+          <code>catalog()</code>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:106">code.py L106–113</a>；
+          system 组装
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:125">L125–136</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>YAML frontmatter</strong></td>
+        <td>
+          Markdown 文件最上方由两行 <code>---</code> 包围的 YAML 元数据区；本课从中取
+          <code>name</code> 和 <code>description</code>，不把正文当目录简介。
+        </td>
+        <td>
+          示例
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/skills/code-review/SKILL.md:1">SKILL.md L1–4</a>；
+          解析
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:59">code.py L59–82</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>注册表</strong>（registry）</td>
+        <td>
+          “名称 → 记录”的字典；本课的 <code>self.skills</code> 把技能名映射到名称、描述和完整正文。
+        </td>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:51">code.py L51–56</a>、
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:97">L97–104</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>按需加载</strong>（on-demand loading）</td>
+        <td>
+          不在启动时把所有正文送进模型；模型只有调用 <code>load_skill</code> 后才获得某一项完整内容。
+        </td>
+        <td>
+          North 的内容位置表
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/README.zh.md:33">README L33–40</a>；
+          工具定义
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:212">code.py L212–223</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong><code>resolve()</code></strong></td>
+        <td>
+          把相对路径转换成规范化的绝对路径；常与 <code>is_relative_to()</code> 配合检查路径是否仍在根目录内。
+        </td>
+        <td>
+          扫描边界
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:86">code.py L86–92</a>；
+          本课沿用阶段 0 的 <code>Path</code> 语法。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>缓存</strong>（cache）</td>
+        <td>
+          先把文件内容保存到内存，之后按名称直接返回内存里的副本；本课启动扫描时就缓存完整正文，
+          不是每次 <code>load_skill</code> 都重新读磁盘。
+        </td>
+        <td>
+          扫描时保存 <code>"content": content</code>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:97">code.py L97–104</a>；
+          返回
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:115">L115–122</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>精确名称匹配</strong></td>
+        <td>
+          <code>load(name)</code> 把输入当作注册表的键，不把它拼成任意文件路径；
+          不存在的名称返回带可用列表的错误字符串。
+        </td>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:115">code.py L115–122</a>；
+          README 的加载说明
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/README.zh.md:104">README L104–116</a>。
+        </td>
+      </tr>
+    </table>
+
+    <h2>为什么现在学？</h2>
+    <p>
+      s05 让计划状态变得可见，s06 让大任务可以换一条干净的消息轨迹。
+      但“消息更干净”不代表 system prompt 就应该无限变长。现实项目通常会同时有
+      代码审查规范、PDF 处理规范、MCP 开发规范、数据库风格指南等文档。
+      当前任务只改 Python 文件时，把所有文档全文永久放进 system prompt，会让每一次
+      模型请求都重复携带无关内容。
+    </p>
+    <p>
+      无关内容有两个代价。第一，它占用输入 token 和上下文窗口，真正的代码、对话、
+      工具结果可用空间变少。第二，模型要在更多规则中寻找当前任务相关的规则，提示之间
+      可能互相干扰。s07 的办法不是把技能删除，而是把“知道有哪些技能”和“知道某项技能
+      的全部细节”分成两个时机：目录常驻，正文按需进入。
+    </p>
+    <p class="src">
+      North 对“把全部文档固定放进 system prompt”的问题说明见
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/README.zh.md:13">README L13–26</a>；
+      “名称描述进入 system、完整正文进入 tool_result”的解决方案见
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/README.zh.md:33">README L33–40</a>。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>s07 概念</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr>
+        <td><code>SkillLoader</code></td>
+        <td>扫描配置目录并建立内存索引的 service</td>
+        <td>
+          它不是 Spring Bean 自动发现，也不是编译期注册；对象创建时直接调用
+          <code>scan()</code>，当前进程内自己持有字典。
+        </td>
+      </tr>
+      <tr>
+        <td><code>self.skills</code></td>
+        <td><code>Map&lt;String, SkillRecord&gt;</code></td>
+        <td>
+          value 是普通 Python 字典，不是有编译期字段约束的 DTO；键是 frontmatter 的
+          <code>name</code>，没有合法名称时才退回目录名。
+        </td>
+      </tr>
+      <tr>
+        <td>frontmatter</td>
+        <td>配置文件顶部的 metadata 区域</td>
+        <td>
+          它是 Markdown 文本中的 YAML 片段，不是 Java 注解；本课用
+          <code>yaml.safe_load</code> 解析，不用字符串切割猜字段。
+        </td>
+      </tr>
+      <tr>
+        <td><code>catalog()</code></td>
+        <td>把对象集合映射成摘要文本</td>
+        <td>
+          返回的是给模型看的字符串，不是完整技能对象，也不会触发加载。
+        </td>
+      </tr>
+      <tr>
+        <td><code>load_skill</code> schema</td>
+        <td>一个 command / DTO 的 JSON 契约</td>
+        <td>
+          schema 只说明模型可传一个字符串 <code>name</code>；真正查表和返回正文由
+          <code>SKILL_LOADER.load</code> 完成。
+        </td>
+      </tr>
+      <tr>
+        <td>启动缓存</td>
+        <td>应用启动时读取配置到内存</td>
+        <td>
+          s07 启动后磁盘上的技能文件即使改变，已有进程的 registry 仍保留旧正文；
+          本课没有 reload 端点。
+        </td>
+      </tr>
+      <tr>
+        <td>技能正文进入 <code>tool_result</code></td>
+        <td>内部 service 返回 String，再被外层 command 作为结果使用</td>
+        <td>
+          对模型而言它会成为消息轨迹中的观察；它不是下一次请求的永久 system 前缀。
+        </td>
+      </tr>
+    </table>
+
+    <h2>先看全局：两层知识、三种状态、一个循环</h2>
+    <p>
+      先不要从 <code>yaml.safe_load</code> 的细节开始。把整支脚本压成一条信息流：
+    </p>
+    <pre>启动
+  ↓
+SkillLoader.scan()
+  ↓ 读取 skills/*/SKILL.md
+skills registry：name → description + full content
+  ↓ catalog()
+system prompt：技能名称 + 简介（短）
+
+用户 prompt
+  ↓
+父 Agent loop 请求模型
+  ↓ 模型觉得某项技能适用
+tool_use(name="load_skill", input={"name": "code-review"})
+  ↓
+TOOL_HANDLERS 查到 SKILL_LOADER.load
+  ↓
+完整 SKILL.md 字符串
+  ↓
+tool_result 回到 messages
+  ↓
+模型带着已加载的技能继续工作</pre>
+    <p>
+      这里有一个容易忽略的时间顺序：完整正文在<strong>启动扫描时已经被 Python 读入内存</strong>，
+      但在模型的<strong>输入上下文里</strong>要等到 <code>load_skill</code> 的结果回填后才出现。
+      “按需加载”在这份教学实现里主要指“按需注入模型上下文”，不是“按需从磁盘读取”。
+    </p>
+    <table>
+      <tr><th>层次</th><th>保存什么</th><th>何时进入模型请求</th></tr>
+      <tr>
+        <td>技能元数据目录</td>
+        <td>name + description</td>
+        <td>启动后每次 <code>messages.create</code> 的 system 参数</td>
+      </tr>
+      <tr>
+        <td>技能完整正文</td>
+        <td>原始 <code>SKILL.md</code> 全文</td>
+        <td>模型调用 <code>load_skill</code> 后，作为 tool_result</td>
+      </tr>
+      <tr>
+        <td><code>self.skills</code> registry</td>
+        <td>name、description、content 的 Python 字典</td>
+        <td>不直接发送；由 <code>catalog</code> 和 <code>load</code> 读取</td>
+      </tr>
+    </table>
+    <p class="box">
+      <strong>一句话：</strong>system prompt 放“菜单”，tool_result 放“点菜后的全文”。
+      菜单让模型知道可选项；完整技能只有在模型选择后才进入消息轨迹。
+      但本课的 Python 进程为了建立菜单，启动时已经缓存了所有正文；不要把
+      “不注入上下文”误读成“从未读过磁盘”。
+    </p>
+
+    <h2>一次加载的完整故事</h2>
+    <p>
+      假设启动目录下存在 <code>skills/code-review/SKILL.md</code>，用户输入：
+      <code>Review README.md and load the relevant skill first</code>。先预测控制流，再读局部代码：
+    </p>
+    <ol>
+      <li>
+        模块加载时创建 <code>SKILL_LOADER = SkillLoader(SKILLS_DIR)</code>；
+        构造函数调用 <code>scan()</code>，读取每个直接子目录的 <code>SKILL.md</code>。
+      </li>
+      <li>
+        <code>scan()</code> 解析 <code>--- ... ---</code> 中的 YAML，得到
+        <code>name="code-review"</code> 和一行 description，并把完整文件文本放入
+        <code>self.skills["code-review"]</code>。
+      </li>
+      <li>
+        <code>build_system_prompt()</code> 调用 <code>catalog()</code>，system 中出现
+        <code>- code-review: ...</code>，但不会出现整篇 checklist。
+      </li>
+      <li>
+        用户输入先由外层 REPL 触发 <code>UserPromptSubmit</code>，再追加到
+        <code>history</code>，进入父 <code>agent_loop</code>。
+      </li>
+      <li>
+        模型看到 system 中的技能目录和 <code>load_skill</code> 工具说明，返回
+        一个 <code>tool_use</code>，输入是 <code>{"name": "code-review"}</code>。
+      </li>
+      <li>
+        <code>execute_tool</code> 先走 PreToolUse hooks，再从
+        <code>TOOL_HANDLERS</code> 找到 <code>SKILL_LOADER.load</code>，按名称查字典。
+      </li>
+      <li>
+        <code>load()</code> 返回缓存里的完整 <code>SKILL.md</code> 字符串。它不启动新 Agent，
+        不执行 checklist 中的 shell 命令，也不打开一个新的 Python 进程。
+      </li>
+      <li>
+        父循环把返回值放进与原 <code>tool_use_id</code> 配对的
+        <code>tool_result</code>，追加进 <code>messages</code>；模型下一轮才看到完整技能。
+      </li>
+      <li>
+        模型接下来可能调用 <code>read_file</code>、<code>bash</code> 等基础工具。
+        技能正文提供的是规则和建议，真正执行仍由这些工具和原有 hooks 完成。
+      </li>
+    </ol>
+    <p>
+      如果模型一开始不调用 <code>load_skill</code>，代码不会自动替它加载最“相关”的技能。
+      当前实现只把目录交给模型，让模型自己选择；这正是“知识加载”和“自动路由知识检索”
+      的边界。
+    </p>
+
+    <h2>系统讲解</h2>
+
+    <h3>1. 为什么不能把所有技能全文拼进 system prompt？</h3>
+    <p>
+      先看一个“看起来直白”的方案：
+    </p>
+    <pre>本例 L1  SYSTEM = (
+本例 L2      "You are a coding agent. "
+本例 L3      + open("docs/react-style.md").read()
+本例 L4      + open("docs/sql-style.md").read()
+本例 L5      + open("docs/api-design.md").read()
+本例 L6  )</pre>
+    <p>
+      这段做到了“模型能看到所有规范”，但没有做到“当前任务只携带需要的规范”。
+      每次请求模型时，<code>system</code> 都会重复包含三份正文。若当前只改 React，
+      SQL 和 API 文档仍然占用上下文。
+    </p>
+    <table>
+      <tr><th>策略</th><th>system 里有什么</th><th>当前任务的代价</th></tr>
+      <tr>
+        <td>全部预加载</td>
+        <td>所有技能完整正文</td>
+        <td>输入变长；无关规则一直存在；正文会随每次请求重复发送</td>
+      </tr>
+      <tr>
+        <td>s07 目录 + 按需正文</td>
+        <td>所有技能的一行名称/简介</td>
+        <td>先付目录成本；选择后只注入被加载的技能</td>
+      </tr>
+      <tr>
+        <td>什么都不提供</td>
+        <td>没有技能目录</td>
+        <td>模型不知道仓库里有什么可复用的操作规范</td>
+      </tr>
+    </table>
+    <p>
+      这不是“正文永远不进入上下文”，而是把进入时机推迟到模型判断“这项技能适用”之后。
+      技能目录是发现能力，<code>load_skill</code> 是取正文能力；两者缺一不可。
+    </p>
+
+    <h3>2. <code>SKILL.md</code> 为什么有两段？</h3>
+    <p>
+      一个技能文件通常先写 metadata，再写给模型读的正文。以仓库中的
+      <code>code-review/SKILL.md</code> 为例：
+    </p>
+    <pre>真实文件 L1  ---
+真实文件 L2  name: code-review
+真实文件 L3  description: Perform thorough code reviews with security, performance, and maintainability analysis. Use when user asks to review code, check for bugs, or audit a codebase.
+真实文件 L4  ---
+真实文件 L5
+真实文件 L6  # Code Review Skill
+真实文件 L7
+真实文件 L8  You now have expertise in conducting comprehensive code reviews...</pre>
+    <p class="src">
+      真实示例：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/skills/code-review/SKILL.md:1">code-review/SKILL.md L1–8</a>。
+    </p>
+    <table>
+      <tr><th>区域</th><th>作用</th><th>本课如何使用</th></tr>
+      <tr>
+        <td><code>---</code> 之间</td>
+        <td>机器可读的 metadata</td>
+        <td>取 <code>name</code> 作为注册表键，取 <code>description</code> 生成目录</td>
+      </tr>
+      <tr>
+        <td>第二个 <code>---</code> 之后</td>
+        <td>技能的完整 Markdown 正文</td>
+        <td>仍保留在 <code>content</code> 全文中，调用 <code>load</code> 时返回</td>
+      </tr>
+    </table>
+    <p>
+      注意：<code>parse_frontmatter</code> 返回 <code>(metadata, body)</code>，但
+      <code>scan()</code> 最后保存的是原始 <code>content</code>，而不是只保存 body。
+      因此模型调用 <code>load_skill</code> 后拿到的正文仍然包含原始 frontmatter。
+      这属于当前实现的真实行为，不要凭“正文”这个词猜成只剩第二段。
+    </p>
+
+    <h3>3. <code>parse_frontmatter</code>：先找边界，再解析 YAML</h3>
+    <pre>L59  @staticmethod
+L60  def parse_frontmatter(text: str) -&gt; tuple[dict, str]:
+L61      lines = text.splitlines(keepends=True)
+L62      if not lines or lines[0].rstrip("\r\n") != "---":
+L63          return {}, text
+L65      closing_index = next(
+L66          (index for index, line in enumerate(lines[1:], start=1)
+L67           if line.rstrip("\r\n") == "---"),
+L68          None,
+L69      )
+L70      if closing_index is None:
+L71          return {}, text
+L73      frontmatter = "".join(lines[1:closing_index])
+L74      body = "".join(lines[closing_index + 1:]).strip()
+L75      try:
+L76          metadata = yaml.safe_load(frontmatter) or {}
+L77      except yaml.YAMLError:
+L78          metadata = {}
+L79      if not isinstance(metadata, dict):
+L80          metadata = {}
+L81      return metadata, body</pre>
+    <p class="src">
+      真实源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:59">code.py L59–82</a>。
+    </p>
+    <ol>
+      <li>
+        L61 用 <code>splitlines(keepends=True)</code> 把文本拆成行，同时保留换行符。
+        保留换行让后面用 <code>"".join(...)</code> 拼回内容时不改变原始布局。
+      </li>
+      <li>
+        L62 要求第一行去掉换行后恰好是 <code>---</code>。如果文件没有 frontmatter，
+        返回空字典和原文；这不是异常。
+      </li>
+      <li>
+        L65–69 从第二行开始寻找下一条独立的 <code>---</code>。找到的是 frontmatter 的结束位置，
+        不是随便找一个包含三个短横线的行。
+      </li>
+      <li>
+        L73 把边界内文本拼成 YAML 字符串；L76 的 <code>yaml.safe_load</code> 把 YAML 文本
+        转成 Python 值。这里的 <code>safe</code> 表示使用安全加载方式，不把普通配置当成
+        可执行 Python 代码。
+      </li>
+      <li>
+        L76 的 <code>or {}</code> 把 YAML 空值转换成空字典；L79–80 又检查解析结果确实是
+        字典。frontmatter 写成列表或字符串时，当前实现会把它当作“没有可用 metadata”。
+      </li>
+      <li>
+        L77–78 只捕获 <code>yaml.YAMLError</code>，解析失败时返回空 metadata，而不是让整个
+        启动过程因一份坏 frontmatter 直接崩溃。
+      </li>
+    </ol>
+    <p class="box">
+      <strong>辨析：解析 frontmatter ≠ 加载技能正文。</strong>
+      <code>parse_frontmatter</code> 只负责把一个文件拆成 metadata 和 body；
+      真正建立 registry 的是 <code>scan()</code>；真正把技能返回给模型的是
+      <code>load(name)</code>。三个职责不要混成一个函数。
+    </p>
+
+    <h3>4. <code>scan()</code>：启动时怎样建立技能注册表？</h3>
+    <pre>L84  def scan(self):
+L85      self.skills.clear()
+L86      if not self.skills_dir.exists():
+L87          return
+L89      skills_root = self.skills_dir.resolve()
+L90      for manifest in sorted(self.skills_dir.glob("*/SKILL.md")):
+L91          if (not manifest.is_file()
+L92                  or not manifest.resolve().is_relative_to(skills_root)):
+L93              continue
+L94          content = manifest.read_text(encoding="utf-8")
+L95          metadata, body = self.parse_frontmatter(content)
+L96          raw_name = metadata.get("name")
+L97          name = raw_name.strip() if isinstance(raw_name, str) else ""
+L98          name = name or manifest.parent.name
+L99          raw_description = metadata.get("description")
+L100         description = (raw_description.strip()
+L101                      if isinstance(raw_description, str) else "")
+L102         description = description or body.split("\n", 1)[0]
+L103         description = " ".join(str(description).lstrip("# ").split())
+L104         self.skills[name] = {
+L105             "name": name,
+L106             "description": description,
+L107             "content": content,
+L108         }</pre>
+    <p class="src">
+      真实源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:84">code.py L84–108</a>。
+    </p>
+    <p>
+      逐步翻译：
+    </p>
+    <ol>
+      <li>
+        L85 先清空旧 registry。这意味着以后若显式调用 <code>scan()</code>，它会重建而不是
+        在旧字典上盲目叠加。
+      </li>
+      <li>
+        L86–87 如果 <code>skills</code> 目录不存在，静默返回。此时
+        <code>catalog()</code> 会输出 <code>(no skills found)</code>，模型仍可启动，只是没有技能可选。
+      </li>
+      <li>
+        L89 把根目录解析成规范路径。L90 的 <code>glob("*/SKILL.md")</code> 只匹配
+        <code>skills/某个直接子目录/SKILL.md</code>，不是递归寻找所有深层 Markdown。
+      </li>
+      <li>
+        L91 检查匹配项是文件；L92 用 <code>resolve().is_relative_to(skills_root)</code>
+        确认解析后的路径仍在技能根目录之内。这里是路径边界检查，不是模型权限审批。
+      </li>
+      <li>
+        L94 以 UTF-8 读取全文；L95 把它解析成 metadata 和 body。
+      </li>
+      <li>
+        L96–98 优先使用 frontmatter 的 <code>name</code>。如果缺失、不是字符串或去空格后为空，
+        就退回到父目录名。例如 <code>skills/pdf/SKILL.md</code> 默认名称会是
+        <code>pdf</code>。
+      </li>
+      <li>
+        L99–103 优先使用 metadata 的 description；缺失时取正文第一行，再用
+        <code>split()</code> 压缩多余空白，得到适合放入目录的一行描述。
+      </li>
+      <li>
+        L104–108 把三项信息写入 <code>self.skills[name]</code>。此时完整正文已经缓存到
+        <code>content</code>，但还没有因为这个动作自动进入模型上下文。
+      </li>
+    </ol>
+    <p>
+      <code>sorted(...)</code> 让扫描顺序稳定，因而正常情况下目录顺序可预测。
+      但当前字典如果遇到两个文件提供相同的 <code>name</code>，后扫描到的记录会覆盖前一条；
+      North 没有额外的重复名检测。本课不把“名称唯一性”假装成已有保证。
+    </p>
+
+    <h3>5. <code>resolve()</code>、<code>is_relative_to()</code> 和“路径不是名称”</h3>
+    <p>
+      代码里有两种看起来都和文件有关的输入：扫描时的 <code>manifest</code> 路径，
+      以及模型调用 <code>load_skill</code> 时的 <code>name</code>。它们不能混为一谈。
+    </p>
+    <table>
+      <tr><th>输入</th><th>代码怎样处理</th><th>意义</th></tr>
+      <tr>
+        <td><code>manifest</code></td>
+        <td><code>manifest.resolve().is_relative_to(skills_root)</code></td>
+        <td>扫描时检查真实文件路径没有逃出 skills 根目录</td>
+      </tr>
+      <tr>
+        <td><code>name="code-review"</code></td>
+        <td><code>self.skills.get(name)</code></td>
+        <td>加载时只按 registry 键查记录，不把字符串拼成路径</td>
+      </tr>
+      <tr>
+        <td><code>name="../../secret"</code></td>
+        <td>通常查不到这个键，返回 Unknown skill</td>
+        <td>不会因为 load 方法而直接读取任意路径</td>
+      </tr>
+    </table>
+    <p>
+      <code>Path.resolve()</code> 会把相对路径、<code>..</code> 等整理成规范绝对路径；
+      <code>Path.is_relative_to(root)</code> 问的是“这个路径是否位于 root 之下”。例如：
+    </p>
+    <pre>本例 L1  root = Path("skills").resolve()
+本例 L2  inside = Path("skills/code-review/SKILL.md").resolve()
+本例 L3  outside = Path("skills/../secrets.txt").resolve()
+本例 L4
+本例 L5  inside.is_relative_to(root)   # True
+本例 L6  outside.is_relative_to(root)  # False</pre>
+    <p>
+      这里的 <code>is_relative_to</code> 只是返回布尔值，不会主动抛出“权限拒绝”；
+      是 L91–93 的 <code>if</code> 决定遇到越界路径时 <code>continue</code> 跳过。
+      这是扫描器的文件范围保护。它和 s03 的用户审批、s04 的 PreToolUse hook
+      是不同层次的约束。
+    </p>
+
+    <h3>6. <code>catalog()</code>：为什么只返回短目录？</h3>
+    <pre>L110  def catalog(self) -&gt; str:
+L111      if not self.skills:
+L112          return "(no skills found)"
+L113      return "\n".join(
+L114          f"- {skill['name']}: {skill['description']}"
+L115          for skill in self.skills.values()
+L116      )</pre>
+    <p class="src">
+      真实源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:110">code.py L110–116</a>。
+    </p>
+    <ol>
+      <li>
+        L111–112 处理空目录，避免对空字典做没有意义的循环。
+      </li>
+      <li>
+        L113 用 <code>"\n".join(...)</code> 把多行摘要合成一个字符串。
+        <code>for skill in self.skills.values()</code> 遍历的是记录，不是文件路径。
+      </li>
+      <li>
+        L114 只读取记录中的 <code>name</code> 和 <code>description</code>，完全没有读取
+        <code>content</code> 拼入目录。
+      </li>
+    </ol>
+    <p>
+      假设 registry 里有两个技能，<code>catalog()</code> 的结果大致是：
+    </p>
+    <pre>- code-review: Perform thorough code reviews with security, performance, and maintainability analysis...
+- pdf: Process PDF files - extract text, create PDFs, merge documents...</pre>
+    <p>
+      目录不是技能执行计划，也不是模型已经加载的正文。它只让模型完成一次选择：
+      “当前任务需要哪个名字？”如果 description 写得太泛，模型可能选择错误；这属于
+      元数据质量问题，不会由 <code>catalog()</code> 自动修复。
+    </p>
+
+    <h3>7. <code>build_system_prompt()</code>：目录真正放在哪里？</h3>
+    <pre>L125  def build_system_prompt() -&gt; str:
+L126      return (
+L127          f"You are a coding agent at {WORKDIR}. Use tools to solve tasks. "
+L128          "Act, don't explain.\n\n"
+L129          f"Skills available:\n{SKILL_LOADER.catalog()}\n\n"
+L130          "Use load_skill to read the full instructions when a skill applies."
+L131      )
+L134  SYSTEM = build_system_prompt()</pre>
+    <p class="src">
+      真实源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:125">code.py L125–134</a>。
+    </p>
+    <p>
+      这段只有一个和技能相关的动态部分：<code>SKILL_LOADER.catalog()</code>。
+      <code>SKILL_LOADER</code> 在模块加载时已经完成一次扫描，所以
+      <code>SYSTEM</code> 也是在启动阶段建立的一份字符串。之后
+      <code>agent_loop</code> 每轮把相同的 <code>SYSTEM</code> 传给
+      <code>client.messages.create</code>。
+    </p>
+    <table>
+      <tr><th>内容</th><th>system 中是否启动时出现</th><th>什么时候出现完整内容</th></tr>
+      <tr>
+        <td>工作目录</td><td>是</td><td>启动建立 <code>SYSTEM</code> 时</td>
+      </tr>
+      <tr>
+        <td>技能名称和简介</td><td>是</td><td>启动扫描并构造 <code>catalog()</code> 时</td>
+      </tr>
+      <tr>
+        <td>某个 <code>SKILL.md</code> 全文</td><td>否</td><td>模型调用对应的 <code>load_skill</code> 后</td>
+      </tr>
+      <tr>
+        <td>本地 <code>TOOL_HANDLERS</code> 函数</td><td>否</td><td>永远不发送；只在 Harness 本地执行</td>
+      </tr>
+    </table>
+    <p class="box">
+      <strong>重要辨析：</strong>system prompt 是每次模型调用都会发送的静态前缀；
+      <code>tool_result</code> 是沿着 <code>messages</code> 轨迹追加的观察。
+      技能正文通过后者进入，不是把 <code>SYSTEM</code> 字符串在运行中永久改长。
+    </p>
+
+    <h3>8. <code>load(name)</code>：按注册表键返回全文</h3>
+    <pre>L115  def load(self, name: str) -&gt; str:
+L116      skill = self.skills.get(name)
+L117      if skill:
+L118          return skill["content"]
+L119      available = ", ".join(self.skills) or "none"
+L120      return f"Error: Unknown skill '{name}'. Available: {available}"</pre>
+    <p class="src">
+      真实源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:115">code.py L115–122</a>。
+    </p>
+    <ol>
+      <li>
+        L116 用字典的 <code>.get(name)</code> 查表。<code>name</code> 是键，不是文件名拼接模板。
+      </li>
+      <li>
+        L117–118 查到记录后直接返回 <code>content</code>，也就是扫描阶段保存的原始全文。
+        当前方法不会再次调用 <code>read_text</code>。
+      </li>
+      <li>
+        L119–120 查不到时把现有键用 <code>", ".join</code> 拼成错误提示。
+        错误是字符串，不是 Python 异常；它会作为普通工具结果回给模型。
+      </li>
+    </ol>
+    <table>
+      <tr><th>调用</th><th>结果</th><th>为什么</th></tr>
+      <tr>
+        <td><code>load("code-review")</code></td>
+        <td>完整 cached <code>SKILL.md</code></td>
+        <td>registry 中有完全相同的键</td>
+      </tr>
+      <tr>
+        <td><code>load(" Code-Review ")</code></td>
+        <td>Unknown skill</td>
+        <td>加载时没有对调用输入做 trim、大小写归一化或别名匹配</td>
+      </tr>
+      <tr>
+        <td><code>load("../../x")</code></td>
+        <td>Unknown skill</td>
+        <td>它按字符串查字典，不当作路径打开</td>
+      </tr>
+      <tr>
+        <td>启动后修改文件，再 <code>load("code-review")</code></td>
+        <td>旧缓存正文</td>
+        <td>本课没有重新扫描或热更新机制</td>
+      </tr>
+    </table>
+    <p>
+      这套精确匹配让“模型能否读取哪个技能”取决于启动扫描出的注册表，而不是由
+      模型自由构造一个磁盘路径。它不是完整的权限系统：技能正文本身仍可能包含危险建议，
+      基础工具也仍然由原有 hooks / permission hook 保护。
+    </p>
+
+    <h3>9. <code>load_skill</code> 的 schema 与 handler 是两层</h3>
+    <pre>L212  {"name": "load_skill", "description": "Load the full SKILL.md content by skill name.",
+L213   "input_schema": {
+L214       "type": "object",
+L215       "properties": {"name": {"type": "string"}},
+L216       "required": ["name"],
+L217   }},
+L219  TOOL_HANDLERS = {
+L220      "bash": run_bash,
+L221      "read_file": run_read,
+L222      ...
+L223      "load_skill": SKILL_LOADER.load,
+L224  }</pre>
+    <p class="src">
+      为便于阅读，上面把 North 的长行拆开；真实源码见
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:201">code.py L201–223</a>。
+    </p>
+    <p>
+      第一次看到这段时按两张表读：
+    </p>
+    <table>
+      <tr><th>层</th><th>内容</th><th>谁使用</th></tr>
+      <tr>
+        <td><code>TOOLS</code> schema</td>
+        <td>名字、描述、输入是对象且必须有字符串 name</td>
+        <td>发送给模型，帮助它形成结构化 tool_use</td>
+      </tr>
+      <tr>
+        <td><code>TOOL_HANDLERS</code></td>
+        <td><code>"load_skill"</code> 映射到 <code>SKILL_LOADER.load</code></td>
+        <td>Harness 本地 dispatch 时真正调用</td>
+      </tr>
+    </table>
+    <p>
+      schema 里的 <code>required</code> 只说明调用形状必须有 <code>name</code>；
+      它不会自己查 registry。handler map 里的
+      <code>SKILL_LOADER.load</code> 是一个<strong>绑定方法对象</strong>，注册时没有写
+      <code>SKILL_LOADER.load()</code>，因为现在还不应该立刻加载某个技能。
+    </p>
+    <p>
+      当模型返回：
+    </p>
+    <pre>{"name": "load_skill", "input": {"name": "code-review"}}</pre>
+    <p>
+      循环中的通用调用：
+    </p>
+    <pre>handler = TOOL_HANDLERS.get(block.name)
+output = handler(**block.input)</pre>
+    <p>
+      等价于：
+    </p>
+    <pre>handler = SKILL_LOADER.load
+output = SKILL_LOADER.load(name="code-review")</pre>
+    <p>
+      <code>**block.input</code> 是把字典键值拆成关键字参数；它不是把
+      <code>SKILL.md</code> 逐字执行，也不是把字典里的字段自动变成对象属性。
+    </p>
+
+    <h3>10. 完整正文怎样穿过原有 Agent loop？</h3>
+    <pre>L341  def agent_loop(messages: list):
+L342      while True:
+L343          response = client.messages.create(
+L344              model=MODEL,
+L345              system=SYSTEM,
+L346              messages=messages,
+L347              tools=TOOLS,
+L348              max_tokens=8000,
+L349          )
+L350          messages.append({"role": "assistant", "content": response.content})
+L352          tool_calls = [
+L353              block for block in response.content if block.type == "tool_use"
+L354          ]
+L355          if not tool_calls:
+L356              force = trigger_hooks("Stop", messages)
+L357              if force:
+L358                  messages.append({"role": "user", "content": force})
+L359                  continue
+L360              return
+L362          results = []
+L363          for block in tool_calls:
+L364              output = execute_tool(block)
+L365              results.append({
+L366                  "type": "tool_result",
+L367                  "tool_use_id": block.id,
+L368                  "content": output,
+L369              })
+L370          messages.append({"role": "user", "content": results})</pre>
+    <p class="src">
+      真实源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:341">code.py L341–370</a>。
+    </p>
+    <p>
+      s07 没有复制一套“技能专用循环”。它让 <code>load_skill</code> 遵守 s02 以来的同一协议：
+    </p>
+    <ol>
+      <li>模型先在 <code>response.content</code> 中产生 <code>tool_use</code> block。</li>
+      <li>父循环调用 <code>execute_tool(block)</code>；工具先经过 PreToolUse，再进入 handler。</li>
+      <li>handler 返回完整技能字符串，执行函数把它转成字符串。</li>
+      <li>循环用原来的 <code>block.id</code> 填入 <code>tool_use_id</code>，保证结果配对。</li>
+      <li>整个结果批次作为 <code>role: user</code> 消息追加到 <code>messages</code>。</li>
+      <li>下一次 <code>messages.create</code> 仍使用相同的 system、tools 和变长的 messages。</li>
+    </ol>
+    <p>
+      从 Agent loop 的视角看，技能正文和文件读取结果没有特殊魔法：二者都是
+      handler 返回的字符串，都会变成观察。区别在于技能正文改变的是模型接下来遵守的
+      指令/知识，而 <code>read_file</code> 通常提供的是项目事实；两者都必须通过正确的
+      tool_result 回填才能被模型看见。
+    </p>
+
+    <h3>11. <code>execute_tool</code> 和 hooks：加载技能不会绕过治理</h3>
+    <pre>L324  def execute_tool(block) -&gt; str:
+L325      blocked = trigger_hooks("PreToolUse", block)
+L326      if blocked:
+L327          return str(blocked)
+L329      handler = TOOL_HANDLERS.get(block.name)
+L330      try:
+L331          output = handler(**block.input) if handler else f"Unknown: {block.name}"
+L332      except Exception as e:
+L333          output = f"Error: {e}"
+L335      trigger_hooks("PostToolUse", block, output)
+L336      return str(output)</pre>
+    <p class="src">
+      真实源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:324">code.py L324–336</a>。
+    </p>
+    <p>
+      s04 的 hooks 在 s07 仍然是同一套注册表。调用 <code>load_skill</code> 时：
+    </p>
+    <ol>
+      <li>
+        PreToolUse 先运行 <code>permission_hook</code> 和 <code>log_hook</code>。
+        当前权限规则主要检查 bash 和文件路径，不会把普通 <code>load_skill</code> 拦掉。
+      </li>
+      <li>
+        handler 查到 <code>SKILL_LOADER.load</code>，返回内容或 Unknown 错误字符串。
+      </li>
+      <li>
+        PostToolUse 可以观察输出长度；若返回正文超过 100000 字符，
+        <code>large_output_hook</code> 打印警告，但当前不会自动截断或拒绝。
+      </li>
+    </ol>
+    <p class="box">
+      <strong>三件事不要混淆：</strong>Skill 是知识文档；<code>load_skill</code> 是取回文档的工具；
+      hooks 是包住工具调用时机的治理扩展。加载技能不会自动执行文档里的命令，也不会让
+      技能跳过原有权限 hook。
+    </p>
+
+    <h3>12. 技能正文进入消息后，属于哪种状态？</h3>
+    <p>
+      用三个对象跟踪同一份技能：
+    </p>
+    <table>
+      <tr><th>状态位置</th><th>示例内容</th><th>生命周期</th><th>模型是否直接看到</th></tr>
+      <tr>
+        <td>磁盘文件</td>
+        <td><code>skills/code-review/SKILL.md</code></td>
+        <td>直到文件被修改或删除</td>
+        <td>不会自动看到</td>
+      </tr>
+      <tr>
+        <td><code>SKILL_LOADER.skills</code></td>
+        <td>name / description / cached content</td>
+        <td>从启动扫描到进程结束，除非手动 scan</td>
+        <td>不会直接看到；catalog/load 读取它</td>
+      </tr>
+      <tr>
+        <td><code>messages</code></td>
+        <td>load_skill 的 tool_result 正文</td>
+        <td>当前 REPL history 持续保留</td>
+        <td>下一次模型请求能看到</td>
+      </tr>
+      <tr>
+        <td><code>SYSTEM</code></td>
+        <td>技能名和简介目录</td>
+        <td>脚本启动后构造的一份字符串</td>
+        <td>每次模型请求都看到</td>
+      </tr>
+    </table>
+    <p>
+      这个表解释了一个重要边界：加载一次技能后，完整正文会留在
+      <code>messages</code>，后续每一轮请求都会随着历史再次携带它，直到本课
+      s08 的上下文压缩机制来处理。s07 解决的是“不要从一开始把所有正文都塞进去”，
+      不是“加载后正文永远不占上下文”。
+    </p>
+
+    <h2>四个案例：从现象推回实现</h2>
+
+    <h3>案例一：只问有哪些技能，不需要加载正文</h3>
+    <pre>What skills are available?</pre>
+    <p>
+      模型可以直接读取 system 中的目录回答。如果它调用 <code>load_skill</code>，
+      那是额外动作，并不是为了回答“有哪些名字”所必需的。这个案例验证：
+      <strong>catalog 是可用技能的发现层</strong>，不是完整正文。
+    </p>
+
+    <h3>案例二：先加载再审查</h3>
+    <pre>Load the code-review skill and review README.md.
+Follow the skill instructions and report concrete findings.</pre>
+    <ol>
+      <li>模型根据目录选择 <code>code-review</code>。</li>
+      <li><code>load_skill</code> 返回包含 frontmatter 和正文的完整字符串。</li>
+      <li>字符串进入 <code>tool_result</code>，下一轮模型才可以使用 checklist。</li>
+      <li>模型还必须调用 <code>read_file</code> 获取 README 的真实内容；技能只是规则，不是 README 本身。</li>
+    </ol>
+    <p>
+      如果模型只加载技能却没有读 <code>README.md</code>，它拥有“如何审查”的知识，
+      但还没有“要审查的事实”。技能加载不能替代工作区观察。
+    </p>
+
+    <h3>案例三：加载一个不存在的名字</h3>
+    <pre>Load the nonexistent security-audit skill.</pre>
+    <p>
+      当前 handler 返回：
+    </p>
+    <pre>Error: Unknown skill 'security-audit'. Available: code-review, pdf</pre>
+    <p>
+      这是一个普通字符串 tool_result。模型可以根据可用列表改试正确名称；
+      Python 不会因为一个未知技能就抛出未捕获异常，也不会根据相似度自动猜
+      <code>code-review</code>。
+    </p>
+
+    <h3>案例四：启动后修改技能文件</h3>
+    <ol>
+      <li>脚本启动，<code>scan()</code> 读取旧版 <code>SKILL.md</code> 并保存到 content。</li>
+      <li>你在另一个编辑器里修改磁盘文件。</li>
+      <li>当前进程再次调用 <code>load_skill</code>。</li>
+      <li><code>load()</code> 只查 registry，因此返回旧版缓存，不会重新读磁盘。</li>
+    </ol>
+    <p>
+      若要看到新内容，当前教学实现需要重启脚本，或者由开发者显式调用
+      <code>SKILL_LOADER.scan()</code> 并重新构造 <code>SYSTEM</code>。注意只调用
+      <code>scan()</code> 会更新 registry，但已经构造的 <code>SYSTEM</code> 字符串不会
+      自动改变；这再次说明“数据表”和“已组装的 system prompt”是两个状态。
+    </p>
+
+    <h2>相对 s06，究竟增加了什么？</h2>
+    <table>
+      <tr><th>位置</th><th>s06 Subagent</th><th>s07 Skill Loading</th><th>要记住的变化</th></tr>
+      <tr>
+        <td>解决的问题</td>
+        <td>把大任务交给干净消息轨迹</td>
+        <td>把大套知识按需注入消息轨迹</td>
+        <td>前者切任务上下文；后者切知识进入上下文的时机</td>
+      </tr>
+      <tr>
+        <td>新增能力</td>
+        <td>父通过 task 启动子循环</td>
+        <td>模型通过 load_skill 取技能正文</td>
+        <td>skill 是文档知识，不是另一个 Agent loop</td>
+      </tr>
+      <tr>
+        <td>新增状态</td>
+        <td>父 / 子两份 messages</td>
+        <td>SkillLoader 的 registry 与 SYSTEM 目录</td>
+        <td>技能全文先在 Python cache，加载后才在 messages</td>
+      </tr>
+      <tr>
+        <td>工具数量</td>
+        <td>父有 task，子无 task</td>
+        <td>在五个基础工具上增加 load_skill</td>
+        <td>schema 与 handler 仍需同时接线</td>
+      </tr>
+      <tr>
+        <td>执行边界</td>
+        <td>task handler 内嵌子循环</td>
+        <td>load_skill handler 只查表返回字符串</td>
+        <td>不会因为加载正文而自动执行 skill 中的命令</td>
+      </tr>
+      <tr>
+        <td>刷新策略</td>
+        <td>子任务每次创建新 messages</td>
+        <td>技能启动扫描后缓存，当前没有热更新</td>
+        <td>fresh context 与 fresh file read 不是同一件事</td>
+      </tr>
+    </table>
+    <p>
+      可以把两课连起来：父 Agent 可以委派一个子 Agent 去调查“哪个技能适用于当前任务”，
+      但 s07 本身并没有这样做；当前父循环直接看到目录并自行调用
+      <code>load_skill</code>。不要从“Skill Loading”推断出系统已经有自动技能路由。
+    </p>
+
+    <h2>动手：真跑 North s07</h2>
+    <p>
+      沿用 North 仓库的虚拟环境和 <code>.env</code>。一定从 North 仓库根目录启动，
+      因为代码用 <code>WORKDIR = Path.cwd()</code>，技能目录会解释为
+      <code>WORKDIR / "skills"</code>。不要把 API key 贴到聊天里。
+    </p>
+    <pre>cd D:\agent-learning\learn-claude-code-north
+.\.venv\Scripts\Activate.ps1
+python s07_skill_loading\code.py</pre>
+    <p class="src">
+      README 的启动入口：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/README.zh.md:119">README L119–125</a>。
+    </p>
+
+    <h3>观察一：目录先出现，正文后出现</h3>
+    <pre>What skills are available?</pre>
+    <ol>
+      <li>脚本启动时已经扫描 skills；system 中应能让模型看到名称和简介。</li>
+      <li>如果模型只回答目录，不应为了回答名字而加载每个技能全文。</li>
+      <li>这次调用重点观察“可用技能列表”和“完整 SKILL.md”不是同一段内容。</li>
+    </ol>
+
+    <h3>观察二：显式加载 code-review</h3>
+    <pre>Load the code-review skill and follow its instructions to review README.md.
+Do not modify files; report the evidence you found.</pre>
+    <ol>
+      <li>终端先出现外层 UserPromptSubmit 与工具前日志。</li>
+      <li>若模型调用 <code>load_skill</code>，会看到工具调用日志。</li>
+      <li>父 Agent 收到完整技能文本作为 tool_result 后，才会继续调用 read_file。</li>
+      <li>技能要求中的命令不会由 <code>load_skill</code> 自动执行；如果模型要执行命令，
+        必须另行产生 bash tool_use，并再次经过权限 hook。</li>
+    </ol>
+
+    <h3>观察三：未知名称是可恢复的工具观察</h3>
+    <pre>Load the skill named definitely-not-installed.</pre>
+    <p>
+      观察 <code>Error: Unknown skill ... Available: ...</code> 如何回到模型。
+      这不是 Python 异常堆栈，也不是直接关闭 REPL；模型可以据此换用目录中的真实名称。
+    </p>
+
+    <h3>观察四：不要把缓存正文当成热更新</h3>
+    <p>
+      先启动脚本并加载一个技能；保持进程不退出，编辑对应的
+      <code>skills/*/SKILL.md</code>；再次要求模型加载它。当前代码仍返回启动时缓存的
+      <code>content</code>。若要验证新文件，重启脚本后再试。
+    </p>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li>
+          <strong>所有 SKILL.md 全文都在 system prompt：</strong>错。
+          system 只放 <code>catalog()</code> 生成的名称和 description；全文在调用
+          <code>load_skill</code> 后作为 tool_result 进入 messages。
+        </li>
+        <li>
+          <strong>按需加载就是调用时才从磁盘读文件：</strong>当前实现不准确。
+          <code>scan()</code> 启动时已经把全文保存到 registry；按需的是模型上下文注入。
+        </li>
+        <li>
+          <strong>Skill 是一个可以直接运行的 Python 函数：</strong>错。
+          Skill 是 <code>SKILL.md</code> 指令文档；真正执行动作仍要调用 bash、文件工具等。
+        </li>
+        <li>
+          <strong><code>catalog()</code> 会把所有技能正文拼起来：</strong>错。
+          它只使用每条记录的 <code>name</code> 和 <code>description</code>。
+        </li>
+        <li>
+          <strong>frontmatter 就是 Markdown 正文：</strong>错。
+          它是两条 <code>---</code> 之间的 YAML metadata 区域；正文从第二条分隔线后开始。
+        </li>
+        <li>
+          <strong>缺少 name 就一定丢弃技能：</strong>当前实现错。
+          若 metadata 没有合法字符串 name，扫描器退回使用技能目录名。
+        </li>
+        <li>
+          <strong>缺少 description 就一定没有目录项：</strong>当前实现错。
+          它会退回取 body 第一行并压缩空白。
+        </li>
+        <li>
+          <strong><code>glob("*/SKILL.md")</code> 会递归扫描所有层：</strong>错。
+          这个模式只匹配 skills 的直接子目录；更深层路径不在本课范围内。
+        </li>
+        <li>
+          <strong><code>load_skill</code> 接收的是任意文件路径：</strong>错。
+          handler 用字符串查 registry；名字不存在就返回 Unknown，不直接打开传入路径。
+        </li>
+        <li>
+          <strong><code>resolve()</code> 本身就会拒绝越界路径：</strong>不准确。
+          resolve 只规范化路径；真正跳过越界项的是
+          <code>is_relative_to(skills_root)</code> 判断后的 <code>continue</code>。
+        </li>
+        <li>
+          <strong>registry 是模型直接看到的对象：</strong>错。
+          registry 在 Harness 本地；模型只看到 system 里的 catalog 或 messages 里的 tool_result。
+        </li>
+        <li>
+          <strong>schema 有 name 就会自动调用 loader：</strong>错。
+          schema 只是模型契约；<code>TOOL_HANDLERS["load_skill"]</code> 才把名字接到方法。
+        </li>
+        <li>
+          <strong>加载完整技能会创建新的子 Agent：</strong>错。
+          <code>load</code> 只是返回字符串；没有第二个 messages，也没有嵌套模型请求。
+        </li>
+        <li>
+          <strong>技能正文进入 tool_result 后就变成永久 system 指令：</strong>错。
+          它留在当前 messages 轨迹；system 仍是启动时构造的目录字符串。
+        </li>
+        <li>
+          <strong>加载技能后模型一定会遵守技能：</strong>不能保证。
+          当前代码只负责把正文提供给模型，不做规则执行器或完成度验证。
+        </li>
+        <li>
+          <strong>修改磁盘上的 SKILL.md 后当前进程立刻看到新版本：</strong>错。
+          registry 保存的是启动时的 content；本课没有 reload / watch 机制。
+        </li>
+        <li>
+          <strong>技能目录替代了项目事实：</strong>错。
+          技能告诉模型如何做；read_file、glob、bash 等工具才提供工作区的实际观察。
+        </li>
+        <li>
+          <strong>加载技能绕过 s04 hooks：</strong>错。
+          <code>load_skill</code> 仍经过统一的 <code>execute_tool</code> 和 Pre/Post hooks。
+        </li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。system 只放 name + description；完整内容在 load_skill 的 tool_result 中出现。"
+      data-bad="把“Python 启动时读入缓存”和“模型启动时看到全文”区分开：当前实现只把目录注入 system。">
+      <p>模型刚启动时，system prompt 中关于技能通常是什么？</p>
+      <button data-correct="true">技能名称和简介目录</button>
+      <button data-correct="false">所有 SKILL.md 的完整正文</button>
+      <button data-correct="false">每个技能已经执行后的测试结果</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。scan() 已经把全文存进 content；load() 只是按 registry 键返回缓存。"
+      data-bad="本课的“按需”指按需注入模型上下文，不等于每次调用才读磁盘。">
+      <p>当前实现中，load_skill 第一次被调用时才从磁盘读取 SKILL.md 吗？</p>
+      <button data-correct="false">是，scan() 只保存了文件路径</button>
+      <button data-correct="true">不是，启动扫描时已读入并缓存全文</button>
+      <button data-correct="false">不是，因为 SKILL.md 从未被 Python 读取</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。load(name) 用 self.skills.get(name)，输入是注册表键，不是路径。"
+      data-bad="注意 path 边界检查发生在 scan()；load() 的核心动作是字典查表。">
+      <p>为什么 load("../../secret.txt") 不会让 load() 直接读取这个路径？</p>
+      <button data-correct="false">因为 Python 不支持点号路径</button>
+      <button data-correct="true">因为 load 把输入当注册表名称查表，不拼接路径</button>
+      <button data-correct="false">因为所有技能都会自动复制到 secret.txt</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。name 优先取 frontmatter，缺失或无效时回退到 manifest.parent.name。"
+      data-bad="缺 name 不会立刻丢弃技能；请回看 scan() 的 name = name or manifest.parent.name。">
+      <p>frontmatter 缺少合法 name 时，当前扫描器怎样命名技能？</p>
+      <button data-correct="false">永远命名为 unknown</button>
+      <button data-correct="true">退回使用 SKILL.md 所在的父目录名</button>
+      <button data-correct="false">把完整正文的第一句话当名称</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。catalog 只格式化 name 和 description，不会把 content 拼进去。"
+      data-bad="检查 catalog() 的生成表达式：它访问 skill['name'] 和 skill['description']。">
+      <p>catalog() 为什么不会让所有技能全文进入 system？</p>
+      <button data-correct="false">因为 system prompt 不能放字符串</button>
+      <button data-correct="true">因为它只读取每条记录的 name 和 description</button>
+      <button data-correct="false">因为完整正文会自动被删除</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。schema 面向模型，TOOL_HANDLERS 面向本地执行；两处都要接线。"
+      data-bad="声明工具名称不会调用 Python；真正执行依赖 load_skill 到 SKILL_LOADER.load 的映射。">
+      <p>要让模型真的能加载技能，为什么不能只把 load_skill 写进 schema？</p>
+      <button data-correct="false">因为 schema 会自动把技能变成文件</button>
+      <button data-correct="true">还要在 TOOL_HANDLERS 中把它接到 SKILL_LOADER.load</button>
+      <button data-correct="false">因为模型不允许调用任何字符串参数</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。工具返回值用原 tool_use_id 配对后，作为 tool_result 进入 messages。"
+      data-bad="技能正文不是直接改 SYSTEM；它沿普通工具协议回到消息轨迹。">
+      <p>load_skill 返回的完整 SKILL.md 最终怎样被模型看到？</p>
+      <button data-correct="false">Python 直接修改模型权重</button>
+      <button data-correct="true">作为与 tool_use_id 配对的 tool_result 追加到 messages</button>
+      <button data-correct="false">自动替换掉系统里的所有工具 schema</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。glob 的 * 只覆盖一个直接目录层级；本课不是递归技能发现。"
+      data-bad="不要把 glob(*/SKILL.md) 和递归的 ** 模式混淆。">
+      <p><code>skills_dir.glob("*/SKILL.md")</code> 的扫描范围是什么？</p>
+      <button data-correct="true">skills 下每个直接子目录中的 SKILL.md</button>
+      <button data-correct="false">skills 下任意深度的所有 Markdown 文件</button>
+      <button data-correct="false">整个操作系统中的所有 SKILL.md</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。resolve() 规范化路径，is_relative_to() 返回是否在根目录下；if 才决定跳过。"
+      data-bad="把“规范化路径”和“根据判断采取动作”分开理解。">
+      <p>scan() 中 resolve() 和 is_relative_to() 组合的主要目的是什么？</p>
+      <button data-correct="false">把 YAML 自动翻译成 JSON</button>
+      <button data-correct="true">确认扫描到的文件仍位于 skills 根目录内</button>
+      <button data-correct="false">让模型自动选择最相关的技能</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。load_skill 只是返回文档；文档中的动作仍须模型另行调用工具。"
+      data-bad="Skill 是指令文档，不是可执行函数；真正动作仍走 bash / 文件工具及其 hooks。">
+      <p>调用 load_skill 后，技能正文中的 bash 命令会自动执行吗？</p>
+      <button data-correct="false">会，正文中的每个代码块都会立即运行</button>
+      <button data-correct="true">不会，正文只是 tool_result；模型要执行必须另发工具调用</button>
+      <button data-correct="false">会，但只执行第一条命令</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。registry 是启动时缓存；当前没有 reload 或 watch。"
+      data-bad="当前 load() 不调用 read_text；它直接返回 registry 中的 content。">
+      <p>脚本启动后修改磁盘上的 SKILL.md，再调用 load_skill，默认会怎样？</p>
+      <button data-correct="false">自动重新扫描并返回新版本</button>
+      <button data-correct="true">仍返回启动时缓存的旧版本</button>
+      <button data-correct="false">因为文件变动而自动关闭 Agent loop</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>
+        能用一句话解释 s07：system prompt 放技能目录，模型调用
+        <code>load_skill</code> 后完整 <code>SKILL.md</code> 才作为 tool_result 进入 messages。
+      </li>
+      <li>
+        能明确区分“启动时 Python 读取并缓存全文”和“模型何时获得全文”：
+        前者发生在 <code>scan()</code>，后者发生在工具结果回填后。
+      </li>
+      <li>
+        能从 <code>parse_frontmatter</code> 说明分隔线、<code>yaml.safe_load</code>、
+        空 metadata、非字典 metadata 和解析错误的处理。
+      </li>
+      <li>
+        能从 <code>scan()</code> 解释 <code>glob("*/SKILL.md")</code> 的范围、
+        name / description 的回退规则、排序和 content 缓存。
+      </li>
+      <li>
+        能辨析 <code>resolve()</code>、<code>is_relative_to()</code> 和
+        <code>continue</code> 各自做什么，并说明它们不是用户审批管线。
+      </li>
+      <li>
+        能解释 <code>catalog()</code> 只输出 name + description，且
+        <code>build_system_prompt()</code> 把它放进 system。
+      </li>
+      <li>
+        能从 <code>load(name)</code> 读出精确字典查找、Unknown 错误、缓存返回和没有热更新。
+      </li>
+      <li>
+        能从 schema 与 <code>TOOL_HANDLERS["load_skill"]</code> 推导一次真实 dispatch，
+        并解释为什么注册的是 <code>SKILL_LOADER.load</code> 而不是带括号的调用结果。
+      </li>
+      <li>
+        能按真实顺序讲出一次加载：system 目录 → tool_use →
+        hooks → handler 查表 → 完整字符串 → tool_result → 下一轮模型。
+      </li>
+      <li>
+        能说明 Skill 是知识文档而非执行器；加载技能不会替代 read_file，
+        不会自动运行文档命令，也不会绕过原有 hooks。
+      </li>
+      <li>
+        真跑 <code>python s07_skill_loading\code.py</code>，至少观察一次目录查询、
+        一次 <code>load_skill</code> 和一次未知技能错误；能解释完整正文出现在哪一条消息中。
+      </li>
+    </ul>
+
+    <h2>速查</h2>
+    <div class="box">
+      <p>
+        本课压缩版：
+        <a href="../../reference/phase-2/s07-skill-loading.html">阶段 2 · s07 Skill Loading 速查</a>。
+        先用课件理解“目录、缓存、消息”三层边界，再用速查复习扫描、加载和工具接线。
+      </p>
+      <p>
+        本课新增稳定术语已追加到
+        <a href="../../GLOSSARY.md">GLOSSARY.md</a> 的 Skill Loading 部分。
+      </p>
+    </div>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>
+          主阅读：
+          <a href="../../learn-claude-code-north/s07_skill_loading/README.zh.md">North s07 中文 README</a>；
+          本课已把 README 的骨架和源码关键分支展开，不打开也可以按过关标准学习。
+        </li>
+        <li>
+          示例技能：
+          <a href="../../learn-claude-code-north/skills/code-review/SKILL.md">code-review/SKILL.md</a>；
+          重点观察 frontmatter 的 name / description 与正文 checklist 的分工。
+        </li>
+        <li>
+          对照上一课：
+          <a href="./0026-subagent.html">0026 s06 Subagent</a>；
+          重点辨析“切分消息轨迹”和“按需注入知识”是两种不同的上下文管理。
+        </li>
+        <li>
+          原理回看：
+          <a href="../phase-1/0017-agent-formula.html">0017 Agent 公式</a>；
+          重点是每次模型请求的上下文由 system、tools 和 messages 共同组成。
+        </li>
+        <li>
+          下一课：
+          s08 Context Compact 会处理“技能加载后 messages 变长，如何为后续任务保留上下文空间”。
+        </li>
+      </ul>
+    </div>
+
+    <p>
+      <a href="./index.html">阶段 2 分册</a>
+      · <a href="./0026-subagent.html">上一课 0026</a>
+    </p>
+    <div data-lesson-id-footer="0027"></div>
+    <footer>
+      不清楚的立刻问我。下一课 s08：当工具结果和技能正文越来越多时，怎样压缩较早的上下文。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

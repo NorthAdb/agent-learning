@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0021 · s01 Agent Loop</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0021"></div>
+    <h1>s01：一个循环 + Bash，第一次跑真 Agent</h1>
+    <p class="mission">
+      阶段 1 已经回答了「Agent 是什么」和「循环为什么成立」。
+      本课把抽象骨架接到真实 API：模型发出结构化的
+      <code>tool_use</code>，Python 执行命令，再把
+      <code>tool_result</code> 喂回模型。你的阶段目标是：
+      <strong>能读懂并跑通 North s01 的真实循环，知道每一层在做什么</strong>。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      主材料是 North 根目录新版
+      <a href="../../learn-claude-code-north/s01_agent_loop/README.zh.md">s01 README</a>
+      （问题与方案
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/README.zh.md:12">L12–34</a>，
+      代码拆解
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/README.zh.md:37">L37–116</a>，
+      运行方式
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/README.zh.md:120">L120–144</a>）。
+      0019 已讲过书 §1.1.5 的 ReAct 骨架；本课把它落到
+      <a href="../../learn-claude-code-north/s01_agent_loop/code.py"><code>code.py</code></a>
+      全文（
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:1">L1–143</a>
+      ），不再重复讲缓存、流式响应和 CC 源码的生产细节。
+    </p>
+    <p class="muted">
+      本课<strong>已内化</strong>：s01 从 shebang 到 REPL 入口的每一块；配置、工具契约、执行器、核心循环、交互入口。
+      <strong>故意跳过</strong>：多工具（s02）、权限确认（s03）、hooks（s04）以及 README
+      后面的生产级流式与恢复策略；它们分别在后续课展开。读完本页并完成运行步骤，才算
+      0021 过关。
+    </p>
+
+    <h3>本课新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>出处</th></tr>
+      <tr>
+        <td><strong>SDK client</strong></td>
+        <td>把 Python 调用翻译成某个服务 API 请求的客户端对象</td>
+        <td><code>Anthropic</code> 的创建在
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:53">code.py L53</a>；
+          本书未展开 SDK。</td>
+      </tr>
+      <tr>
+        <td><strong>Messages API</strong></td>
+        <td>以消息历史、系统提示和工具定义请求模型回复的接口</td>
+        <td>North s01 的请求形状在
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/README.zh.md:50">README L50–54</a>。</td>
+      </tr>
+      <tr>
+        <td><strong>tool schema</strong></td>
+        <td>给模型看的工具说明书：名字、用途、参数的结构化约定（JSON Schema 是用 JSON 写的字段与类型约束）</td>
+        <td><code>TOOLS</code> 在
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:59">code.py L59–67</a>。</td>
+      </tr>
+      <tr>
+        <td><strong><code>tool_use</code></strong></td>
+        <td>模型内容中的结构化工具调用块，包含工具名和输入参数</td>
+        <td>判断与取值在
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:98">code.py L98–102</a>。</td>
+      </tr>
+      <tr>
+        <td><strong><code>tool_result</code></strong></td>
+        <td>Harness 执行工具后回传给模型的结果块</td>
+        <td>构造在
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:110">code.py L110–114</a>。</td>
+      </tr>
+      <tr>
+        <td><strong><code>tool_use_id</code></strong></td>
+        <td>把结果对应回这一次具体工具调用的 ID</td>
+        <td>对应关系在
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:112">code.py L112</a>。</td>
+      </tr>
+      <tr>
+        <td><strong><code>.env</code></strong></td>
+        <td>放本机配置和密钥的环境变量文件，不应提交到 Git</td>
+        <td>模板和安装说明在
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/.env.example:1">.env.example L1–8</a>；
+          加载在 <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:48">code.py L48</a>。</td>
+      </tr>
+      <tr>
+        <td><strong><code>load_dotenv</code></strong></td>
+        <td>把 <code>.env</code> 读进进程的环境变量；<code>override=True</code> 表示文件里的值覆盖已有环境变量</td>
+        <td>调用在
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:48">code.py L48</a>。
+          书 / North README <strong>没有</strong>展开这个函数；出自
+          <a href="https://github.com/theskumar/python-dotenv">python-dotenv</a>。</td>
+      </tr>
+      <tr>
+        <td><strong><code>ANTHROPIC_AUTH_TOKEN</code></strong></td>
+        <td>Anthropic SDK 也可能拿来当鉴权的另一个环境变量；自定义 Base URL 时要清掉，以免盖过 <code>.env</code> 里的 key</td>
+        <td>弹出在
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:50">code.py L50–51</a>。
+          书未用。不是你要填的那个字段——你填的是 <code>ANTHROPIC_API_KEY</code>。</td>
+      </tr>
+      <tr>
+        <td><strong><code>max_tokens</code></strong></td>
+        <td>本轮模型最多生成多少 token；限制的是这一次回复长度，不是整段上下文窗口</td>
+        <td>请求参数在
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:91">code.py L91</a>；
+          README 同形
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/README.zh.md:50">L50–53</a>。</td>
+      </tr>
+      <tr>
+        <td><strong>content block</strong></td>
+        <td>模型回复的一截内容：常见是 <code>text</code> 文本块或 <code>tool_use</code> 工具块，一轮里可以混着出现</td>
+        <td>遍历在
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:106">code.py L106–114</a>。
+          书写成「工具调用」；字段名是 Messages API 的。</td>
+      </tr>
+      <tr>
+        <td><strong>REPL</strong></td>
+        <td>Read-Eval-Print Loop：读一行 → 执行 → 打印 → 再等下一行。外层 <code>s01 &gt;&gt;</code> 就是 REPL，不是 API</td>
+        <td>入口循环在
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:121">code.py L121–142</a>。
+          书 / North README <strong>没有</strong>这个缩写。</td>
+      </tr>
+      <tr>
+        <td><strong><code>max_turns</code></strong></td>
+        <td>harness 自己数的「最多转几圈」；<strong>不是</strong> Messages API 字段。s01 没写，只有 <code>while True</code></td>
+        <td>对照 0003 / 0019 安全带。本文件故意缺席，见
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:87">code.py L87</a>。
+          不要和 API 参数 <code>max_tokens</code> 混。</td>
+      </tr>
+    </table>
+
+    <h2>为什么现在学？</h2>
+    <p>
+      0019 的伪代码里，<code>response</code>、<code>tool_call</code>、工具结果看起来很干净；
+      s01 会让你看到它们在真实程序中的形状：SDK 返回对象，内容里混着文本块和工具块，
+      工具结果还必须带回原来的调用 ID。这个接口边界正是「模型做决定、Harness 负责执行」
+      的落点。只有把它跑过一次，后面的多工具、权限和 hooks 才不会变成名词堆。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>s01 概念</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr>
+        <td>SDK client</td>
+        <td>HTTP client / SDK service</td>
+        <td>对象帮你组装请求，但不会替你执行工具循环。</td>
+      </tr>
+      <tr>
+        <td><code>messages</code></td>
+        <td><code>List&lt;Message&gt;</code> 会话历史</td>
+        <td>每次模型请求都依赖它；工具结果漏掉就等于下一轮没观察到。</td>
+      </tr>
+      <tr>
+        <td>tool schema</td>
+        <td>接口签名 + DTO 约束</td>
+        <td>它主要是给模型看的可调用契约，不是 Java 方法本身。</td>
+      </tr>
+      <tr>
+        <td><code>tool_use_id</code></td>
+        <td>请求 ID / correlation ID</td>
+        <td>把异步式「请求—结果」配对；不是工具名，也不是 HTTP 状态码。</td>
+      </tr>
+      <tr>
+        <td><code>subprocess.run</code></td>
+        <td><code>ProcessBuilder</code></td>
+        <td>会启动真实操作系统命令；<code>shell=True</code> 会把字符串交给 shell 解析。</td>
+      </tr>
+      <tr>
+        <td>两层 <code>while True</code></td>
+        <td>控制台 REPL 套一层业务循环</td>
+        <td>外层只收人话；内层才调模型和工具。不要看成两个相同的 loop。</td>
+      </tr>
+      <tr>
+        <td>REPL</td>
+        <td>控制台里反复 <code>Scanner.nextLine()</code> 再处理</td>
+        <td>Python 的 <code>s01 &gt;&gt;</code> / <code>&gt;&gt;&gt;</code> 是现成交互环；Java 没有同名内置。</td>
+      </tr>
+    </table>
+
+    <h2>系统讲解</h2>
+
+    <h3>1. 先看真实的消息往返</h3>
+    <p>
+      一次工具往返至少有四个动作。把它和 0019 的「想 → 做 → 看」对齐：
+    </p>
+    <ol>
+      <li>用户消息进入 <code>messages</code>；这是初始轨迹。</li>
+      <li>Harness 把消息、系统提示和 <code>TOOLS</code> 一起交给模型；模型决定是否使用工具。</li>
+      <li>如果出现 <code>tool_use</code>，Harness 读取参数并执行 <code>bash</code>。</li>
+      <li>Harness 用相同的调用 ID 生成 <code>tool_result</code>，追加回 <code>messages</code>，再请求模型。</li>
+    </ol>
+    <pre>messages = [
+  {"role": "user", "content": "当前目录有哪些 Python 文件？"},
+  {"role": "assistant", "content": [
+    {"type": "tool_use", "id": "call_1",
+     "name": "bash", "input": {"command": "..."}}
+  ]},
+  {"role": "user", "content": [
+    {"type": "tool_result", "tool_use_id": "call_1",
+     "content": "a.py\nb.py"}
+  ]}
+]</pre>
+    <p>
+      这里第二个 <code>role: user</code> 不是又来了一个人类问题，而是 API 消息协议中
+      「工具结果由用户侧 / 外部环境送回」的承载位置。关键不是背角色名字，而是确认：
+      <code>tool_result.tool_use_id</code> 必须对应此前的 <code>tool_use.id</code>。
+    </p>
+    <p class="src">
+      North README 将这件事拆成第 1–5 步：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/README.zh.md:42">L42–80</a>。
+    </p>
+
+    <h3>2. 工具不是 Python 函数，是给模型看的契约</h3>
+    <p>
+      <strong>tool schema</strong> 是结构化说明书。它告诉模型「有一个叫
+      <code>bash</code> 的工具，需要一个字符串参数 <code>command</code>」；
+      它<strong>不执行</strong>命令，也不等于 Python 的 <code>run_bash</code> 函数。
+      真正的连接在后面由 handler 完成。
+    </p>
+    <pre>TOOLS = [{
+    "name": "bash",
+    "description": "Run a shell command.",
+    "input_schema": {
+        "type": "object",
+        "properties": {"command": {"type": "string"}},
+        "required": ["command"],
+    },
+}]</pre>
+    <p>
+      可以把它和 Java 对照成两半：schema 像接口文档和参数 DTO 的合体；
+      <code>run_bash(command)</code> 才像实现类中的方法。模型只能依据 schema 发出调用，
+      不会因为你在本地定义了一个同名函数就自动执行它。
+    </p>
+    <p class="src">
+      这是本课第一次把「工具描述」从概念变成 API 输入；原代码见
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:59">L59–67</a>，
+      执行器见 <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:71">L71–83</a>。
+    </p>
+
+    <h3>3. 两个停止信号，决定循环是否再转一圈</h3>
+    <p>
+      <code>stop_reason</code> 仍是 Message 对象上的字段：模型结束本轮生成时携带的原因。
+      当前 s01 <strong>不读它</strong>。循环改看 <code>content</code> 里有没有
+      <code>tool_use</code> 块。有 = 还要 Harness 执行工具；没有 = 已经给出文本答案。
+      它不是 HTTP 状态码，也不是工具执行成功与否。
+    </p>
+    <pre>messages.append({"role": "assistant", "content": response.content})
+
+tool_calls = [
+    block for block in response.content if block.type == "tool_use"
+]
+if not tool_calls:
+    return
+
+# 有 tool_use 才会走到这里：执行工具并回填结果</pre>
+    <p>
+      注意顺序：先把 assistant 回复追加进轨迹，再判断是否停止。
+      如果有工具调用，下一条消息才是工具结果；如果没有，最后一条 assistant 文本就是答案。
+      这正是 0019 的「无 tool call 就停」在真实 SDK 上的落地。
+    </p>
+    <p class="src">
+      真实判断在
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:87">code.py L87–102</a>；
+      README 的最小函数在
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/README.zh.md:90">README L90–114</a>。
+    </p>
+
+    <h3>4. Harness 执行命令，再把观察送回去</h3>
+    <p>
+      <code>run_bash</code> 是 s01 的执行器。它用
+      <code>subprocess.run</code> 启动操作系统命令，<code>capture_output=True</code>
+      把标准输出和错误输出收回来，<code>text=True</code> 让结果以字符串处理，
+      <code>timeout=120</code> 防止命令无限等待。这几个参数是首次在本课组合出现，
+      不是装饰性的写法。
+    </p>
+    <pre>r = subprocess.run(
+    command,
+    shell=True,
+    cwd=os.getcwd(),
+    capture_output=True,
+    text=True,
+    timeout=120,
+)
+out = (r.stdout + r.stderr).strip()</pre>
+    <p>
+      前面的 <code>dangerous</code> 列表只拦截少数字符串，不能把 s01 当成完整权限系统；
+      README 也明确说真正的权限系统留给 s03。这里的教学重点是数据流：
+      <code>block.input["command"]</code> → 执行器 → <code>output</code> →
+      <code>tool_result</code>。
+    </p>
+    <p class="src">
+      <code>subprocess.run</code> 的完整实现与边界在
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:71">code.py L71–83</a>；
+      Python 官方参数说明在
+      <a href="https://docs.python.org/3/library/subprocess.html#subprocess.run">subprocess.run</a>。
+    </p>
+
+    <h3>5. Windows 边界：工具叫 Bash，不代表本机一定运行 Bash</h3>
+    <p>
+      你当前是 Windows。代码写的是 <code>shell=True</code>，这会使用当前 Python
+      进程所采用的系统 shell；它不自动安装或切换成 Linux Bash。
+      因此「工具 schema 的名字是 <code>bash</code>」与「命令实际由哪个 shell 解释」
+      是两件事。若模型给出 <code>ls</code>、<code>cat</code>、<code>find</code> 等 Unix 命令，
+      本机可能失败；这属于 0020 的<strong>执行环境</strong>层，不要先怪模型。
+    </p>
+    <div class="box">
+      <strong>第一次真实运行的安全做法</strong>
+      <ol>
+        <li>不要让 s01 直接修改重要项目；在可丢弃目录或副本里启动。</li>
+        <li>先问一个只读、跨平台倾向的任务，例如：
+          <code>Run python -c "print('s01 works')"</code>。</li>
+        <li>看到工具命令、工具输出、最终文本各出现一次后，再尝试列文件。</li>
+        <li>若命令语法不兼容，记录为环境问题；不要把危险命令加入白名单来「硬跑」。</li>
+      </ol>
+    </div>
+
+    <h2>主脚本导读：<code>code.py</code> 从头到尾</h2>
+    <p>
+      打开
+      <a href="../../learn-claude-code-north/s01_agent_loop/code.py"><code>learn-claude-code-north/s01_agent_loop/code.py</code></a>
+      ，对照下面读。不要假设 README 已经替你讲完——下面按执行顺序拆每一块。
+    </p>
+    <table>
+      <tr><th>区块</th><th>行号</th><th>干什么</th></tr>
+      <tr>
+        <td>文件头</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:1">L1–30</a></td>
+        <td>声明这是脚本，用一段注释画循环</td>
+      </tr>
+      <tr>
+        <td>导入与终端</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:32">L32–46</a></td>
+        <td>拿 OS / 子进程；Unix 才装 readline</td>
+      </tr>
+      <tr>
+        <td>配置与客户端</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:45">L45–56</a></td>
+        <td>读 <code>.env</code>、造 SDK、写系统提示</td>
+      </tr>
+      <tr>
+        <td>工具契约</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:59">L59–67</a></td>
+        <td>告诉模型：你只有 bash，参数叫 command</td>
+      </tr>
+      <tr>
+        <td>工具执行器</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:71">L71–83</a></td>
+        <td>真跑命令，把 stdout/stderr 收成字符串</td>
+      </tr>
+      <tr>
+        <td>核心循环</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:87">L87–117</a></td>
+        <td>想 → 做 → 看，直到模型不再要工具</td>
+      </tr>
+      <tr>
+        <td>交互入口</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:121">L121–142</a></td>
+        <td>外层 REPL：收人话、调内层、打印最终文本</td>
+      </tr>
+    </table>
+
+    <h3>A. 文件头：shebang 与模块说明（L1–30）</h3>
+    <p>
+      <strong>shebang</strong>（L1 <code>#!/usr/bin/env python3</code>）：Unix 上告诉系统「用哪个 Python 跑这个文件」。
+      Windows 的 <code>python code.py</code> 会忽略它，可以当注释看。
+      本书未写这个符号；Python 教程在
+      <a href="https://docs.python.org/3/tutorial/appendix.html#executable-python-scripts">可执行脚本</a>。
+    </p>
+    <p>
+      L2–30 的三引号字符串是<strong>模块文档字符串</strong>（模块级 docstring）：
+      import 时不会执行循环，只是给人读的说明书。
+      它把整课压成四行伪代码：调模型 → 若要工具就执行 → 把结果追加 → 再调。
+      ASCII 图里的回箭头就是后面的 <code>tool_result</code>。
+      Usage 两行是作者给 Linux/macOS 的跑法；你在 PowerShell 里用的是 <code>.venv</code> + <code>.env</code>，不必照抄那两行。
+    </p>
+    <p class="src">
+      原文：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:1">code.py L1–30</a>。
+    </p>
+
+    <h3>B. 导入与 readline（L32–46）</h3>
+    <pre>import os
+import subprocess
+
+try:
+    import readline
+    readline.parse_and_bind(...)
+except ImportError:
+    pass</pre>
+    <p>
+      <code>os</code>：读环境变量、取当前工作目录。<code>subprocess</code>：起子进程跑命令（0014 已过关）。
+    </p>
+    <p>
+      <strong><code>readline</code></strong>：Unix 终端里给 <code>input()</code> 加历史和编辑。
+      注释写明这四行是修 macOS libedit 对中文退格的问题。
+      Windows 标准库<strong>没有</strong>这个模块，<code>import readline</code> 会抛
+      <code>ImportError</code>；<code>except</code> 里 <code>pass</code> 表示「没有就算了，后面照跑」。
+      所以你在 Windows 上看不到这四行生效，不是脚本坏了。
+    </p>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:32">L32–46</a>。
+      readline 是 CPython Unix 构建才有的模块，见
+      <a href="https://docs.python.org/3/library/readline.html">readline</a>。
+    </p>
+
+    <h3>C. 配置：.env、客户端、系统提示（L45–56）</h3>
+    <pre>from anthropic import Anthropic
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
+if os.getenv("ANTHROPIC_BASE_URL"):
+    os.environ.pop("ANTHROPIC_AUTH_TOKEN", None)
+
+client = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
+MODEL = os.environ["MODEL_ID"]
+
+SYSTEM = f"You are a coding agent at {os.getcwd()}. Use bash to solve tasks. Act, don't explain."</pre>
+    <p>
+      <code>from anthropic import Anthropic</code>：第三方 SDK。它把 Python 调用翻译成 Messages HTTP 请求。
+      你用 DeepSeek 时<strong>仍然 import anthropic</strong>，因为走的是兼容端点，不是换 SDK。
+    </p>
+    <p>
+      <code>load_dotenv(override=True)</code>：读取仓库根目录的 <code>.env</code>，写进
+      <code>os.environ</code>。<code>override=True</code> 表示文件里的键盖过进程里已经有的同名变量
+      （例如 Cursor / Hermes 提前注入的 key）。没有这行，<code>MODEL_ID</code> 和 key 对脚本就是「没设」。
+    </p>
+    <p>
+      接下来两行是兼容服务的坑：若设了 <code>ANTHROPIC_BASE_URL</code>（你的 DeepSeek 端点），
+      就 <code>pop</code> 掉 <code>ANTHROPIC_AUTH_TOKEN</code>。
+      SDK 可能优先用这个 token；本机别的工具常会留下一个 Anthropic 的旧 token，
+      发给 DeepSeek 就会 401。你要填的始终是 <code>ANTHROPIC_API_KEY</code>。
+      <code>pop(..., None)</code> 的第二个参数表示「没有这个键也不报错」。
+    </p>
+    <p>
+      <code>Anthropic(base_url=...)</code>：<code>base_url</code> 为 <code>None</code> 就打官方 Anthropic；
+      有值就打兼容地址。密钥默认从环境变量 <code>ANTHROPIC_API_KEY</code> 读，代码里没有写成参数。
+    </p>
+    <p>
+      <code>MODEL = os.environ["MODEL_ID"]</code>：用方括号取环境变量，键不存在就
+      <code>KeyError</code> 直接崩——这是故意的，缺模型名不如早失败。
+      和 <code>os.getenv</code>（缺了返回 <code>None</code>）不同。
+    </p>
+    <p>
+      <code>SYSTEM</code>：系统提示，每次请求都会作为静态前缀发给模型（0019 的静态前缀）。
+      <code>os.getcwd()</code> 是启动脚本时的当前工作目录，所以 agent「以为自己在哪」取决于你在哪个目录敲
+      <code>python s01_agent_loop\code.py</code>。
+      「Act, don't explain」是在催它调工具，不要只空谈。
+    </p>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:45">L45–56</a>。
+      <code>.env</code> 模板：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/.env.example:1">.env.example L1–8</a>，
+      DeepSeek 兼容地址在
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/.env.example:67">L67–70</a>。
+    </p>
+
+    <h3>D. 工具契约：只有 bash（L59–67）</h3>
+    <p>
+      <code>TOOLS</code> 是一个列表，里面目前只有一份 schema。发给模型时作为「你能用的工具说明书」。
+      <code>name</code> 必须和后面执行时认的名字一致；s01 写死只处理 bash，没有 dispatch 表（那是 s02）。
+      <code>input_schema</code> 要求一个对象，字段 <code>command</code> 是字符串且必填。
+      模型若要调工具，会在 content 里给出
+      <code>{"command": "具体那一行"}</code>。
+    </p>
+    <p>
+      这里没有 <code>run_bash</code> 的函数引用。契约和实现是分开的两段代码，靠约定对上。
+    </p>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:59">L59–67</a>。
+    </p>
+
+    <h3>E. 执行器 <code>run_bash</code>（L71–83）</h3>
+    <pre>def run_bash(command: str) -> str:
+    dangerous = ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"]
+    if any(d in command for d in dangerous):
+        return "Error: Dangerous command blocked"
+    try:
+        r = subprocess.run(command, shell=True, cwd=os.getcwd(),
+                           capture_output=True, text=True, timeout=120)
+        out = (r.stdout + r.stderr).strip()
+        return out[:50000] if out else "(no output)"
+    except subprocess.TimeoutExpired:
+        return "Error: Timeout (120s)"
+    except (FileNotFoundError, OSError) as e:
+        return f"Error: {e}"</pre>
+    <p>按执行顺序：</p>
+    <ol>
+      <li>
+        <code>dangerous</code>：子串黑名单。<code>any(d in command for d in dangerous)</code>
+        表示命令文本里出现任一段就拦截，返回错误字符串，<strong>不抛异常</strong>。
+        这不是权限系统：改几个字母就能绕过；s03 才做边界。
+      </li>
+      <li>
+        <strong><code>subprocess.run</code> 不在本文件里定义。</strong>
+        L33 <code>import subprocess</code> 之后调用的是 Python 标准库函数，官方签名见
+        <a href="https://docs.python.org/3/library/subprocess.html#subprocess.run">subprocess.run</a>。
+        本文件定义的是外套 <code>run_bash</code>（L71）。0014 已讲「起子进程并等结束」；
+        Java 接近 <code>ProcessBuilder.start()</code> 再 <code>waitFor()</code>。
+        返回值 <code>r</code> 是 <code>CompletedProcess</code>（有 <code>stdout</code> / <code>stderr</code> / <code>returncode</code>）。
+        s01 传入的关键字参数：
+      </li>
+    </ol>
+    <table>
+      <tr><th>实参</th><th>对应官方参数</th><th>这里干什么</th></tr>
+      <tr><td><code>command</code></td><td>位置参数 <code>args</code></td><td><code>shell=True</code> 时是一整串命令字符串</td></tr>
+      <tr><td><code>shell=True</code></td><td><code>shell</code></td><td>交给本机 shell 解析，Windows 通常是 cmd</td></tr>
+      <tr><td><code>cwd=os.getcwd()</code></td><td><code>cwd</code></td><td>子进程工作目录 = 启动脚本时的当前目录</td></tr>
+      <tr><td><code>capture_output=True</code></td><td><code>capture_output</code></td><td>stdout/stderr 进返回对象，不直接印终端</td></tr>
+      <tr><td><code>text=True</code></td><td><code>text</code></td><td>输出当 <code>str</code>，不当 bytes</td></tr>
+      <tr><td><code>timeout=120</code></td><td><code>timeout</code></td><td>最多等 120 秒，超时抛 <code>TimeoutExpired</code></td></tr>
+    </table>
+    <ol start="3">
+      <li>
+        <code>timeout=120</code> 在 Windows 上的真实例子：单独的 <code>date</code> 会等人输入新日期，
+        stdin 又被 divert 走了，就会在这里等到超时，然后走 <code>TimeoutExpired</code>，
+        返回 <code>Error: Timeout (120s)</code>。这是观察，不是 Python 死锁；不想等就 <code>Ctrl+C</code>。
+      </li>
+      <li>
+        把 stdout 和 stderr <strong>拼成一条字符串</strong>再 strip。模型看不到「这是错误流」的标记，
+        只看到一段文本。空输出改成 <code>(no output)</code>，避免喂一个空白回去。
+      </li>
+      <li>
+        <code>out[:50000]</code>：截断超长输出，避免一次把上下文撑爆。s01 没有 compact（s08）。
+      </li>
+      <li>
+        <code>FileNotFoundError</code> / <code>OSError</code>：例如 shell 本身起不来。
+        注意：命令跑失败、exit code 非 0，<code>subprocess.run</code> <strong>默认不抛</strong>，
+        只是 stderr 里有字。所以「ls 不是内部或外部命令」会作为观察喂回模型，而不是把循环炸死。
+      </li>
+    </ol>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:71">L71–83</a>。
+      参数含义：
+      <a href="https://docs.python.org/3/library/subprocess.html#subprocess.run">subprocess.run</a>。
+    </p>
+
+    <h3>F. 核心循环 <code>agent_loop</code>（L87–117）</h3>
+    <p>
+      参数 <code>messages</code> 是可变列表，函数里 <code>append</code> 会改调用方的
+      <code>history</code>（和 Java 把 <code>List</code> 引用传进去一样）。
+    </p>
+    <p><strong>每一圈固定四步。</strong></p>
+    <p>
+      <strong>1. 调模型</strong>（L89–92）。
+      <code>client.messages.create</code> 是同步请求：发
+      <code>model</code>、<code>system</code>、<code>messages</code>、<code>tools</code>、
+      <code>max_tokens=8000</code>，等到整段回复。
+      没有流式；终端会在这里停几秒，属于正常等网络。
+    </p>
+    <p>
+      <strong>2. 先把 assistant 整段 content 追加进轨迹</strong>（L95）。
+      <code>response.content</code> 是 content block 列表，可能同时有说明文字和
+      <code>tool_use</code>。必须先存，下一轮模型才能看见「我刚才要过什么」。
+    </p>
+    <p>
+      <strong>3. 筛 <code>tool_use</code> 块</strong>（L98–102）。
+      列表空就 <code>return</code>：正常完成。
+      常见伴随的 <code>stop_reason</code> 是 <code>end_turn</code>（说完了），但脚本不读这个字段。
+      此时 <code>history</code> 的最后一项就是带文本块的 assistant 消息。
+    </p>
+    <p>
+      <strong>4. 否则执行每一个 tool_use 块</strong>（L104–117）。
+    </p>
+    <pre>tool_calls = [
+    block for block in response.content if block.type == "tool_use"
+]
+if not tool_calls:
+    return
+
+results = []
+for block in tool_calls:
+    print(f"\033[33m$ {block.input['command']}\033[0m")
+    output = run_bash(block.input["command"])
+    print(output[:200])
+    results.append({
+        "type": "tool_result",
+        "tool_use_id": block.id,
+        "content": output,
+    })
+messages.append({"role": "user", "content": results})</pre>
+    <p>
+      先筛再执行：text 块不进 <code>tool_calls</code>，只执行工具块。
+      一轮可以有多个 tool_use；s01 按出现顺序<strong>串行</strong>跑。
+    </p>
+    <p>
+      <code>block.input["command"]</code>：schema 里那个参数。SDK 把 JSON 对象做成了可下标的
+      <code>input</code>。
+    </p>
+    <p>
+      <code>\033[33m</code> … <code>\033[0m</code>：ANSI 转义，把那行命令打成黄色。
+      <code>\033</code> 是 ESC。<code>36m</code> 在入口处把提示符打成青色。
+      不是密码，也不是给模型看的；只影响你的终端。Windows Terminal / 新版 PowerShell 能显示。
+    </p>
+    <p>
+      <code>tool_use_id: block.id</code>：配对键。模型下一轮靠它知道「哪一次调用」对应这段输出。
+      漏掉 ID，Messages API 会拒收或对不齐。
+    </p>
+    <p>
+      结果以 <code>role: "user"</code> 追加——这是 Messages 协议的规定：工具观察从「用户侧」送回，
+      不是又来了一个人类。然后 <code>while True</code> 回到第 1 步，带着更长的轨迹再调模型。
+    </p>
+    <p>
+      s01 <strong>没有 max_turns</strong>。模型若一直要工具，会一直转，直到你 Ctrl+C。
+      0019 讲过安全带；本文件故意没写。
+    </p>
+    <p>
+      <code>max_turns</code> <strong>不是</strong> <code>client.messages.create</code> 的参数。
+      API 认的是 <code>max_tokens</code>（本轮回复最长多少）。轮数上限是你在 <code>while</code> 上自己数的。
+    </p>
+    <table>
+      <tr><th>名字</th><th>谁定义</th><th>管什么</th><th>s01</th></tr>
+      <tr>
+        <td><code>max_tokens</code></td>
+        <td>Messages API 请求字段</td>
+        <td>这一轮生成最多多长</td>
+        <td>有，L91 <code>max_tokens=8000</code></td>
+      </tr>
+      <tr>
+        <td><code>max_turns</code></td>
+        <td>harness 循环计数</td>
+        <td>整个任务最多调几次模型</td>
+        <td>无，<code>while True</code></td>
+      </tr>
+    </table>
+    <p class="src">
+      书「最大迭代次数」：0019 / 第01章。
+      <code>max_tokens</code>：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:91">L91</a>。
+    </p>
+    <p class="src">
+      循环：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:87">L87–117</a>。
+      README 逐步对照：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/README.zh.md:37">README L37–114</a>。
+    </p>
+
+    <h3>G. 入口：外层 REPL（L121–142）</h3>
+    <p>
+      <strong>REPL</strong> = Read-Eval-Print Loop（读 → 执行 → 打印 → 再读）。
+      外层 <code>s01 &gt;&gt;</code> 就是 REPL：跟人对话。内层 <code>agent_loop</code> 才是跟模型和工具转圈。
+      两个都是 <code>while True</code>，职责不同。
+    </p>
+    <table>
+      <tr><th>字母</th><th>意思</th><th>s01 外层</th></tr>
+      <tr><td>Read</td><td>读你敲的一行</td><td><code>query = input("s01 >> ")</code></td></tr>
+      <tr><td>Eval</td><td>拿去跑</td><td><code>agent_loop(history)</code></td></tr>
+      <tr><td>Print</td><td>把结果印出来</td><td>L137–141 打印 text 块</td></tr>
+      <tr><td>Loop</td><td>再回到 Read</td><td>外层 <code>while True</code></td></tr>
+    </table>
+    <p>
+      Python 自带的 <code>&gt;&gt;&gt;</code> 也是 REPL。Java 没有同名内置，接近控制台里反复读一行再处理。
+      <code>q</code> / 空回车 / Ctrl+C 结束的是这个 REPL，不是 Messages API。
+    </p>
+    <p>
+      <code>if __name__ == "__main__"</code>：只有直接 <code>python ...\code.py</code> 才跑下面；
+      被 import 时不自动开对话。0004 已过关。
+    </p>
+    <pre>history = []
+while True:
+    query = input("s01 >> ")
+    if query.strip().lower() in ("q", "exit", ""):
+        break
+    history.append({"role": "user", "content": query})
+    agent_loop(history)
+    response_content = history[-1]["content"]
+    if isinstance(response_content, list):
+        for block in response_content:
+            if getattr(block, "type", None) == "text":
+                print(block.text)
+    print()</pre>
+    <p>
+      一次回车 = 往 <code>history</code> 追加一条用户消息，再调用一次 <code>agent_loop</code>。
+      同一会话里 <code>history</code> 不清空，所以上一轮的工具结果下一问还在——这是轨迹，不是 bug。
+    </p>
+    <p>
+      <code>input()</code> 遇到 Ctrl+Z（Windows EOF）或 Ctrl+C，分别是
+      <code>EOFError</code> / <code>KeyboardInterrupt</code>，<code>break</code> 退出。
+      <code>q</code>、<code>exit</code>、<strong>空回车</strong>也会退出。空回车不是「再问一次」。
+    </p>
+    <p>
+      <strong>L137–141 在内层已经 return 之后执行。</strong>
+      <code>agent_loop</code> 停下来时，最后一次 append 一定是 assistant 的
+      <code>response.content</code>（L95），所以 <code>history[-1]</code> 是最后一条 assistant。
+      <code>[-1]</code> 表示列表最后一项。
+    </p>
+    <ol>
+      <li>
+        <code>history[-1]["content"]</code>：一般是 SDK 的 content block <strong>对象列表</strong>，不是普通字符串。
+      </li>
+      <li>
+        <code>isinstance(..., list)</code>：确认是块列表。若哪次变成纯字符串，就跳过，避免把每个字符当一块。
+      </li>
+      <li>
+        <code>getattr(block, "type", None) == "text"</code>：只打印文本块。
+        SDK 块用属性 <code>.type</code> / <code>.text</code>，不是 dict 的 <code>["type"]</code>。
+        工具块已经在循环里用黄字打过命令，这里不再倒 JSON。
+      </li>
+      <li>
+        末尾单独 <code>print()</code>：空一行，和下一次 <code>s01 &gt;&gt;</code> 分开。
+      </li>
+    </ol>
+    <p>
+      对照：问「2 的三次方」时循环里没有黄字，答案就是这里打出来的；
+      调了工具之后，黄字在循环里，模型的总结仍然走这段。
+    </p>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:121">L121–142</a>。
+      <code>getattr</code>：0014；官方
+      <a href="https://docs.python.org/3/library/functions.html#getattr">getattr</a>。
+    </p>
+
+    <h3>H. 三条路径对上代码</h3>
+    <table>
+      <tr><th>你输入</th><th>走哪几行</th><th>终端会看到</th></tr>
+      <tr>
+        <td>「2 的三次方是多少」（纯知识）</td>
+        <td>L89 调模型 → L95 追加 → L98–102 没有 tool_use → return → L137–141 打印文本</td>
+        <td>没有黄色 <code>$</code>；直接答案。API 已通。</td>
+      </tr>
+      <tr>
+        <td><code>Run python -c "print('s01 works')"</code></td>
+        <td>L98–102 有 tool_use → L106–114 执行 → L117 回填 → 再进 L89 → 最终文本</td>
+        <td>黄字命令、输出、<code>s01 works</code>、模型总结。完整循环。</td>
+      </tr>
+      <tr>
+        <td>「当前时间」而模型发出 <code>date</code></td>
+        <td>L76–77 子进程在 Windows 上等人输入 → 最多 120s → L80–81 超时字符串回填</td>
+        <td>先卡住再报 Timeout。执行环境，不先换模型。</td>
+      </tr>
+    </table>
+
+    <h2>动手：先 dry-run，再跑真实 s01</h2>
+    <h3>第一步：无网络确认消息形状</h3>
+    <p>
+      先运行老师准备的
+      <a href="../../playground/phase-2/0021-agent-loop/dry_run_loop.py"><code>dry_run_loop.py</code></a>。
+      它保留 s01 的消息追加、停止判断、工具结果回填和 ID 配对，但把模型与 shell
+      换成了假实现，因此不会联网，也不会执行命令。
+    </p>
+    <pre>cd D:\agent-learning\playground\phase-2\0021-agent-loop
+python dry_run_loop.py</pre>
+    <p>
+      你应看到一次 <code>$ ...</code>、一次工具结果驱动的最终回答，以及消息条数。
+      读文件时对照：
+      <code>fake_model</code> ≈ 模型响应，
+      <code>run_fake_bash</code> ≈ <code>run_bash</code>，
+      <code>agent_loop</code> ≈ North 的核心循环。
+    </p>
+
+    <h3>第二步：准备并运行真实 s01</h3>
+    <p>
+      <strong>不要把 API key 发到聊天里，也不要把 <code>.env</code> 提交。</strong>
+      North 的模板是
+      <a href="../../learn-claude-code-north/.env.example">.env.example</a>；
+      其中至少要填 <code>MODEL_ID</code> 和对应服务的 API key。PowerShell 的准备命令：
+    </p>
+    <pre>cd D:\agent-learning\learn-claude-code-north
+# 不要用 Hermes 的 python；用本目录 .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+# .env 已按 DeepSeek 写好则只填 ANTHROPIC_API_KEY
+python s01_agent_loop\code.py</pre>
+    <p>
+      运行时输入一个安全的只读问题，观察终端的三段证据：
+      <strong>模型请求工具 → Harness 打印并执行命令 → 模型看到结果后给最终文本</strong>。
+      输入 <code>q</code> 退出。若本机没有凭据，先完成 dry-run；真实运行在凭据准备好后补做，
+      不把「能导入 Python 文件」误记成「跑通了 Agent」。
+    </p>
+    <p class="src">
+      s01 原作者给出的安装、入口和观察重点在
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/README.zh.md:120">README L120–144</a>。
+    </p>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>把 schema 当 handler</strong>：schema 只告诉模型怎么调用；
+          <code>run_bash</code> 才执行。</li>
+        <li><strong>只追加 assistant，不追加 tool_result</strong>：下一轮看不到观察，
+          轨迹断了；必须把结果带上对应 <code>tool_use_id</code>。</li>
+        <li><strong>把 <code>tool_use</code> 当成功</strong>：它只表示模型要求工具；
+          命令可能超时、报错或被拦截，工具输出才是观察。</li>
+        <li><strong>把 <code>stop_reason</code> 当 HTTP 状态码</strong>：它描述模型本轮为何停，
+          与 shell 命令的退出码是两条不同链路。</li>
+        <li><strong>把 s01 当生产权限系统</strong>：少数字符串拦截不是完整安全边界；
+          权限是 s03 的课题。</li>
+        <li><strong>在 Windows 上看到 <code>ls</code> 报错就换模型</strong>：
+          先检查 shell、工作目录和命令语法，这是执行环境层。</li>
+        <li><strong>看到最终文本就算完成</strong>：本课的完成定义还包括工具确实被执行、
+          结果确实回填、循环确实按结果结束。</li>
+        <li><strong>两层 while 当成一个</strong>：外层是 REPL；内层才是 agent loop。空回车退出的是外层。</li>
+        <li><strong>Windows 上 <code>date</code> / <code>ls</code></strong>：交互命令会等到 120s 超时；Unix 命令可能根本不是内部命令。先查执行环境。</li>
+        <li><strong>自定义 Base URL 却 401</strong>：先看有没有残留 <code>ANTHROPIC_AUTH_TOKEN</code>；脚本已在 L50–51 尝试清掉。</li>
+        <li><strong>以为 <code>subprocess.run</code> 写在本文件里</strong>：定义在标准库；本文件只定义 <code>run_bash</code> 再调用它。</li>
+        <li><strong>把 <code>max_turns</code> 当成 API 参数</strong>：API 字段是 <code>max_tokens</code>。s01 没有轮数上限。</li>
+        <li><strong>REPL = agent loop</strong>：REPL 是 <code>s01 &gt;&gt;</code> 对人；agent loop 对模型和工具。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。tool_use 代表模型请求 Harness 执行工具，然后结果要回填。"
+      data-bad="tool_use 不是最终答案，也不是命令已经成功。">
+      <p>模型的 <code>content</code> 里含有 <code>tool_use</code> 块时，循环下一步是什么？</p>
+      <button data-correct="true">执行调用并回填 tool_result</button>
+      <button data-correct="false">把这次响应直接当最终答案</button>
+      <button data-correct="false">立刻更换模型并丢掉轨迹</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。ID 是请求—结果的配对键，工具名本身不够。"
+      data-bad="同一个工具可以被多次调用，必须靠 ID 区分具体哪一次。">
+      <p>为什么 <code>tool_result</code> 要带 <code>tool_use_id</code>？</p>
+      <button data-correct="true">把结果配回这一次具体调用</button>
+      <button data-correct="false">表示命令一定执行成功</button>
+      <button data-correct="false">表示当前使用的模型名称</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。schema 是契约，run_bash 才是实际执行器。"
+      data-bad="模型看得到 schema，但不会因此直接调用本机 Python 函数。">
+      <p>在 s01 中，<code>TOOLS</code> 和 <code>run_bash</code> 的关系是什么？</p>
+      <button data-correct="true">前者描述契约，后者执行命令</button>
+      <button data-correct="false">前者执行命令，后者只显示文档</button>
+      <button data-correct="false">两者是同一个函数的两个名字</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。先把 Windows shell 当执行环境排查，再决定是否改命令。"
+      data-bad="工具名叫 bash 不保证 Windows 的 shell 会解释 Unix 命令。">
+      <p>Windows 上模型给出 <code>ls</code> 后报错，第一归因方向是什么？</p>
+      <button data-correct="true">检查执行环境和 shell 兼容性</button>
+      <button data-correct="false">证明模型能力不足，立刻换模型</button>
+      <button data-correct="false">删除 tool_result，让模型重新猜</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。外层只收你打的字；内层才调模型和工具。"
+      data-bad="两层 while 职责不同，不要看成跑了两遍 bash。">
+      <p>脚本里为什么有两个 <code>while True</code>？</p>
+      <button data-correct="true">外层收人输入，内层转工具循环</button>
+      <button data-correct="false">两个循环其实都在执行 bash</button>
+      <button data-correct="false">外层调模型，内层只打印标题</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。设了兼容端点就要清掉可能抢鉴权的旧 token。"
+      data-bad="pop 的不是计费开关，也和 readline 无关。">
+      <p>有 <code>ANTHROPIC_BASE_URL</code> 时为什么要 <code>pop</code> <code>AUTH_TOKEN</code>？</p>
+      <button data-correct="true">避免旧 token 盖掉兼容服务的 key</button>
+      <button data-correct="false">DeepSeek 必须靠这个字段来计费</button>
+      <button data-correct="false">删掉它才能让 readline 正常工作</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。max_turns 是循环安全带，create 里没有这个参数。"
+      data-bad="不要和 max_tokens（本轮生成长度）混成一个旋钮。">
+      <p><code>max_turns</code> 是 Messages API 的字段吗？</p>
+      <button data-correct="true">不是，是 harness 自己数圈数</button>
+      <button data-correct="false">是，和 max_tokens 完全同义</button>
+      <button data-correct="false">是，写在 tools 的 schema 里面</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。REPL 是 s01 >> 对人；内层才是工具循环。"
+      data-bad="REPL 不是 API，也不是 bash 函数名。">
+      <p>本课说的 REPL 指什么？</p>
+      <button data-correct="true">外层读一行、跑、再打印</button>
+      <button data-correct="false">Messages API 的一种请求体</button>
+      <button data-correct="false">run_bash 在标准库里的别名</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能指出 s01 的四个角色：模型、消息历史、工具契约、工具执行器。</li>
+      <li>能解释 <code>tool_use</code>、<code>tool_result</code> 和
+        <code>tool_use_id</code> 的数据流，而不是只背字段名。</li>
+      <li>能按块讲清 <code>code.py</code> L1–137：配置、契约、执行器、内层循环、外层 REPL 各做什么。</li>
+      <li>能区分两层 <code>while True</code>（REPL vs agent loop）；知道空回车会退出、history 会跨问题保留。</li>
+      <li>能说出 <code>max_tokens</code> 是 API、<code>max_turns</code> 不是；能指出 L137–141 打印的是最终 text 块。</li>
+      <li><code>dry_run_loop.py</code> 跑通，能对照出它与真实 s01 的三处替换。</li>
+      <li>凭据准备好后，在可丢弃目录运行真实 <code>code.py</code>，完成一次
+        「请求工具 → 执行 → 回填 → 最终回答」；不能用 dry-run 冒充真实 API 运行。</li>
+      <li>遇到 Windows 命令失败时，能先按 0020 的五层归因检查执行环境。</li>
+    </ul>
+
+    <h2>后续路线</h2>
+    <p>
+      本课之后仍沿 North 主线，每课只在这根循环上增加一个 harness 机制：
+    </p>
+    <ol>
+      <li><strong>s02 · 多工具</strong>：从一个 <code>bash</code> 扩成多个工具，
+        只加 handler，不重写循环。</li>
+      <li><strong>s03 · 权限</strong>：在执行前划边界，区分允许、拒绝和需要确认。</li>
+      <li><strong>s04 · hooks</strong>：在工具前后挂插口，不把策略硬塞进主循环。</li>
+      <li><strong>s05–s06</strong>：任务计划与子 Agent；进入复杂任务的拆分。</li>
+      <li><strong>s07–s10</strong>：skill、压缩、memory、system prompt；这是上下文与
+        长期可靠性的重心。</li>
+      <li><strong>s11–s20</strong>：恢复、任务系统、后台/定时、团队、worktree、MCP，
+        最后回到完整 Harness。</li>
+    </ol>
+    <p class="src">
+      20 章的递进格言见 North 总 README
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:165">L165–205</a>；
+      这里按本仓库的阶段安排拆成「先 s01–s04，再上下文 s07–s10」。
+    </p>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>主阅读：
+          <a href="../../learn-claude-code-north/s01_agent_loop/README.zh.md">North s01 README</a>；
+          若还想看原文，优先读它的「工作原理」和「试一下」，不必先读深入 CC 源码。</li>
+        <li>回看：
+          <a href="../phase-1/0019-react-loop.html">0019 · 最小循环</a>；
+          本课是它的真实 SDK 版本。</li>
+        <li>压缩速查：
+          <a href="../../reference/phase-2/s01-agent-loop.html">阶段 2 · s01 速查</a>。</li>
+        <li>若运行失败，先回看
+          <a href="../phase-1/0020-fail-check-harness.html">0020 · 失败先查 harness</a>，
+          再决定是否改代码。</li>
+      </ul>
+    </div>
+
+    <p>
+      <a href="./index.html">阶段 2 分册</a>
+      · <a href="../phase-1/0020-fail-check-harness.html">上一课 0020</a>
+    </p>
+    <div data-lesson-id-footer="0021"></div>
+    <footer>
+      0021 已过关。下一课
+      <a href="./0022-tool-use.html">0022 s02 多工具</a>：循环不变，加 dispatch map。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

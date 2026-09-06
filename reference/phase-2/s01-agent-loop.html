@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>阶段 2 · s01 Agent Loop 速查</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+  <link rel="stylesheet" href="../../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="../index.html">速查索引</a> · 课 0021 · 打印友好</p>
+    <h1>s01：一个循环 + Bash</h1>
+    <p class="mission">
+      真实 API 版的「想 → 做 → 看」：模型请求工具，Harness 执行，结果回到轨迹。
+    </p>
+
+    <pre>messages
+  → client.messages.create(model, system, messages, tools)
+  → assistant.content
+  → content 里有 tool_use 块？
+       有：执行 → tool_result(tool_use_id) → messages → loop
+       无：返回文本</pre>
+
+    <h2>脚本地图（code.py）</h2>
+    <table>
+      <tr><th>行</th><th>块</th><th>记住一句</th></tr>
+      <tr><td>L1–30</td><td>文件头</td><td>shebang + 循环说明书；Windows 可忽略 shebang。</td></tr>
+      <tr><td>L32–46</td><td>导入</td><td>Windows 没有 readline，ImportError 后继续。</td></tr>
+      <tr><td>L45–56</td><td>配置</td><td><code>load_dotenv</code>；有 Base URL 就 pop <code>AUTH_TOKEN</code>；<code>SYSTEM</code> 带上 <code>cwd</code>。</td></tr>
+      <tr><td>L59–67</td><td>TOOLS</td><td>契约，不执行。</td></tr>
+      <tr><td>L71–83</td><td>run_bash</td><td><code>shell=True</code> + 120s 超时；黑名单不是权限系统。</td></tr>
+      <tr><td>L87–117</td><td>agent_loop</td><td>内层：create → append assistant → 停或执行并回填。</td></tr>
+      <tr><td>L121–142</td><td>REPL</td><td>外层：收人话；<code>q</code> / 空回车退出；history 跨问题保留。</td></tr>
+    </table>
+
+    <h2>max_tokens vs max_turns</h2>
+    <table>
+      <tr><th>名字</th><th>谁定义</th><th>s01</th></tr>
+      <tr><td><code>max_tokens</code></td><td>Messages API</td><td>L91 有</td></tr>
+      <tr><td><code>max_turns</code></td><td>harness 自己数圈</td><td>没有</td></tr>
+    </table>
+    <p>REPL = 外层 <code>s01 &gt;&gt;</code>（对人）。agent loop = 内层（对模型和工具）。L137–141 只打印最终 text 块。</p>
+
+    <h2>四个边界</h2>
+    <table>
+      <tr><th>东西</th><th>职责</th></tr>
+      <tr><td>Model / SDK client</td><td>根据上下文决定是否调工具、传什么参数。</td></tr>
+      <tr><td><code>TOOLS</code></td><td>给模型看的工具契约，不执行命令。</td></tr>
+      <tr><td><code>run_bash</code></td><td>Harness 执行命令并收集 stdout / stderr。</td></tr>
+      <tr><td><code>messages</code></td><td>保存 assistant 回复与 tool result，供下一轮观察。</td></tr>
+    </table>
+
+    <h2>字段配对</h2>
+    <pre>tool_use.id == tool_result.tool_use_id</pre>
+    <p>
+      <code>tool_use</code> 是模型的调用请求；<code>tool_result</code> 是执行后的观察。
+      循环看 <code>content</code> 里有没有 <code>tool_use</code>；<code>stop_reason</code> 仍在对象上，当前脚本不读它。有工具调用不表示命令已成功。
+    </p>
+
+    <h2>读代码路线</h2>
+    <ul>
+      <li>详细拆解在课件
+        <a href="../../lessons/phase-2/0021-agent-loop.html">0021 主脚本导读</a>。</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:1">L1–30</a> 文件头 ·
+        <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:32">L32–46</a> 导入 ·
+        <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:45">L45–56</a> 配置。</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:59">L59–67</a> schema ·
+        <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:71">L71–83</a> 执行器。</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:87">L87–117</a> 内层循环 ·
+        <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:121">L121–142</a> 外层 REPL。</li>
+    </ul>
+
+    <h2>安全与平台边界</h2>
+    <ul>
+      <li>s01 的少数危险字符串拦截不是完整权限系统；权限在 s03。</li>
+      <li><code>shell=True</code> 使用本机 shell；工具名叫 Bash 不保证 Windows 能执行 Unix 命令。</li>
+      <li>首次运行使用可丢弃目录和只读任务；不要把 API key 放进 Git 或聊天。</li>
+    </ul>
+
+    <p>
+      <a href="../../lessons/phase-2/0021-agent-loop.html">打开 0021</a>
+      · <a href="../phase-1/react-loop.html">ReAct 循环</a>
+      · <a href="../phase-1/fail-check.html">失败先查</a>
+    </p>
+    <footer>下一课：s02 多工具；主循环不变，只扩工具与 handler。</footer>
+  </main>
+</body>
+</html>

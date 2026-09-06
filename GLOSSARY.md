@@ -54,12 +54,80 @@ _Avoid_: 把磁盘上的文件当成已经在轨迹里；和静态前缀混成�
 _Avoid_: 以为前缀会随工具结果变长；以为轨迹列表里看不见就等于没发给模型
 
 **stop_reason**:
-模型本轮生成结束的原因。本课只对比：`tool_use` = 还要调工具；其它 = 说完了，返回文本。书写成「没有 tool call 就返回」。出处：North README-zh.md L146、L219；书 L189。
+模型本轮生成结束的原因。官方枚举含 `end_turn` / `max_tokens` / `stop_sequence` / `tool_use` / `pause_turn` / `refusal` / `model_context_window_exceeded`。字段仍在 Message 上。当前 s01–s02 循环改为筛 `content` 里的 `tool_use` 块（`tool_calls`），列表空则 `return`，不再读这个字段。出处：North README-zh.md L146、L219；书 L189；SDK `anthropic.types.StopReason`。
 _Avoid_: 当成 HTTP 状态码；以为 README 的 `while True` 骨架已经含最大轮数
 
+**tool schema**:
+给 Model 看的工具契约：工具名、用途和参数的结构化约定；其中 JSON Schema 是用 JSON 写的字段与类型约束。它描述可调用动作，但不执行 Python 函数。出处：North [`s01_agent_loop/code.py`](./learn-claude-code-north/s01_agent_loop/code.py) [`L59–67`](cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:59)。
+_Avoid_: 把 schema 当成 handler；以为声明了工具就已经跑过命令
+
+**`tool_use`**:
+Model 内容中的结构化工具调用块，包含工具名、输入参数和本次调用的 `id`。s01 用它判断 Harness 是否继续执行工具。出处：North [`s01_agent_loop/code.py`](./learn-claude-code-north/s01_agent_loop/code.py) [`L98–102`](cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:98)。
+_Avoid_: 当成命令成功或最终文本
+
+**`tool_result`**:
+Harness 执行 `tool_use` 后回传给 Model 的结果块；通常带 `tool_use_id` 和实际输出。出处：North [`s01_agent_loop/code.py`](./learn-claude-code-north/s01_agent_loop/code.py) [`L110–114`](cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:110)。
+_Avoid_: 只追加 assistant 回复而漏掉观察
+
+**`tool_use_id`**:
+工具结果与具体工具调用之间的配对键：`tool_result.tool_use_id == tool_use.id`。同一个工具可被调用多次，不能只靠工具名配对。出处：North [`s01_agent_loop/code.py`](./learn-claude-code-north/s01_agent_loop/code.py) [`L112`](cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:112)。
+_Avoid_: 当成工具名、模型 ID 或 HTTP 状态码
+
+**Message**（`response`）:
+`messages.create` 返回的一条助手消息对象，不是纯文本。顶层：`id` / `type="message"` / `role="assistant"` / `model` / `content` / `stop_reason` / `stop_sequence` / `usage`；可选 `container` / `stop_details`。对象上仍有 `stop_reason`；当前 s01–s02 循环只筛 `content` 里的 `tool_use`。出处：SDK `anthropic.types.Message`；[Messages API](https://docs.anthropic.com/en/api/messages)；课 0022 节 F。
+_Avoid_: 当成一段字符串；把 `response.type`（恒为 message）和 `block.type`（text / tool_use）当成同一个字段
+
+**Messages 请求**（`create`）:
+发给模型的调用。s01–s02 实际传五个顶层字段：`model` / `system` / `messages` / `tools` / `max_tokens`。`system` 与工具 schema 是静态前缀，不进 `messages` 列表；本机 `TOOL_HANDLERS` 不发送。出处：North [`s02_tool_use/code.py` L155–158](cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:155)；课 0022 节 E′。
+_Avoid_: 以为有 `role: system` 消息；把 handlers 字典当成请求体；把 `max_turns` 当成 create 参数
+
+**content block**:
+Messages API 里一轮回复的一截内容：常见 `type=text` 或 `type=tool_use`，排在 `response.content` 列表里。`tool_use` 块带 `id` / `name` / `input`。出处：North [`s02_tool_use/code.py` L159、L161–173](cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:161)；s01 [`L106`](cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:106)。[Messages API](https://docs.anthropic.com/en/api/messages)。
+_Avoid_: 当成整段 HTTP body；以为 `response` 本身就是字符串；以为一轮只能有一种块
+
+**`load_dotenv`**:
+python-dotenv 把 `.env` 读进 `os.environ`。s01 用 `override=True`，文件里的值覆盖进程里已有的同名变量。出处：North [`code.py` L48](cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:48)；[python-dotenv](https://github.com/theskumar/python-dotenv)。书未用。
+_Avoid_: 以为不 load 也能读到 `.env`；把 `override` 理解成「覆盖磁盘文件」
+
+**`max_tokens`**:
+本轮模型最多生成多少 token，限制这一次回复长度，不是上下文窗口，也不是 `max_turns`。出处：North [`code.py` L91](cursor://file/d:/agent-learning/learn-claude-code-north/s01_agent_loop/code.py:91)。
+_Avoid_: 和轮数上限、上下文窗口混成一个旋钮
+
 **max_turns**:
-Agent loop 的轮数上限，用作防死循环的安全带。
-_Avoid_: temperature、max_tokens
+Agent loop 的轮数上限，harness 自己在 `while` 上数圈，**不是** Messages API 字段。s01 的 `code.py` 没有它，只有 `while True`。对照 0003 / 0019；书称「最大迭代次数」。
+_Avoid_: 当成 `client.messages.create` 的参数；和 `max_tokens` 当成同一个旋钮
+
+**REPL**:
+Read-Eval-Print Loop：读一行输入 → 执行 → 打印结果 → 再等下一行。s01 / s02 外层 `s01 >>` / `s02 >>` 是 REPL；内层 `agent_loop` 不是。出处：North [`s02_tool_use/code.py` L178–196](cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:178)。书 / North README 不用此缩写。
+_Avoid_: 把 REPL 和 agent loop / Messages API 当成一回事
+
+**handler**（工具处理函数）:
+真正执行一次工具调用的函数，如 `run_read`。模型不直接调用它；Harness dispatch 之后才跑。出处：North [`s02_tool_use/code.py` L78、L170](cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:170)；README [`L6`](cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/README.zh.md:6)「只加一个 handler」。
+_Avoid_: 和 0012 对象字段名 `handler` 混成语法关键字；当成 API 字段
+
+**dispatch map** / **`TOOL_HANDLERS`**:
+「工具名 → handler」的字典。表本身不执行命令。出处：North [`s02_tool_use/code.py`](./learn-claude-code-north/s02_tool_use/code.py) [`L143`](cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:143)；README [`L90`](cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/README.zh.md:90)。
+_Avoid_: 键写成 Python 函数名 `run_read`；为每个工具复制一份 `agent_loop`
+
+**dispatch**（工具分发）:
+按 `block.name` 查 dispatch map 并调用对应 handler 的动作。出处：North [`code.py` L170–171](cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:170)；README 「工具分发」[`L20`](cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/README.zh.md:20)、[`L87`](cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/README.zh.md:87)。
+_Avoid_: 当成第二套循环；和 map、handler 三个词混成一个
+
+**`safe_path`**:
+把工具给的路径接到 `WORKDIR` 并 `resolve`，再用 `is_relative_to` 拒绝逃出工作区。只用于 s02 的文件工具，bash 不走这里。s03 删掉了它，改成闸门 2 询问。出处：North [`s02_tool_use/code.py` L71–75](cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:71)。
+_Avoid_: 当成完整权限系统；以为 s03 的 `run_write` 仍会硬拦出界路径
+
+**permission pipeline**（权限管线）:
+工具执行前固定顺序的检查。s03 是三道闸门：`DENY_LIST` 硬拒绝 → `PERMISSION_RULES` 命中则问人 → 否则执行。出处：North [`s03_permission/README.zh.md` L6–8](cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/README.zh.md:6)；[`code.py` L191–202](cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:191)。总览 Permissions：[`README-zh.md` L54–60](cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:54)。
+_Avoid_: 当成 SYSTEM 提示词；当成 s04 hooks；以为与 CC 生产四态一一对应
+
+**fail-closed**（默认拒绝）:
+询问时只有明确允许才放行；空回车、乱按都当拒绝。s03 提示符 `[y/N]`。出处：North [`s03_permission/code.py` L183–187](cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:183)。书 / README 未用这个英文词。
+_Avoid_: 把回车当成确认；和闸门 1 硬拒绝混成一件事
+
+**`Permission denied.`**:
+s03 拒绝执行后回填的 `tool_result.content`。不是 HTTP 401，也不是 Python 异常。必须带 `tool_use_id`。出处：North [`s03_permission/code.py` L226–229](cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:226)。
+_Avoid_: 拒绝后不 append；把这句话当成闸门 1 打印的红字原因
 
 **Environment**（环境）:
 Agent 与之交互的外部世界（文件系统、网络、用户机器、数据库）。书：不在公式「Agent = LLM + 上下文 + 工具」之内；观察从环境来，行动打回环境。
@@ -292,6 +360,192 @@ _Avoid_: 直接 dumps dataclass 实例
 **`global`（模块级赋值）**:
 函数里要给模块级变量**重新赋值**须写 `global 名`；只读或改对象内部（`dict[k]=` / `list.append`）不必。三案：赋值要 / 只读不必 / 改内部不必。s13 计数器同款。
 _Avoid_: 和 `self.x` 实例属性搞混；以为改任何共享状态都要 global
+
+## Hooks
+
+**hook**（钩子）:
+挂在某个事件时机上的扩展入口；事件发生时由 Harness 调用，不必把扩展逻辑写进 Agent loop 正文。North s04 格言「挂在循环上，不写进循环里」。
+出处：[`s04_hooks/README.zh.md` L6–8](cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:6)、方案 [`L38–52`](cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:38)。
+_Avoid_: 以为注册 hook 就会自动运行；必须注册且必须在正确时机调用 `trigger_hooks`
+
+**event**（事件）:
+Harness 规定的触发时机名称，如 `PreToolUse`；描述「什么时候触发」，不是具体功能。s04 有 `UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop` 四个事件。
+出处：[`s04_hooks/README.zh.md` L46–52](cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:46)。
+_Avoid_: 和 callback 混成一个词；event 是时机，callback 才是被调用的函数
+
+**callback**（回调）:
+先作为值保存、以后由触发器调用的函数。注册时传 `log_hook`，不要传 `log_hook()`；后者会在注册阶段立即执行并保存返回值。
+出处：[`s04_hooks/code.py` L130–131](cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:130)、[`L203–208`](cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:203)。
+_Avoid_: 把 callback 当成已经执行的输出
+
+**`HOOKS`（hook 注册表）**:
+字典 `事件名 → callback 列表`，保存每个事件要运行的扩展及其顺序；表本身不执行函数。
+出处：[`s04_hooks/code.py` L128](cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:128)。
+_Avoid_: 和 `TOOL_HANDLERS` 混为一张表；前者按事件挂扩展，后者按工具名找 handler
+
+**`register_hook`**:
+把 callback 用 `append` 加到指定事件列表末尾的函数。传函数对象，不加括号。
+出处：[`s04_hooks/code.py` L130–131](cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:130)。
+
+**`trigger_hooks`**:
+按事件名取 callback 列表，按注册顺序调用；第一个非 `None` 返回值会立即返回，后面的同事件 callback 不再运行。
+出处：[`s04_hooks/code.py` L133–138](cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:133)。
+_Avoid_: 以为四个事件一起广播；一次调用只触发指定 event
+
+**短路**（hook short-circuit）:
+callback 链遇到第一个非 `None` 返回值就停止。s04 中 `permission_hook` 注册在 `log_hook` 前，拒绝时后者可能不会运行。
+出处：[`s04_hooks/code.py` L133–137](cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:133)、注册顺序 [`L203–205`](cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:203)。
+
+**`*args`（可变位置参数）**:
+定义处把任意数量的位置参数打包成元组，调用处把元组解包为位置参数。s04 用它让 `trigger_hooks` 能转交不同事件的参数：`block` 或 `block, output`。同一函数里可同时出现：`def f(event, *args)` 是打包，`callback(*args)` 是解包——方向相反。`callback(*args)` ≠ `callback(args)`（后者把整个元组当成一个参数）。
+出处：[`s04_hooks/code.py` L133–134](cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:133)；课 0024 节 3′。North 章节未单独定义此词，来自 Python 函数参数语法。
+_Avoid_: 当成乘法；当成并行；把解包写成 `callback(args)`
+
+**s04 hook 返回值协议**:
+`None` = 本 callback 不阻止；非 `None` = 触发器短路。但主循环是否采用该信号取决于调用点：PreToolUse 用它拒绝工具，Stop 用它继续循环，UserPromptSubmit / PostToolUse 当前忽略。
+出处：[`s04_hooks/README.zh.md` L64–80](cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:64)、循环接入 [`code.py` L221–248](cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:221)。
+_Avoid_: 以为所有事件的非 `None` 都有同样效果；当前调用方还会用真假判断，拒绝应返回非空字符串
+
+## Planning / TodoWrite
+
+**TodoWrite / `todo_write`**:
+给 Agent 更新待办清单的规划工具；`todo_write` 只更新进程内的计划状态，不创建文件、不执行命令、不自动完成任务。README 用 TodoWrite 讲机制，schema 使用小写下划线工具名。
+出处：North [`s05_todo_write/README.zh.md` L23–29](cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/README.zh.md:23)、工具接线 [`code.py` L196–203](cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:196)。
+_Avoid_: 把计划工具当成 `write_file`；把 `completed` 当成测试已通过
+
+**`TodoManager`**:
+保存内存中的 todo 列表，负责解析、校验、整体替换和渲染。`update` 先在局部 `validated` 中检查，全部通过后才执行 `self.items = validated`；输入不合法时旧列表保持。
+出处：North [`s05_todo_write/code.py` L115–171](cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:115)。
+_Avoid_: 以为它是文件数据库；以为 `update` 会 append 一条项目
+
+**todo item / `content` / `status`**:
+一条 todo 是字典，当前实现归一化后只保留非空 `content` 和合法 `status`。`status` 允许 `pending`（等待）、`in_progress`（进行中）、`completed`（已完成），同一列表最多一个 `in_progress`，最多 20 项。
+出处：North [`s05_todo_write/code.py` L129–151](cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:129)、schema [`L197–198`](cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:197)。
+_Avoid_: 把三种 status 当成三个工具；以为代码自动推进状态
+
+**内存状态**（in-memory state）:
+只存在当前 Python 进程对象中的值。North 的模块级 `TODO = TodoManager()` 让多个 prompt 在同一进程内共享 `TODO.items`，但程序重启后不自动恢复，也不是持久化记忆。
+出处：North [`s05_todo_write/code.py` L174](cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:174)；README「内存中的任务列表」[`L33–62`](cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/README.zh.md:33)。
+_Avoid_: 和 `messages`、工作区文件、跨会话记忆混成同一层
+
+**整体替换（full-snapshot update）**:
+North `TodoManager.update` 每次接收更新后的完整列表；校验通过后用 `self.items = validated` 替换旧列表，不是按 id 合并或 append 一项。只发送一项会让旧的其他项消失。
+出处：[`s05_todo_write/code.py` L134–154](cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:134)。
+_Avoid_: 把 `update` 误读成局部 patch；把缺失项目当成“保持不变”
+
+**schema 与运行时校验**:
+tool schema 是给模型看的输入契约（如 `maxItems`、`minLength`、`enum`）；`TodoManager.update` 的 Python 检查才是实际写入 `TODO.items` 前的运行时保护。两层规则可能有细微差异，本课实现会先 `str(...)` 再检查 content。
+出处：schema [`s05_todo_write/code.py` L197–198](cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:197)、运行时校验 [`L129–151`](cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:129)。
+_Avoid_: 以为 schema 声明本身会执行 Python 校验；把 `enum` 当成 Python Enum 类
+
+**`reminder`**:
+连续三个没有使用 `todo_write` 的 tool-call round 后，Harness 追加到本轮 `results` 末尾的普通 text block：`<reminder>Update your todos.</reminder>`。它是提示，不是权限拒绝或强制更新。
+出处：North [`s05_todo_write/README.zh.md` L96–106](cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/README.zh.md:96)、循环 [`code.py` L334–340](cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:334)。
+_Avoid_: 把 reminder 当成 `tool_result`、API 顶层字段或自动调用
+
+**`rounds_since_todo`**:
+一次 `agent_loop` 内距离上次出现 `todo_write` 的工具调用轮次计数器。一轮可含多个 tool call；只要其中一个是 `todo_write` 就清零；无 tool_use 的回复直接走 Stop，不进此计数。当前实现每个新用户 prompt 重新从 0。
+出处：North [`s05_todo_write/code.py` L292–340](cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:292)。
+_Avoid_: 和单个 tool call 数量、用户 prompt 数量、跨进程会话轮数混淆
+
+## Subagents
+
+**Subagent**（子 Agent）:
+被父 Agent 通过 `task` 委派来完成明确子任务的另一段 Agent loop。s06 子 Agent 从新的 `messages` 开始，内部工具调用留在子轨迹，最后只返回最终文本；不是新进程，也不是自动沙箱。
+出处：North [`s06_subagent/README.zh.md` L23–29](cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/README.zh.md:23)、[`code.py` L270–307](cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:270)。
+_Avoid_: 把 fresh messages 误读成共享文件系统也被隔离；把子 Agent 返回的摘要当成验证证据
+
+**父 Agent / 子 Agent**:
+父 Agent 发出 `task` 并等待结果；子 Agent 在 `run_subagent` 中使用自己的消息列表执行子任务。当前实现是同步嵌套调用：子循环结束后父循环才得到 task 的 output。
+出处：North [`s06_subagent/README.zh.md` L75–87](cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/README.zh.md:75)、[`code.py` L328–358](cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:328)。
+_Avoid_: 当成两个并行线程；以为父子自动共享 messages
+
+**委派**（delegate）:
+父 Agent 通过 `task(prompt)` 把边界清楚的工作交给子 Agent loop，并把返回文本作为工具结果接回。委派不会自动补全任务规格，仍需写清目标、范围、证据和完成条件。
+出处：North [`s06_subagent/README.zh.md` L13–29](cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/README.zh.md:13)、[`code.py` L310–322](cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:310)。
+_Avoid_: 把“调用了 task”当成任务已验证；把模糊的大任务原样转交
+
+**干净上下文**（fresh context）:
+子 Agent 以 `messages = [{"role": "user", "content": prompt}]` 开始，不复制父 Agent 的历史消息。它隔离的是对话轨迹，不是进程、WORKDIR 或文件副作用。
+出处：North [`s06_subagent/code.py` L272–279](cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:272)、README [`L23–29`](cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/README.zh.md:23)。
+_Avoid_: 当成新 OS 进程、独立目录或只读权限
+
+**`task` 工具**:
+父 Agent 可调用的委派工具；schema 只有字符串 `prompt`，handler 是 `run_subagent`。它先启动子循环，子循环再决定是否调用基础工具。
+出处：North [`s06_subagent/code.py` L310–322](cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:310)。
+_Avoid_: 当成 `bash`；以为 schema 自己会执行子任务
+
+**`SUB_TOOLS` / `SUB_HANDLERS`**:
+子 Agent 的工具说明列表与本地 handler map，分别由 `BASE_TOOLS` 和 `BASE_HANDLERS` 派生，故意没有 `task`。父有 `TOOLS` / `TOOL_HANDLERS` 中的 `task`，当前因此只允许一层委派。
+出处：North [`s06_subagent/code.py` L256–257](cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:256)、[`L320–322`](cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:320)。
+_Avoid_: 把子工具列表当成安全沙箱；把 `list(...)` / `dict(...)` 当成新进程
+
+**共享工作区**（shared `WORKDIR`）:
+父子使用同一个 Python 进程和 `WORKDIR`；子 Agent 的 write/edit/bash 副作用会出现在父 Agent 后续可访问的文件系统中。消息隔离不等于文件隔离。
+出处：North [`s06_subagent/README.zh.md` L23–29](cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/README.zh.md:23)、基础 handler [`code.py` L51–111](cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:51)。
+_Avoid_: 以为 child messages 新建就自动建立沙箱
+
+**`execute_tool(block, handlers)`**:
+s06 抽出的公共工具执行边界：先触发 PreToolUse，再按传入的 handlers 查表执行，最后触发 PostToolUse。父传 `TOOL_HANDLERS`，子传 `SUB_HANDLERS`。
+出处：North [`s06_subagent/code.py` L240–252](cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:240)。
+_Avoid_: 以为它固定使用父 map；把它当成 Agent loop
+
+**结果边界**（final-text boundary）:
+子 Agent 的内部 assistant 消息、tool_use 和 tool_result 留在子循环；`run_subagent` 穿过边界返回的只有最终文本，或 30 轮耗尽的固定停止说明。
+出处：North [`s06_subagent/code.py` L287–307](cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:287)。
+_Avoid_: 把最终文本当成完整审计轨迹或测试通过证明
+
+**子循环轮数上限**:
+s06 的 `for _ in range(30)` 只限制一次 `run_subagent` 的模型回复轮次；父循环仍是独立的 `while True`。它不是 `max_tokens`，也不是整个系统的总预算。
+出处：North [`s06_subagent/code.py` L274](cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:274)、[`L328–329`](cursor://file/d:/agent-learning/learn-claude-code-north/s06_subagent/code.py:328)。
+_Avoid_: 和 `max_tokens=8000`、父 Agent 总轮数混为一谈
+
+## Skill Loading
+
+**Skill / 技能**:
+一个目录中的 `SKILL.md` 指令文档，提供某类任务的知识、规则和步骤；不是自动执行的 Python 函数。
+出处：North [`s07_skill_loading/README.zh.md` L30–40](cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/README.zh.md:30)、示例 [`skills/code-review/SKILL.md` L1–8](cursor://file/d:/agent-learning/learn-claude-code-north/skills/code-review/SKILL.md:1)。
+_Avoid_: 把 Skill 当成 Tool handler；把加载 Markdown 当成执行其中命令
+
+**技能目录**（catalog）:
+只包含技能名称和简短描述的字符串。s07 用 `catalog()` 把它放进 system prompt；完整 `SKILL.md` 不在目录中。
+出处：North [`s07_skill_loading/code.py` L110–116](cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:110)、[`L125–134`](cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:125)。
+_Avoid_: 把 catalog 当成完整技能正文；把它当成自动路由器
+
+**YAML frontmatter**:
+Markdown 文件最上方由两行 `---` 包围的 YAML metadata 区域。s07 从中读取 `name` / `description`，再把正文和 metadata 一起保存到 `content`。
+出处：示例 [`skills/code-review/SKILL.md` L1–4](cursor://file/d:/agent-learning/learn-claude-code-north/skills/code-review/SKILL.md:1)、解析 [`s07_skill_loading/code.py` L59–82](cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:59)。
+_Avoid_: 和 Markdown 正文混为一段；以为 YAML metadata 本身就是工具
+
+**`SkillLoader`**:
+s07 的技能扫描与查询对象。构造时调用 `scan()`，把 `skills/*/SKILL.md` 的名称、简介和完整文本建立为内存 registry。
+出处：North [`s07_skill_loading/code.py` L51–56](cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:51)、[`L84–108`](cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:84)。
+_Avoid_: 当成新 Agent loop；以为它负责执行技能正文
+
+**按需加载**（on-demand loading）:
+启动时只把技能名称和描述注入 system；模型调用 `load_skill(name)` 后，完整技能作为 tool_result 进入 messages。s07 的全文实际在启动扫描时已缓存，按需的是模型上下文注入。
+出处：North [`s07_skill_loading/README.zh.md` L33–40](cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/README.zh.md:33)、[`code.py` L115–122](cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:115)。
+_Avoid_: 误解成每次调用才从磁盘读取；加载后仍会占用 messages 上下文
+
+**技能 registry**:
+本地字典 `self.skills`，键是技能名称，值含 `name` / `description` / `content`。模型不直接接触 registry，只通过 `catalog()` 或 `load()` 间接看到结果。
+出处：North [`s07_skill_loading/code.py` L97–108](cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:97)。
+_Avoid_: 把 registry 当成已执行结果表；和发送给模型的 `TOOLS` schema 混为一谈
+
+**`load_skill`**:
+父 Agent 可调用的知识加载工具；schema 需要一个字符串 `name`，handler 是 `SKILL_LOADER.load`，按 registry 键返回缓存的完整 `SKILL.md` 或 Unknown 错误字符串。
+出处：North [`s07_skill_loading/code.py` L201–223](cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:201)。
+_Avoid_: 当成 `read_file` 的任意路径版本；以为 schema 自己会查表
+
+**`resolve()` / `is_relative_to()`（技能扫描语境）**:
+`resolve()` 把路径规范化为绝对路径；`is_relative_to(root)` 检查它是否位于 root 下。s07 组合二者后用 `continue` 跳过越界的 manifest。
+出处：North [`s07_skill_loading/code.py` L89–93](cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:89)。
+_Avoid_: 以为 `resolve()` 本身就是权限拒绝；和模型调用 `load(name)` 的字典查找混为一谈
+
+**启动缓存**:
+s07 `scan()` 读取完整 `SKILL.md` 并保存到 registry 的 `content`；`load()` 直接返回缓存，不自动检测磁盘变化。重启或显式重扫才可能得到新文件。
+出处：North [`s07_skill_loading/code.py` L94–108](cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:94)、[`L115–118`](cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:115)。
+_Avoid_: 和热更新混为一谈；以为“按需注入”意味着“按需读盘”
 
 ## Frameworks (workspace stance)
 

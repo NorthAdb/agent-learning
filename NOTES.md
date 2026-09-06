@@ -2,6 +2,7 @@
 
 ## Local sources (own git remotes)
 - 教学根目录 `d:\agent-learning`：独立 git → origin https://github.com/NorthAdb/agent-learning（跟踪 MISSION/lessons 等；子项目在 `.gitignore`）
+- GitHub Pages：https://northadb.github.io/agent-learning/（`master` 根目录静态站；本地 `python -m http.server`）
 - `python-100Days/` → origin `https://github.com/NorthAdb/Python-100-Days`
 - `learn-claude-code-north/` → origin `https://github.com/NorthAdb/learn-claude-code-north`
 - `AI-Agents-in-Depth-md/`：本地全书 Markdown（MinerU 整理），无独立 remote；不要往里面塞练习
@@ -11,9 +12,9 @@
 - **练习脚本**（如 `hello_agent.py`）→ `playground/python/`（阶段 0；已在 `.gitignore`，本地统一管理）
   - 按课号分子目录更清晰：`playground/python/0001-hello/hello_agent.py`
   - 该目录共用一个 `.venv`（建在 `playground/python/.venv`）
-- **课件** → 按阶段分子目录（进教学仓 git）：`lessons/phase-0/`、`lessons/phase-1/`
+- **课件** → 按阶段分子目录（进教学仓 git）：`lessons/phase-0/`、`lessons/phase-1/`、`lessons/phase-2/`
   - 目录首页仍是：`lessons/index.html`（自动渲染全阶段）
-  - 分册首页：`lessons/phase-0/index.html`、`lessons/phase-1/index.html`
+  - 分册首页：`lessons/phase-0/index.html`、`lessons/phase-1/index.html`、`lessons/phase-2/index.html`
   - 课序单一来源：`assets/curriculum.js`（`file` 相对 `lessons/`，可含子目录）
   - 每课放 `<div data-lesson-id="00NN"></div>` + 文末 `data-lesson-id-footer`；引入 `curriculum.js` + `lesson-nav.js` 自动生成 首页/上一课/下一课
 - **速查** → `reference/*.html` + 根目录 `GLOSSARY.md`（进教学仓 git）
@@ -27,14 +28,16 @@
 
 ## Preferences / profile
 - **学习方式**：练习代码由老师直接创建；用户以读代码 + 运行为主，不要求从空白手写（卡点仍可改着玩）
+- **课件节奏**：先说明整支脚本的目标、模块地图、一次完整运行和状态流，再按模块逐段讲解；局部规则（如 `update` 的替换语义）必须先交代调用者、输入和状态背景，不能突然抛出结论
+- **阶段 2 起（0021 过关后）**：课上代码 = North 当章 `README` + `code.py`。HTML 按块拆到和 0021 同密度。非必要不另写 playground / 假模型脚本；要跑就跑那章 `code.py`
 - **课件 = 主教材**：阶段 0 起读 HTML 应能学完当课要点（Python 不必再翻 DayXX；阶段 1 不必整章翻书）。原书/讲义仅作选读/出处链接
 - **覆盖目标**：以 Python-100-Days 为范围地图，**适度简化**：冷门、纯趣味、与读 Agent 脚本无关的可跳过或不单独成课；**禁止**整章摘录进 HTML
 - 长期背景：Java 后端 + Agent 补强；当前排课只打地基，不按实习窗口倒排
 - 工具习惯：Cursor / Claude Code / OpenCode 用得多 → 有「当用户」的直觉，缺「造 harness」的肌肉
-- Python：系统重学。100-Days 是范围地图/课本。进 North **之前**把全套 `s01–s20/code.py` 用到的语法补齐（0013–0016），避免读到后半再倒回来。`async`、Django、爬虫、ML 仍不排（North 未用 / 与使命无关）。
+- Python：系统重学。100-Days 是范围地图/课本。进 North **之前**把全套 `s01–s17/code.py` 用到的语法补齐（0013–0016），避免读到后半再倒回来。`async`、Django、爬虫、ML 仍不排（North 未用 / 与使命无关）。
 - **三份材料分工（硬约束）**：
   - 原理：`AI-Agents-in-Depth-md/`
-  - 实践：`learn-claude-code-north/`（只跑根目录新 20 章 `code.py`）
+  - 实践：`learn-claude-code-north/`（只跑根目录新 17 章 `code.py`）
   - 工程约束：[Learn Harness Engineering](https://walkinglabs.github.io/learn-harness-engineering/zh/)（卫星阅读，不当第三条主线）
 - 单课仍要写满（见 Lesson depth）；不在计划里估工期
 
@@ -70,7 +73,7 @@
 
 | 你说 | 老师做什么 |
 |------|------------|
-| `/teach`、卡住、讲一遍、测我 | Probe（选择题工具）→ mermaid 计划 → 一次只讲/锁一个节点 |
+| `/alvar-teach`、卡住、讲一遍、测我 | Probe（选择题工具）→ mermaid 计划 → 一次只讲/锁一个节点 |
 | 写课件、改练习、过关了 | 原工作流：Lesson depth + `learning-records/` |
 
 状态在 `.alvar/`（`LEARNER.md` / `maps/` / `sessions/`）。过关记录仍写 `learning-records/`。项目 skill：`.cursor/skills/alvar-curriculum/`。
@@ -101,16 +104,18 @@ Ch1 是概念地图，**禁止整章塞进一课**。课件/练习/速查放 `le
 **本阶段故意不讲**（留给后面或卡住再看）：Manus/OpenClaw 案例细读、工具五类、上下文五组件消融、Model as Agent / 苦涩的教训、模型选型、框架对照表（含 LangChain）、护栏三层、全书设计模式、[L02 五子系统](https://walkinglabs.github.io/learn-harness-engineering/zh/lectures/lecture-02-what-a-harness-actually-is/)（动手前或阶段 2 再开）。
 
 ### 阶段 2 · 能动手（当前）
-- **下一课**：North **s01**（一个循环 + bash），必须真跑 `code.py`
-- 随后 **s02–s04**（多工具 / 权限 / hooks）
+- **已过关**：0021（s01 循环 + bash）、0022（s02 多工具 + dispatch map）、0023（s03 三道闸门）、0024（s04 hooks）、0025（s05 TodoWrite）、0026（s06 Subagent）
+- **下一课**：North **s07**（Skill Loading：按需注入技能），讲清 `code.py`，必须真跑
+- 随后 **s08**（compact）
 - 卫星：书 Ch4 工具、Ch5 Coding Agent；Harness 里「划清任务边界 / 防止提前宣告完成 / 跑通才算验证」
 
 ### 阶段 3 · 上下文、记忆、知识
-- North **s07–s10**（skill / compact / memory / system prompt；s08、s09 为重心）
+- North **s07–s09**（skill / compact / memory；s08、s09 为重心）。系统提示不再单开一章。
 - 卫星：书 Ch2 上下文工程、Ch3 用户记忆和知识库；Harness 里「仓库即事实来源 / 指令拆文件 / 跨会话连续 / 初始化 / 交接」
 
 ### 之后
-沿 North 主线继续（复杂任务 s05–s06 → 长期运行 s11–s14 → 协作 s15–s18 → MCP 与合体 s19–s20），每段只带书里对应章。不另开 LangChain、二次开发、面试线。
+沿 North 主线继续（复杂任务 s05–s06 → 任务/后台/cron s10–s12 → 协作 s13 → MCP s14 → 集成与收口 s15–s17），每段只带书里对应章。不另开 LangChain、二次开发、面试线。
+课表以同步后的根目录 `s01–s17` 为准；不要再用旧的 s18–s20 章号。
 
 ## Open questions
 - （已关闭）每周小时数、实习窗口、年前项目、封装层与二次开发排期

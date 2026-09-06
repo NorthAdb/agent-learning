@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0023 · s03 Permission</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0023"></div>
+    <h1>s03：执行前先过三道闸门</h1>
+    <p class="mission">
+      0022 给了五个工具和查表执行。本课在<strong>同一根循环</strong>上，于 handler
+      <strong>之前</strong>加一道门：硬拒绝、规则命中、用户审批。
+      主技能是 <strong>permission pipeline</strong>（权限管线），不是再学一遍工具。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      主材料：North
+      <a href="../../learn-claude-code-north/s03_permission/README.zh.md">s03 中文 README</a>
+      （英文默认是
+      <a href="../../learn-claude-code-north/s03_permission/README.md">README.md</a>；
+      问题
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/README.zh.md:12">L12–16</a>，
+      三道闸门
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/README.zh.md:20">L20–34</a>，
+      工作原理
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/README.zh.md:38">L38–118</a>，
+      试一下
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/README.zh.md:148">L148–157</a>）
+      +
+      <a href="../../learn-claude-code-north/s03_permission/code.py"><code>s03_permission/code.py</code></a>
+      全文（
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:1">L1–258</a>
+      ）。
+      配置 / REPL / <code>create</code> 五段 / dispatch 与 0022 相同的，只对照差异，不整段重讲。
+    </p>
+    <p class="muted">
+      <strong>已内化</strong>：三道闸门的顺序与四种结局；
+      <code>DENY_LIST</code> / <code>PERMISSION_RULES</code> / <code>ask_user</code> /
+      <code>check_permission</code>；拒绝时仍回填 <code>tool_result</code>；
+      s03 文件工具<strong>不再</strong>用 s02 的 <code>safe_path</code> 硬围栏。
+      <strong>故意跳过</strong>：生产 CC 的四态 PermissionResult、八个规则来源、YoloClassifier
+      （本章 README 已不再附源码对照）；hooks 留给 s04。
+      书第01章「约束」只挂钩，不整章重讲。
+      <strong>不另写</strong> playground；过关以跑通本章 <code>code.py</code> 为准。
+    </p>
+
+    <h3>本课新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>出处</th></tr>
+      <tr>
+        <td><strong>permission pipeline</strong> / 权限管线</td>
+        <td>工具执行前固定顺序的几道检查；本课是三道闸门串起来</td>
+        <td>
+          README 格言「工具执行前先做权限判断」
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/README.zh.md:6">L6–8</a>；
+          串联函数
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:191">code.py L191–202</a>。
+          North 总览把 Permissions 列为 Harness 一层
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/README-zh.md:54">README-zh L54–60</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>闸门</strong> / gate</td>
+        <td>管线里的一步检查。命中就决策，没命中把调用交给下一道</td>
+        <td>
+          README 表
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/README.zh.md:28">L28–32</a>；
+          文件头 ASCII 图
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:11">code.py L11–21</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong><code>DENY_LIST</code></strong></td>
+        <td>闸门 1 的硬拒绝表：命令字符串里出现这些子串就永远不执行、也不问你</td>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:145">code.py L145–152</a>。
+          README 承认这是教学示意，不是可靠安全机制
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/README.zh.md:42">L42</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong><code>PERMISSION_RULES</code></strong></td>
+        <td>闸门 2 的规则表：哪几种工具、什么条件为真，就需要问人</td>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:165">code.py L165–173</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong><code>check_permission</code></strong></td>
+        <td>把三道闸门串成一个函数：<code>True</code> 才执行 handler，<code>False</code> 不执行</td>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:191">L191–202</a>；
+          插进循环
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:226">L226–229</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>fail-closed</strong>（默认拒绝）</td>
+        <td>问你时只有明确说允许才放行；空回车、乱按都当拒绝</td>
+        <td>
+          <code>ask_user</code>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:183">L183–187</a>；
+          提示符 <code>[y/N]</code> 里大写 N 表示默认是否。
+          书 / s03 README 没有这个英文词，本课用来钉默认值。
+        </td>
+      </tr>
+      <tr>
+        <td><strong><code>Permission denied.</code></strong></td>
+        <td>拒绝时回填给模型的观察字符串。不是 Python 异常，也不是 HTTP 401</td>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:227">L227–228</a>。
+        </td>
+      </tr>
+    </table>
+
+    <h2>为什么现在学？</h2>
+    <p>
+      s02 的文件工具有 <code>safe_path</code>，bash 几乎没有门。
+      模型说「清理一下项目」，可能给出 <code>rm -rf /</code>。
+      安全不能靠「模型应该不会」——要靠执行前的代码。
+    </p>
+    <p>
+      这就是阶段 1 的<strong>约束</strong>落到代码：限定能做什么，不是把下一步写死。
+      模型仍决定调哪个工具；Harness 决定这次准不准跑。
+    </p>
+    <p class="src">
+      README「安全不能靠信任模型」
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/README.zh.md:12">L12–16</a>。
+      书：生产 Harness 的约束
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:273">第01章 L273</a>、
+      伪代码 <code>constrain</code>
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8/%E7%AC%AC01%E7%AB%A0%20AI%20Agent%20%E5%85%A5%E9%97%A8.md:288">L288</a>。
+      0018 已过关这个词。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>s03 概念</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr>
+        <td>闸门 1 硬拒绝</td>
+        <td>黑名单 / 安全过滤器直接 403</td>
+        <td>这里是命令字符串的子串匹配，不是解析过的 AST，容易绕过。</td>
+      </tr>
+      <tr>
+        <td>闸门 2 规则表</td>
+        <td>一串 <code>Predicate</code>；命中则进入审批</td>
+        <td>规则写在 Python 字典 + <code>lambda</code> 里，不是注解。</td>
+      </tr>
+      <tr>
+        <td>闸门 3 <code>input()</code></td>
+        <td>同步阻塞等操作员点批准</td>
+        <td>卡在 agent loop 中间；模型那头的 HTTP 已经结束，等的是你。</td>
+      </tr>
+      <tr>
+        <td>fail-closed</td>
+        <td>安全默认拒绝；未授权 ≠ 放行</td>
+        <td>空回车走 deny，不是走 allow。</td>
+      </tr>
+      <tr>
+        <td><code>Permission denied.</code> 进轨迹</td>
+        <td>过滤器拦了仍给调用方一个错误体</td>
+        <td>必须带 <code>tool_use_id</code> 回填，否则下一轮 Messages 对不齐。</td>
+      </tr>
+      <tr>
+        <td>s02 <code>safe_path</code> vs s03 闸门 2</td>
+        <td>硬围栏 vs 审批后放行</td>
+        <td>s03 你若回答 y，文件工具可以写到工作区外。不是同一套锁。</td>
+      </tr>
+    </table>
+
+    <h2>系统讲解</h2>
+
+    <h3>1. 问题：工具在，门不在</h3>
+    <p>
+      s02 能读能写能跑 shell。文件路径逃逸被 <code>safe_path</code> 直接打回错误字符串；
+      bash 只在 <code>run_bash</code> 里用一小段危险子串挡一下，挡不住变体，也没有「问人」。
+    </p>
+    <p>
+      s03 的解法不是再给每个 handler 复制一份 if：把判断<strong>抽到执行前</strong>，所有工具走同一条管线。
+    </p>
+    <p>
+      <img src="../../learn-claude-code-north/s03_permission/images/permission-overview.svg" alt="工具调用先过权限管线再执行" width="720" />
+    </p>
+    <p class="src">
+      README 方案
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/README.zh.md:20">L20–24</a>。
+      图：
+      <a href="../../learn-claude-code-north/s03_permission/images/permission-overview.svg">permission-overview.svg</a>。
+    </p>
+
+    <h3>2. 三道闸门，顺序固定</h3>
+    <p>
+      <img src="../../learn-claude-code-north/s03_permission/images/permission-pipeline.svg" alt="闸门1拒绝，闸门2规则，闸门3问人，否则执行" width="720" />
+    </p>
+    <table>
+      <tr><th>顺序</th><th>闸门</th><th>问什么</th><th>命中后</th></tr>
+      <tr>
+        <td>1</td>
+        <td>硬拒绝 <code>DENY_LIST</code></td>
+        <td>这条 bash 命令里有没有死命令子串？</td>
+        <td>不执行、不问你，直接拒绝</td>
+      </tr>
+      <tr>
+        <td>2</td>
+        <td>规则 <code>PERMISSION_RULES</code></td>
+        <td>这个工具 + 这些参数，是否「需要人看一眼」？</td>
+        <td>不直接执行，交给闸门 3</td>
+      </tr>
+      <tr>
+        <td>3</td>
+        <td>用户审批 <code>ask_user</code></td>
+        <td>你允不允许这一次？</td>
+        <td>allow → 执行；deny → 不执行</td>
+      </tr>
+    </table>
+    <p>
+      三道都没命中 → 直接执行。工作区内写一个 <code>test.txt</code>、用 <code>glob</code> 列文件，通常走这条路。
+    </p>
+    <p>
+      顺序不能倒：硬拒绝优先。若先问人，<code>rm -rf /</code> 就会变成「你手滑按了 y 就跑」。
+    </p>
+    <p class="src">
+      README 表
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/README.zh.md:28">L28–34</a>；
+      管线图
+      <a href="../../learn-claude-code-north/s03_permission/images/permission-pipeline.svg">permission-pipeline.svg</a>。
+    </p>
+
+    <h3>3. 一次调用的四种结局</h3>
+    <p>NOTES 要求易混点写满分支。对<strong>同一次</strong> <code>tool_use</code>：</p>
+    <table>
+      <tr><th>案</th><th>路径</th><th>handler 跑不跑</th><th>模型看到的观察</th></tr>
+      <tr>
+        <td>① 闸门 1 命中</td>
+        <td>bash 命令含 <code>sudo</code> 等</td>
+        <td>不跑</td>
+        <td><code>Permission denied.</code>（终端另有红字原因）</td>
+      </tr>
+      <tr>
+        <td>② 闸门 2 命中，你否</td>
+        <td>空回车 / <code>n</code> / 乱按</td>
+        <td>不跑</td>
+        <td><code>Permission denied.</code></td>
+      </tr>
+      <tr>
+        <td>③ 闸门 2 命中，你允</td>
+        <td>输入 <code>y</code> 或 <code>yes</code></td>
+        <td>跑</td>
+        <td>handler 的真实输出（可能写出工作区外）</td>
+      </tr>
+      <tr>
+        <td>④ 两道都没命中</td>
+        <td>工作区内写文件、普通 ls、glob</td>
+        <td>跑</td>
+        <td>handler 输出</td>
+      </tr>
+    </table>
+    <p>
+      ①② 对模型来说观察字符串一样。区别在你的终端：① 先打红字原因，② 先打黄字问句。
+      循环都不会把 Python 异常抛给 API。
+    </p>
+
+    <h3>4. 和 s02 <code>safe_path</code> 不是同一把锁</h3>
+    <p>
+      这是本课最容易看错的一点。s02 文件工具：路径逃出工作区 →
+      <code>safe_path</code> 抛错 → handler 捕获 → 观察是 <code>Error: ...</code>，
+      <strong>文件不会被写</strong>，也<strong>不问你</strong>。
+    </p>
+    <p>
+      s03 删掉了 <code>safe_path</code>。<code>run_write</code> / <code>run_read</code> /
+      <code>run_edit</code> 只 <code>resolve()</code> 再读写。
+      逃出工作区改由闸门 2 判定「要问人」。你回 y，写就会发生。
+    </p>
+    <table>
+      <tr><th></th><th>s02</th><th>s03</th></tr>
+      <tr>
+        <td>文件逃出工作区</td>
+        <td>硬拦，当错误观察</td>
+        <td>问你；y 则真写</td>
+      </tr>
+      <tr>
+        <td>bash 危险子串</td>
+        <td>在 <code>run_bash</code> 内部 return Error（已「进入」handler）</td>
+        <td>闸门 1，handler 根本不进</td>
+      </tr>
+      <tr>
+        <td><code>glob</code></td>
+        <td><code>is_relative_to</code> 过滤命中</td>
+        <td>handler 里仍保留这一段；规则表没有 glob</td>
+      </tr>
+    </table>
+    <p>
+      所以：不要说「s03 = s02 安全再加点确认」。文件围栏从「代码拒绝」变成了「人批准」。
+      教学意图是展示审批，不是把生产沙箱做得更严。
+    </p>
+    <p class="src">
+      s02 围栏
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s02_tool_use/code.py:71">s02 L71–75</a>。
+      s03 写文件
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:84">s03 L84–91</a>。
+    </p>
+
+    <h2>主脚本导读</h2>
+    <p>
+      建议对照打开
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py">s03_permission/code.py</a>。
+      配置、TOOLS、TOOL_HANDLERS、REPL 与 s02 同构，下面只拆新块和循环那几行。
+    </p>
+
+    <h3>A. <code>SYSTEM</code> 换了一句（L59）</h3>
+    <pre>SYSTEM = f"You are a coding agent at {WORKDIR}. All destructive operations require user approval."</pre>
+    <p>
+      这是给模型看的静态前缀，不是闸门。模型可能因此更爱选「温和」的工具，但
+      <strong>真正拦操作的是后面的 Python</strong>。提示词骗不过故意构造的 tool_use。
+    </p>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:59">L59</a>。
+    </p>
+
+    <h3>B. 闸门 1：<code>DENY_LIST</code> + <code>check_deny_list</code>（L145–152）</h3>
+    <pre>DENY_LIST = ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if=", "> /dev/sda"]
+
+def check_deny_list(command: str) -> str | None:
+    for pattern in DENY_LIST:
+        if pattern in command:
+            return f"Blocked: '{pattern}' is on the deny list"
+    return None</pre>
+    <table>
+      <tr><th>行</th><th>在干什么</th></tr>
+      <tr>
+        <td>L146</td>
+        <td>
+          子串列表。比 s02 <code>run_bash</code> 里那五个多了
+          <code>mkfs</code> / <code>dd if=</code> / <code>&gt; /dev/sda</code>。
+        </td>
+      </tr>
+      <tr>
+        <td>L148</td>
+        <td>
+          返回 <code>str | None</code>：命中给原因字符串，未命中 <code>None</code>。
+          联合类型见 0009。调用方用 <code>if reason:</code> 判断，因为非空字符串为真、
+          <code>None</code> 为假。
+        </td>
+      </tr>
+      <tr>
+        <td>L149–151</td>
+        <td>
+          <code>pattern in command</code> 是子串，不是正则，也不是按词切分。
+          <code>sudo apt</code> 会中；<code>SUDO</code> 大小写不同则不中；
+          <code>rm -rf /tmp</code> 含有 <code>rm -rf /</code> 也会中。
+        </td>
+      </tr>
+      <tr>
+        <td>L152</td>
+        <td>整表扫完没有 → <code>None</code>，交给闸门 2。</td>
+      </tr>
+    </table>
+    <p>
+      三种绕过（教学版故意简）：① PowerShell <code>Remove-Item</code>（不是 <code>del</code> 命令词）；② 插入空格或引号拆开闸门 1 的子串；
+      ③ 文件工具的参数里写 <code>sudo</code>——闸门 1 <strong>只检查 bash</strong>。
+      闸门 2 已用正则把 <code>rm</code> / <code>del</code> 当命令词（大小写不敏感）；<code>delimiter</code>、<code>echo del test.txt</code> 故意不中。
+      README 自己写了：简单字符串匹配不是可靠安全机制。
+    </p>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:145">L145–152</a>；
+      README
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/README.zh.md:42">L42</a>。
+    </p>
+
+    <h3>C. 闸门 2：规则表 + 命令词 + <code>lambda</code>（L156–179）</h3>
+    <pre>DESTRUCTIVE_COMMAND_WORD = re.compile(
+    r"(?i)(?:^|[;&|()\n])\s*(?:rm|del)(?=\s|$|[;&|()])"
+)
+
+def contains_destructive_command(command: str) -> bool:
+    return bool(DESTRUCTIVE_COMMAND_WORD.search(command))
+
+PERMISSION_RULES = [
+    {"tools": ["read_file", "write_file", "edit_file"],
+     "check": lambda args: not (WORKDIR / args.get("path", "")).resolve().is_relative_to(WORKDIR),
+     "message": "Writing outside workspace"},
+    {"tools": ["bash"],
+     "check": lambda args: contains_destructive_command(args.get("command", "")) or
+     any(kw in args.get("command", "") for kw in ["rm ", "> /etc/", "chmod 777"]),
+     "message": "Potentially destructive command"},
+]</pre>
+    <p>
+      每条规则三块：<code>tools</code> 这张规则管哪些名字；
+      <code>check</code> 是谓词（参数映射 → 是否命中）；
+      <code>message</code> 给人和闸门 3 看的原因。
+    </p>
+    <p>
+      <code>lambda args: ...</code>：匿名函数，0004 / 0005 见过。
+      这里把它<strong>存进字典</strong>，和存 <code>run_read</code> 进
+      <code>TOOL_HANDLERS</code> 是同一件事（0012 函数对象）。
+      调用是 <code>rule["check"](args)</code>，括号在取出来之后。
+    </p>
+    <p>
+      <code>DESTRUCTIVE_COMMAND_WORD</code>：正则，<code>(?i)</code> 忽略大小写；
+      只在命令开头或 <code>;&amp;|()</code> 之后认 <code>rm</code> / <code>del</code> 这个词。
+      所以 <code>del test.txt</code> 会问，<code>delimiter</code> 和
+      <code>echo del test.txt</code> 不会。这是 0015 的正则，本课当规则用，不展开写引擎。
+    </p>
+    <table>
+      <tr><th>规则</th><th>何时 <code>check</code> 为真</th><th>注意</th></tr>
+      <tr>
+        <td>文件三条</td>
+        <td>
+          <code>(WORKDIR / path).resolve()</code> 不在工作区下。
+          <code>args.get("path", "")</code>：没有 path 就当成空串，接到
+          <code>WORKDIR</code> 本身，<code>is_relative_to</code> 为真，<strong>不问</strong>。
+        </td>
+        <td>
+          <code>message</code> 写的是 Writing，但 <code>read_file</code> 逃出时也会问。
+          文案不准，行为仍是「出界就要问」。
+        </td>
+      </tr>
+      <tr>
+        <td>bash</td>
+        <td>
+          <code>contains_destructive_command</code> 为真，或命令里出现
+          <code>rm </code>（有空格）、<code>&gt; /etc/</code>、<code>chmod 777</code>
+        </td>
+        <td>
+          <code>rm file</code>、<code>del test.txt</code>、<code>DEL test.txt</code> 会问
+          （上游为此加了命令词正则）。
+          <code>rmfile</code>、<code>model</code>、<code>delimiter</code>、
+          <code>echo del test.txt</code> 不问。
+        </td>
+      </tr>
+    </table>
+    <p>
+      <code>check_rules</code>：工具名必须在 <code>rule["tools"]</code> 里，且
+      <code>check(args)</code> 为真，才返回 message。第一条命中就返回，不合并多条原因。
+      <code>glob</code> 不在任何 <code>tools</code> 列表里，闸门 2 对它永远
+      <code>None</code>（handler 内部仍过滤工作区外的匹配）。
+    </p>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:156">L156–179</a>。
+      <code>is_relative_to</code> 已在 0022 过关。
+    </p>
+
+    <h3>D. 闸门 3：<code>ask_user</code>（L183–187）</h3>
+    <pre>def ask_user(tool_name: str, args: dict, reason: str) -> str:
+    print(f"\n\033[33m[permission] {reason}\033[0m")
+    print(f"   Tool: {tool_name}({args})")
+    choice = input("   Allow? [y/N] ").strip().lower()
+    return "allow" if choice in ("y", "yes") else "deny"</pre>
+    <table>
+      <tr><th>行</th><th>在干什么</th></tr>
+      <tr>
+        <td>L184–185</td>
+        <td>黄字原因 + 工具名和参数。这是给你看的，还没执行。</td>
+      </tr>
+      <tr>
+        <td>L186</td>
+        <td>
+          <code>input()</code> 卡住整个 <code>agent_loop</code>。
+          上一轮 <code>messages.create</code> 已经返回；现在等的是键盘，不是模型。
+        </td>
+      </tr>
+      <tr>
+        <td>L187</td>
+        <td>
+          只有 <code>y</code> / <code>yes</code>（忽略大小写、去空白）→
+          <code>"allow"</code>。空串、<code>n</code>、<code>no</code>、乱按 →
+          <code>"deny"</code>。这就是 fail-closed。
+        </td>
+      </tr>
+    </table>
+    <p>
+      返回值是普通字符串 <code>"allow"</code> / <code>"deny"</code>，不是布尔。
+      下面 <code>check_permission</code> 再翻译成 <code>True</code> / <code>False</code>。
+    </p>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:183">L183–187</a>。
+    </p>
+
+    <h3>E. 串联：<code>check_permission</code>（L191–202）</h3>
+    <pre>def check_permission(block) -> bool:
+    if block.name == "bash":
+        reason = check_deny_list(block.input.get("command", ""))
+        if reason:
+            print(f"\n\033[31m[blocked] {reason}\033[0m")
+            return False
+    reason = check_rules(block.name, block.input)
+    if reason:
+        decision = ask_user(block.name, block.input, reason)
+        if decision == "deny":
+            return False
+    return True</pre>
+    <ol>
+      <li>
+        参数是整个 <code>tool_use</code> 块，用 <code>block.name</code> 和
+        <code>block.input</code>（0022 的块字段）。
+      </li>
+      <li>
+        闸门 1 用 <code>if block.name == "bash"</code> 包住：文件工具从不查
+        <code>DENY_LIST</code>。bash 没带 <code>command</code> 时
+        <code>.get(..., "")</code> 当成空命令，扫表不中。
+      </li>
+      <li>
+        闸门 1 命中：红字打印原因，<code>return False</code>，<strong>不会</strong>走到
+        <code>ask_user</code>。
+      </li>
+      <li>
+        闸门 2 命中才问人。你 deny → <code>False</code>；你 allow → 函数不提前返回，落到最后的
+        <code>True</code>。
+      </li>
+      <li>
+        两道都 <code>None</code> → 直接 <code>True</code>。
+      </li>
+    </ol>
+    <p>
+      返回 <code>False</code> 的含义是「不要跑 handler」，不是「不要给模型观察」。
+      观察在循环里另写。
+    </p>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:191">L191–202</a>。
+      README 伪代码
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/README.zh.md:101">L101–128</a>。
+    </p>
+
+    <h3>F. 循环里真正多出来的几行（L215–229）</h3>
+    <pre>tool_calls = [
+    block for block in response.content if block.type == "tool_use"
+]
+if not tool_calls:
+    return
+
+for block in tool_calls:
+    print(f"\033[36m> {block.name}\033[0m")
+
+    if not check_permission(block):
+        results.append({"type": "tool_result", "tool_use_id": block.id,
+                        "content": "Permission denied."})
+        continue
+    ...</pre>
+    <table>
+      <tr><th>和旧版 / s02 的差别</th><th>含义</th></tr>
+      <tr>
+        <td>先筛 <code>tool_calls</code>，空列表就 <code>return</code></td>
+        <td>
+          不再只看 <code>stop_reason != "tool_use"</code>。
+          没有 tool_use 块（包括空回复）直接结束本轮。text 块不会进 for。
+        </td>
+      </tr>
+      <tr>
+        <td>工具名改青色 <code>36m</code></td>
+        <td>只影响你的终端；s02 是黄字。不是 API 字段。</td>
+      </tr>
+      <tr>
+        <td><code>if not check_permission(block)</code></td>
+        <td>本课唯一插入点。README 说「只加一行」，实际还要回填观察再 <code>continue</code>。</td>
+      </tr>
+      <tr>
+        <td>拒绝也 <code>append</code> <code>tool_result</code></td>
+        <td>
+          <code>tool_use_id</code> 仍对齐 <code>block.id</code>（0021 配对键）。
+          漏掉这一步，模型以为工具还在跑，下一轮协议会乱。
+        </td>
+      </tr>
+      <tr>
+        <td>拒绝后 <code>continue</code></td>
+        <td>不跑 handler，但 <code>for</code> 继续处理同一轮里后面的 <code>tool_use</code>。</td>
+      </tr>
+    </table>
+    <p>
+      文件头注释写成只 <code>continue</code>，以 L226–229 的真实代码为准：
+      <strong>先回填，再跳过执行</strong>。
+    </p>
+    <p class="src">
+      循环
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:207">L207–236</a>。
+      文件头简化说法
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:23">L23–26</a>。
+    </p>
+
+    <h3>G. 相对 s02：handler 内部也变了</h3>
+    <p>
+      <code>run_bash</code> 不再自带危险名单（名单升到闸门 1）。
+      文件三个函数不再调用 <code>safe_path</code>。
+      其余 timeout / glob 过滤与 s02 同类，不重讲。
+    </p>
+    <p class="src">
+      bash
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:64">L64–71</a>；
+      写文件
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/code.py:84">L84–91</a>。
+    </p>
+
+    <h2>动手：跑本章 <code>code.py</code></h2>
+    <p>
+      沿用 North <code>.venv</code> 和 <code>.env</code>。建议在 North 仓库根启动，
+      <code>WORKDIR</code> 才是仓库根。不要对 <code>C:\Windows</code> 或课件仓乱点 y。
+    </p>
+    <pre>cd D:\agent-learning\learn-claude-code-north
+.\.venv\Scripts\Activate.ps1
+python s03_permission\code.py</pre>
+    <p>观察重点（README「试一下」+ Windows 对照）：</p>
+    <ol>
+      <li>
+        工作区内创建可丢弃文件：
+        <code>Create a file called test.txt in the current directory</code>
+        —— 应直接过（结局 ④），黄字问句不应出现。
+      </li>
+      <li>
+        删除该文件。若模型走 <code>bash</code> + 带空格的 <code>rm </code>，应出现闸门 2 问句
+        （结局 ② 或 ③，取决于你）。Windows 上 <code>del test.txt</code> 同样应问（闸门 2 命令词）。
+      </li>
+      <li>
+        只读：<code>What files are in the current directory?</code>
+        —— <code>glob</code> 或普通列目录，应直接过。
+      </li>
+      <li>
+        写工作区外：<code>Try to write a file to /etc/something</code>
+        —— 应问「Writing outside workspace」。这里请答 <strong>n</strong>，不要真写。
+      </li>
+      <li>
+        闸门 1：让它执行带 <code>sudo</code> 的命令——应红字 Blocked，没有
+        <code>Allow?</code>。
+      </li>
+    </ol>
+    <p>
+      每次拒绝后，看模型下一轮是否还在说话：它已经收到
+      <code>Permission denied.</code>，可能会改计划。这就是「观察进轨迹」。
+    </p>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/README.zh.md:142">README L142–157</a>。
+    </p>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li>
+          <strong>权限 = 提示词里写了 destructive 要审批</strong>：错。拦的是
+          <code>check_permission</code>，不是 SYSTEM。
+        </li>
+        <li>
+          <strong>拒绝了就不要 <code>tool_result</code></strong>：错。必须回填，否则 ID 对不齐。
+        </li>
+        <li>
+          <strong>s03 比 s02 更安全</strong>：文件路径上不一定。s02 硬围栏；s03 你点 y 就能写出工作区。
+        </li>
+        <li>
+          <strong>闸门 1 = 解析过的命令黑名单</strong>：只是 <code>in</code> 子串。变体、大小写、Windows
+          <code>Remove-Item</code> 仍能漏。闸门 2 的 <code>del</code> 已按命令词匹配，不再当「Windows 必漏」。
+        </li>
+        <li>
+          <strong>空回车 = 允许</strong>：错。<code>[y/N]</code> 默认 deny。
+        </li>
+        <li>
+          <strong>生产 CC 也是这三道闸</strong>：生产管线是四态 + 多阶段 + 八个规则来源。教学版刻意砍过。本章 README 已不再附源码对照，过关不要求背生产细节。
+        </li>
+        <li>
+          <strong><code>Permission denied.</code> 是 HTTP 401</strong>：它只是给模型的观察字符串。
+        </li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。硬拒绝优先，避免危险命令被问一句就放行。"
+      data-bad="先问人会让 rm -rf / 变成手滑即可执行。">
+      <p>三道闸门为什么闸门 1 必须在闸门 3 前面？</p>
+      <button data-correct="true">硬拒绝的命令不应进入「问你同不同意」</button>
+      <button data-correct="false">input() 只能在循环最开头调用</button>
+      <button data-correct="false">Messages API 要求 deny 先于 ask</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。拒绝也是一次观察，必须带配对 ID 送回。"
+      data-bad="不回填会导致 tool_use 没有对应 result。">
+      <p><code>check_permission</code> 返回 False 之后，循环必须做什么？</p>
+      <button data-correct="true">append 一条 content 为 Permission denied. 的 tool_result，再 continue</button>
+      <button data-correct="false">直接 return 结束整个 agent_loop</button>
+      <button data-correct="false">什么都不 append，让模型自己超时</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。s03 把围栏改成审批；allow 后 handler 会真写。"
+      data-bad="不要把 s02 的 safe_path 脑补进 s03 的 run_write。">
+      <p>s03 里 write_file 指向工作区外、你在闸门 3 输入 y，会发生什么？</p>
+      <button data-correct="true">handler 执行，文件可能被写到工作区外</button>
+      <button data-correct="false">safe_path 仍会抛错，写不出去</button>
+      <button data-correct="false">闸门 1 会因为路径像 Unix 而硬拒绝</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。空回车、n、乱按都是否；只有 y/yes 放行。"
+      data-bad="[y/N] 里大写的是默认项 N。">
+      <p>闸门 3 提示 Allow? [y/N]，你直接回车？</p>
+      <button data-correct="true">deny，不执行工具</button>
+      <button data-correct="false">allow，因为回车表示确认</button>
+      <button data-correct="false">再调一次模型让它自己决定</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+    <div class="quiz" data-quiz
+      data-ok="对。闸门 1 只包了 bash；文件工具的参数不扫 DENY_LIST。"
+      data-bad="不要以为所有工具都走硬拒绝表。">
+      <p><code>check_deny_list</code> 什么时候会跑？</p>
+      <button data-correct="true">仅当 tool_use 的 name 是 bash</button>
+      <button data-correct="false">每一个 tool_use 都会跑</button>
+      <button data-correct="false">仅当闸门 2 已经命中之后</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能按顺序说出三道闸门：硬拒绝 → 规则命中 → 用户审批 → 否则执行。</li>
+      <li>能区分四种结局，并说明拒绝时仍要回填 <code>tool_result</code>。</li>
+      <li>能指出 s02 <code>safe_path</code> 硬围栏和 s03「问过后可能真写出去」的差别。</li>
+      <li>能解释 fail-closed：<code>[y/N]</code> 空回车是否；闸门 1 命中不会问。</li>
+      <li>能指出闸门 1 是子串且只罩 bash；闸门 2 用命令词匹配 <code>rm</code>/<code>del</code>（<code>delimiter</code> 不中）。</li>
+      <li>真跑 <code>python s03_permission/code.py</code>：至少看到一次直接通过，一次询问或硬拒绝。</li>
+    </ul>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>主阅读：
+          <a href="../../learn-claude-code-north/s03_permission/README.zh.md">s03 中文 README</a>
+          到「试一下」即可。</li>
+        <li>生产 CC 权限管线比三道闸复杂：过关不要求。本章 README 已不再附源码对照。</li>
+        <li>对照：
+          <a href="./0022-tool-use.html">0022 s02</a> 的 <code>safe_path</code>。</li>
+        <li>压缩：
+          <a href="../../reference/phase-2/s03-permission.html">阶段 2 · s03 速查</a>。</li>
+        <li>书：卡住「约束 vs 写死路径」回 0018 / 第01章 L273，不当本课主阅读。</li>
+        <li>下一机制：s04 把「循环里硬编码 check_permission」换成钩子。
+          README「接下来」
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s03_permission/README.zh.md:161">L161–165</a>。</li>
+      </ul>
+    </div>
+
+    <p>
+      <a href="./index.html">阶段 2 分册</a>
+      · <a href="./0022-tool-use.html">上一课 0022</a>
+    </p>
+    <div data-lesson-id-footer="0023"></div>
+    <footer>
+      不清楚的立刻问我。下一课 s04：把扩展逻辑从循环里挪到钩子上。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

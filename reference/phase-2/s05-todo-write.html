@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>阶段 2 · s05 TodoWrite 速查</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+  <link rel="stylesheet" href="../../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="../index.html">速查索引</a> · 课 0025 · 打印友好</p>
+    <h1>s05：TodoWrite</h1>
+    <p class="mission">计划先于行动；todo_write 只更新内存中的计划，不替 Agent 执行任务。</p>
+    <p class="src">
+      来源：
+      <a href="../../learn-claude-code-north/s05_todo_write/README.zh.md">s05 README</a>
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/README.zh.md:23">L23–29</a>；
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:115">code.py L115–183</a>。
+    </p>
+
+    <h2>一句话模型</h2>
+    <pre>todo_write tool_use
+       ↓
+PreToolUse → dispatch → TodoManager.update
+                         解析 → 校验 → 整体替换 TODO.items → render
+       ↓
+tool_result 回到 messages → 模型决定下一步</pre>
+
+    <h2>一条 todo 的形状</h2>
+    <pre>[
+  {"content": "阅读实现", "status": "completed"},
+  {"content": "修改代码", "status": "in_progress"},
+  {"content": "运行测试", "status": "pending"}
+]</pre>
+    <ul>
+      <li><code>pending</code> → <code>[ ]</code>：等待。</li>
+      <li><code>in_progress</code> → <code>[&gt;]</code>：进行中，最多一个。</li>
+      <li><code>completed</code> → <code>[x]</code>：计划状态已完成，不等于测试已通过。</li>
+      <li>最多 20 项；每项 content 去首尾空白后必须非空。</li>
+      <li>每次 update 是<strong>全量替换</strong>，不是 append；要发送更新后的完整列表。</li>
+    </ul>
+
+    <h2>TodoManager 更新算法</h2>
+    <ol>
+      <li>若输入是字符串：先 <code>json.loads</code>，失败再用 <code>ast.literal_eval</code>。</li>
+      <li>检查顶层是 list，且长度不超过 20。</li>
+      <li>逐项检查是 dict；读取并规范化 content / status。</li>
+      <li>检查 status 属于三个允许值，并统计 <code>in_progress</code>。</li>
+      <li>超过一个进行中项目 → <code>ValueError</code>；旧状态不变。</li>
+      <li>全部通过后才执行 <code>self.items = validated</code>，然后 render。</li>
+    </ol>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:119">源码 L119–171</a>。
+    </p>
+
+    <h2>工具接线</h2>
+    <pre>TOOLS 里声明：
+"name": "todo_write"
+"todos": {"type": "array", "maxItems": 20, ...}
+
+TOOL_HANDLERS：
+"todo_write": run_todo_write
+
+循环：
+handler = TOOL_HANDLERS.get(block.name)
+output = handler(**block.input)</pre>
+    <ul>
+      <li>schema 是给模型的输入契约。</li>
+      <li>TodoManager 的 Python 检查才是写入内存状态前的运行时保护。</li>
+      <li>注册存函数对象：<code>run_todo_write</code>，不要写 <code>run_todo_write()</code>。</li>
+      <li><code>**block.input</code> 把参数字典拆成关键字参数。</li>
+    </ul>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:185">schema / map L185–204</a>；
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:320">dispatch L320–332</a>。
+    </p>
+
+    <h2>三轮提醒</h2>
+    <pre>rounds_since_todo = 0 if used_todo else rounds_since_todo + 1
+if rounds_since_todo &gt;= 3:
+    results.append({
+        "type": "text",
+        "text": "&lt;reminder&gt;Update your todos.&lt;/reminder&gt;",
+    })
+    rounds_since_todo = 0</pre>
+    <ul>
+      <li>一轮 = 一次模型回复中含一个或多个 tool_use 的整批处理。</li>
+      <li>一轮多个非 todo 工具仍只加 1。</li>
+      <li>一轮只要出现一个 <code>todo_write</code> 就清零。</li>
+      <li>无 tool_use 的回复不进入这段，先走 Stop。</li>
+      <li>提醒是普通 text block，不是 tool_result，不是强制闸门。</li>
+      <li>计数器是 <code>agent_loop</code> 局部变量；新用户 prompt 重新从 0。</li>
+    </ul>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:292">源码 L292–340</a>。
+    </p>
+
+    <h2>状态边界</h2>
+    <table>
+      <tr><th>东西</th><th>保存什么</th><th>生命周期</th></tr>
+      <tr>
+        <td><code>TODO.items</code></td>
+        <td>当前规范化后的完整 TODO 列表</td>
+        <td>同一 Python 进程；不自动落盘</td>
+      </tr>
+      <tr>
+        <td><code>messages</code></td>
+        <td>对话、assistant 回复、tool_result、提醒</td>
+        <td>同一 REPL 进程；本课也不持久化</td>
+      </tr>
+      <tr>
+        <td><code>rounds_since_todo</code></td>
+        <td>距上次使用 todo_write 的工具轮数</td>
+        <td>一次 agent_loop；每个新 prompt 清零</td>
+      </tr>
+      <tr>
+        <td>工作区文件</td>
+        <td>真实代码、文档和测试结果</td>
+        <td>由 file / bash 工具改变；与 TODO 分开</td>
+      </tr>
+    </table>
+
+    <h2>三组不要混淆</h2>
+    <ul>
+      <li><code>todo_write</code> ≠ <code>edit_file</code>：计划状态 ≠ 文件副作用。</li>
+      <li><code>completed</code> ≠ 验证通过：仍需 bash / 测试 / lint 的真实反馈。</li>
+      <li>schema ≠ runtime validation：声明形状 ≠ handler 已安全接受。</li>
+      <li>reminder ≠ permission：提醒模型 ≠ 拦截工具。</li>
+      <li>tool call ≠ tool-call round：一个 block ≠ 一轮模型回复。</li>
+      <li><code>json.loads</code> / <code>literal_eval</code> ≠ <code>eval</code>：数据解析 ≠ 执行任意表达式。</li>
+    </ul>
+
+    <h2>脚本地图</h2>
+    <ul>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:50">L50–54</a>：SYSTEM，建议先计划。</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:115">L115–171</a>：TodoManager、解析、校验、render。</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:174">L174–183</a>：TODO 实例与 run_todo_write。</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:185">L185–204</a>：schema 与 TOOL_HANDLERS。</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:207">L207–287</a>：s04 hooks / permissions 保留。</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:292">L292–340</a>：agent loop 与 reminder。</li>
+      <li><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:343">L343–362</a>：外层 REPL。</li>
+    </ul>
+
+    <p>
+      <a href="../../lessons/phase-2/0025-todo-write.html">打开 0025 课件</a>
+      · <a href="./s04-hooks.html">s04 Hooks 速查</a>
+    </p>
+    <footer>下一课：s06 Subagent。一个 TODO 仍然太大时，再拆成干净上下文的子任务。</footer>
+  </main>
+</body>
+</html>

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>阶段 2 · 能动手</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <p class="meta"><a href="../../index.html">站点首页</a> · <a href="../index.html">全部课件</a> · 阶段 2 分册</p>
+    <h1>阶段 2 · 能动手</h1>
+    <p class="mission">
+      阶段 0 已补齐读 North 所需的 Python，阶段 1 已钉住 Agent 的公式、Harness
+      和失败归因。本阶段开始<strong>真正运行 North 根目录的
+      <code>s01–s17/code.py</code></strong>，每课只在同一根 Agent loop 上增加一个机制。
+    </p>
+
+    <h2>学习顺序</h2>
+    <table>
+      <tr><th>顺序</th><th>North 主线</th><th>本阶段要钉住什么</th><th>状态</th></tr>
+      <tr>
+        <td><strong>0021</strong></td>
+        <td><a href="./0021-agent-loop.html">s01 · Agent Loop</a></td>
+        <td>一个循环 + Bash；真实消息、工具调用、结果回填</td>
+        <td>已过关</td>
+      </tr>
+      <tr>
+        <td><strong>0022</strong></td>
+        <td><a href="./0022-tool-use.html">s02 · Tool Use</a></td>
+        <td>多个工具与 dispatch map；循环不动</td>
+        <td>已过关</td>
+      </tr>
+      <tr>
+        <td><strong>0023</strong></td>
+        <td><a href="./0023-permission.html">s03 · Permission</a></td>
+        <td>执行前三道闸门：硬拒绝、规则命中、用户审批</td>
+        <td>已过关</td>
+      </tr>
+      <tr>
+        <td><strong>0024</strong></td>
+        <td><a href="./0024-hooks.html">s04 · Hooks</a></td>
+        <td>在用户输入、工具前后和退出点挂插口</td>
+        <td>已过关</td>
+      </tr>
+      <tr>
+        <td><strong>0025</strong></td>
+        <td><a href="./0025-todo-write.html">s05 · TodoWrite</a></td>
+        <td>先列清单再做；计划工具</td>
+        <td>已过关</td>
+      </tr>
+      <tr>
+        <td><strong>0026</strong></td>
+        <td><a href="./0026-subagent.html">s06 · Subagent</a></td>
+        <td>干净上下文与任务拆分</td>
+        <td>已过关</td>
+      </tr>
+      <tr>
+        <td><strong>0027</strong></td>
+        <td><a href="./0027-skill-loading.html">s07 · Skill Loading</a></td>
+        <td>按需注入技能，不把知识全堆进 system</td>
+        <td>当前</td>
+      </tr>
+      <tr><td>0028–0029</td><td>s08–s09 · Compact / Memory</td><td>压缩、记忆</td><td>计划</td></tr>
+      <tr><td>之后</td><td>s10–s17</td><td>任务、后台、cron、团队、MCP、集成、workflow、目标收口</td><td>计划</td></tr>
+    </table>
+
+    <h2>材料怎么配</h2>
+    <ol>
+      <li>先读对应 North 章节的 README，建立问题和运行目标。</li>
+      <li>再跑该章根目录的 <code>code.py</code>；本阶段不把旧的
+        <code>docs/</code>、<code>agents/</code> 章节混进来。</li>
+      <li>卡在「为什么要这层约束」时，再看书 Ch4 / Ch5 或 Harness 讲义对应段落。</li>
+    </ol>
+    <p class="muted">
+      阶段 1 的概念课仍可回看：
+      <a href="../phase-1/index.html">阶段 1 分册</a>。
+      课上代码以 North 当章 <code>code.py</code> 为准，非必要不另写 playground。
+    </p>
+
+    <footer>
+      课程顺序的唯一来源是 <a href="../../assets/curriculum.js">assets/curriculum.js</a>。
+      不清楚的立刻问我。
+    </footer>
+  </main>
+</body>
+</html>

@@ -1,0 +1,1830 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0025 · s05 TodoWrite</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0025"></div>
+    <h1>s05：先列清单，再开始做</h1>
+    <p class="mission">
+      s04 已经让我们知道怎样把扩展逻辑挂到 Agent loop 上；但一个 Agent 即使能安全地调用工具，
+      仍可能面对复杂任务做着做着就忘了原目标。本课给它增加一个
+      <strong><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/README.zh.md:23">todo_write</a></strong> 工具：先把任务拆成可见的清单，再用原来的文件工具和 bash
+      真正执行。主技能是<strong>读懂“计划状态如何进入循环”</strong>，不是把待办事项当成又一个会改文件的工具。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      主材料是 North
+      <a href="../../learn-claude-code-north/s05_todo_write/README.zh.md">s05 中文 README</a>：
+      问题
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/README.zh.md:13">L13–19</a>，
+      解决方案
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/README.zh.md:23">L23–29</a>，
+      TodoManager 与校验规则
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/README.zh.md:33">L33–62</a>，
+      reminder
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/README.zh.md:96">L96–110</a>，
+      试运行
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/README.zh.md:125">L125–138</a>；
+      配套脚本是
+      <a href="../../learn-claude-code-north/s05_todo_write/code.py"><code>s05_todo_write/code.py</code></a>
+      （全文
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:1">L1–362</a>）。
+    </p>
+    <p class="muted">
+      原理对照是书
+      <a href="../../AI-Agents-in-Depth-md/%E7%AC%AC05%E7%AB%A0%20Coding%20Agent%20%E4%B8%8E%E9%80%9A%E7%94%A8%20Agent/%E7%AC%AC05%E7%AB%A0%20Coding%20Agent%20%E4%B8%8E%E9%80%9A%E7%94%A8%20Agent.md">第 5 章《Coding Agent 与通用 Agent》</a>，
+      重点是“计划先于行动、验证贯穿始终”
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC05%E7%AB%A0%20Coding%20Agent%20%E4%B8%8E%E9%80%9A%E7%94%A8%20Agent/%E7%AC%AC05%E7%AB%A0%20Coding%20Agent%20%E4%B8%8E%E9%80%9A%E7%94%A8%20Agent.md:97">L97–130</a>；
+      书没有实现 North 这一个进程内的 <code>todo_write</code> 工具，本课会明确区分“书的工程原则”和“North 的教学实现”。
+      Python Day 不另开：<code>list</code>、字典、异常、JSON、<code>ast.literal_eval</code>、类型标注和
+      <code>**</code> 解包已在 0001–0016 内化。
+    </p>
+    <p class="muted">
+      <strong>本课已内化</strong>：<code>TodoManager</code> 的内存状态；
+      todo 项目的 <code>content</code> / <code>status</code> 形状；
+      <code>pending</code>、<code>in_progress</code>、<code>completed</code> 三种状态；
+      先解析、再校验、最后整体替换；
+      <code>todo_write</code> 加入 schema 和 <code>TOOL_HANDLERS</code>；
+      <code>rounds_since_todo</code> 的三轮提醒；
+      以及它们如何接回 s04 的 hook、dispatch 和 tool_result。
+      <strong>故意跳过</strong>：持久化 TODO 文件、优先级 / 截止日期 / 依赖关系、
+      多 Agent 共享任务、并发锁、插件化计划器和生产产品的全部任务协议。
+      <strong>不另写</strong> playground；过关以真跑本章 <code>code.py</code> 为准。
+    </p>
+
+    <p class="muted">
+      <strong>行号约定：</strong>后文源码块里形如 <code>L119</code> 的前缀是导航标记，不属于 Python 代码。
+      需要核对真实实现时，点击同一段旁边的 <code>cursor://file/...</code> 行号链接；
+      课件中的“示例”若不是 North 原码，会注明“本例行号”。
+    </p>
+
+    <h3>本课新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>出处</th></tr>
+      <tr>
+        <td><strong>TodoWrite</strong> / <code>todo_write</code></td>
+        <td>
+          给 Agent 更新待办清单的规划工具；名字里的 write 写的是计划状态，不是文件系统。
+          README 用 <code>TodoWrite</code> 讲机制，工具 schema 使用小写下划线名
+          <code>todo_write</code>。
+        </td>
+        <td>
+          North s05 标题与解决方案
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/README.zh.md:1">README L1–9</a>；
+          工具定义
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:196">code.py L196–203</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong><code>TodoManager</code></strong></td>
+        <td>
+          持有内存中 todo 列表、负责解析和校验、并把当前列表渲染成字符串的类。
+          它不是模型，也不是执行文件的 handler。
+        </td>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:115">code.py L115–171</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>todo item</strong> / 项目</td>
+        <td>
+          清单中的一条字典，当前实现只保留非空 <code>content</code> 和合法
+          <code>status</code> 两个字段。
+        </td>
+        <td>
+          输入形状
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:136">code.py L136–148</a>；
+          schema
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:197">L197–198</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>status</strong></td>
+        <td>
+          描述一条任务当前处于什么阶段的字符串：<code>pending</code> 等待、
+          <code>in_progress</code> 进行中、<code>completed</code> 已完成。
+        </td>
+        <td>
+          状态校验
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:140">code.py L140–148</a>；
+          渲染标记
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:160">L160–170</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>内存状态</strong>（in-memory state）</td>
+        <td>
+          只存在当前 Python 进程对象里的当前值；本课的 <code>TODO.items</code>
+          不会自动写入磁盘，程序重启后会重新变空。
+        </td>
+        <td>
+          模块级实例
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:174">code.py L174</a>；
+          README 说明“内存中的任务列表”
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/README.zh.md:35">README L35–59</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>validation</strong> / 校验</td>
+        <td>
+          在接受输入改变状态前，检查类型、数量、字段内容和状态规则；
+          校验失败时不替换旧列表。
+        </td>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:129">code.py L129–154</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong><code>reminder</code></strong></td>
+        <td>
+          连续三个有工具调用的轮次都没用 <code>todo_write</code> 时，
+          Harness 追加给模型的普通文本提醒；它是提示，不是强制闸门。
+        </td>
+        <td>
+          README
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/README.zh.md:96">L96–106</a>；
+          循环
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:334">code.py L334–340</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong><code>rounds_since_todo</code></strong></td>
+        <td>
+          当前一次 <code>agent_loop</code> 内，距离上次使用
+          <code>todo_write</code> 已经过了多少个工具调用轮次的计数器。
+        </td>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:290">code.py L290–340</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>tool schema</strong> 的约束字段</td>
+        <td>
+          给模型看的输入契约；<code>maxItems</code>、<code>minLength</code>、<code>enum</code>
+          描述允许形状，但不能替代 handler 内的运行时校验。
+        </td>
+        <td>
+          本课 schema
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:197">code.py L197–198</a>；
+          Python 校验
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:129">L129–151</a>。
+        </td>
+      </tr>
+    </table>
+
+    <h2>为什么现在学？</h2>
+    <p>
+      没有计划时，Agent 的失败不一定是“不会做”，也可能是“做了前几步后忘了还要做什么”。
+      例如用户说：“把所有 Python 文件改成 snake_case，跑测试，并修掉失败。”
+      Agent 可能先改三个文件；测试失败后注意力全部转向修测试，最后忘记命名目标。
+      任务越长，工具结果越多，原始目标越容易被当前局部问题盖住。
+      这正是 README 的问题示例
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/README.zh.md:13">L13–19</a>。
+    </p>
+    <p>
+      <code>todo_write</code> 给 Agent 的不是“再多一种执行能力”，而是一块可反复更新的外部工作记忆：
+      它可以把“调查 → 修改 → 测试 → 修复”显式列出来。真正的调查仍由
+      <code>read_file</code> / <code>glob</code> 完成，真正的修改仍由
+      <code>write_file</code> / <code>edit_file</code> 完成，真正的测试仍由
+      <code>bash</code> 完成。
+    </p>
+    <p class="src">
+      North 把这层变化概括为“先列步骤再动手”
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/README.zh.md:7">README L7–9</a>；
+      书第 5 章把它放在 Coding Agent 的工程流程中
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC05%E7%AB%A0%20Coding%20Agent%20%E4%B8%8E%E9%80%9A%E7%94%A8%20Agent/%E7%AC%AC05%E7%AB%A0%20Coding%20Agent%20%E4%B8%8E%E9%80%9A%E7%94%A8%20Agent.md:97">L97–130</a>。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>s05 概念</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr>
+        <td><code>TodoManager</code></td>
+        <td>一个持有任务集合的 service / manager 类</td>
+        <td>
+          这里没有接口、依赖注入容器或数据库；<code>TODO</code> 是模块加载时直接创建的实例。
+        </td>
+      </tr>
+      <tr>
+        <td><code>self.items: list[dict]</code></td>
+        <td><code>List&lt;TodoItem&gt;</code> 字段</td>
+        <td>
+          Python 的 <code>dict</code> 没有 Java DTO 那样的编译期字段保证；
+          类型标注默认不拦运行时输入。
+        </td>
+      </tr>
+      <tr>
+        <td><code>status</code> 字符串</td>
+        <td>字符串字段，或类似 <code>enum Status</code></td>
+        <td>
+          本课没有 Java 式 Enum 类；允许值由 schema 的 <code>enum</code> 和 Python 的元组判断共同表达。
+        </td>
+      </tr>
+      <tr>
+        <td><code>update(todos)</code></td>
+        <td>替换集合的 setter / command 方法</td>
+        <td>
+          它不是“追加一项”；整个输入通过校验后才整体替换 <code>self.items</code>。
+        </td>
+      </tr>
+      <tr>
+        <td><code>ValueError</code></td>
+        <td>大致类似 <code>IllegalArgumentException</code></td>
+        <td>
+          都常用于“调用方给的参数不符合要求”；本课在 handler 边界把它改成字符串观察。
+        </td>
+      </tr>
+      <tr>
+        <td><code>TOOL_HANDLERS</code></td>
+        <td><code>Map&lt;String, Handler&gt;</code></td>
+        <td>
+          键是模型使用的工具名 <code>todo_write</code>，值是 Python 函数对象
+          <code>run_todo_write</code>，两者名字不必相同。
+        </td>
+      </tr>
+      <tr>
+        <td><code>try / except</code></td>
+        <td><code>try / catch</code></td>
+        <td>
+          Python 捕获异常使用 <code>except</code>；本课只在工具边界捕获
+          <code>ValueError</code>，主循环另有通用兜底。
+        </td>
+      </tr>
+      <tr>
+        <td><code>rounds_since_todo</code></td>
+        <td>一个方法内的局部计数器</td>
+        <td>
+          它不是 <code>TODO</code> 的字段，也不是全会话持久计数；每次进入
+          <code>agent_loop</code> 都从 0 开始。
+        </td>
+      </tr>
+    </table>
+
+    <h2>先看全局：这支脚本由哪些模块组成？</h2>
+    <p>
+      先不要急着记 <code>update</code>、<code>validated</code> 这些局部名字。
+      把 <code>s05_todo_write/code.py</code> 想成一间小型工作室：同一个
+      <code>.py</code> 文件里按职责分成几个模块。这里说的“模块”是<strong>脚本内部的逻辑分区</strong>，
+      不是说它们已经拆成了几个独立的 import 文件。
+      先知道每个分区负责什么，后面看到一行代码时，才知道它处在整条链的哪一段。
+    </p>
+    <table>
+      <tr><th>源码位置</th><th>脚本模块</th><th>它负责什么</th><th>它不负责什么</th></tr>
+      <tr>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:27">L27–54</a>
+        </td>
+        <td>启动配置与 SYSTEM</td>
+        <td>加载环境变量、确定工作目录、创建 API client、告诉模型“多步任务先计划”</td>
+        <td>不执行工具，也不强制模型一定先计划</td>
+      </tr>
+      <tr>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:58">L58–110</a>
+        </td>
+        <td>旧工具 handler</td>
+        <td><code>bash</code>、读写编辑文件、glob 等真实动作</td>
+        <td>不保存 TODO 状态，也不决定模型下一步</td>
+      </tr>
+      <tr>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:113">L113–183</a>
+        </td>
+        <td>TodoManager 与 TODO 实例</td>
+        <td>接收清单、解析、校验、保存内存状态、渲染结果</td>
+        <td>不创建文件、不跑测试、不自动推进任务</td>
+      </tr>
+      <tr>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:185">L185–204</a>
+        </td>
+        <td>工具 schema 与 dispatch map</td>
+        <td>让模型知道 <code>todo_write</code> 的输入形状，并把工具名接到函数</td>
+        <td>schema 本身不执行 Python；map 本身也不调用 handler</td>
+      </tr>
+      <tr>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:207">L207–287</a>
+        </td>
+        <td>s04 hooks 与权限</td>
+        <td>工具执行前后、用户输入时、退出前的扩展插口和权限检查</td>
+        <td>不替代 TodoManager，也不负责三轮 reminder 计数</td>
+      </tr>
+      <tr>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:290">L290–340</a>
+        </td>
+        <td>agent_loop</td>
+        <td>请求模型、筛 tool_use、触发 hooks、查表执行、回填结果、计算 reminder</td>
+        <td>不亲自实现每个工具的业务细节</td>
+      </tr>
+      <tr>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:343">L343–362</a>
+        </td>
+        <td>外层 REPL</td>
+        <td>读用户的一行输入、保存 history、调用一次 agent_loop、打印最终文本</td>
+        <td>不参与每个 tool_use 的 dispatch，也不是内层 Agent loop</td>
+      </tr>
+    </table>
+    <p>
+      可以先用一句话记住整个脚本：
+      <strong>REPL 收到任务 → agent_loop 问模型 → 模型选工具 →
+      hooks 在旁边检查 → dispatch 找 handler → 工具结果回到 messages →
+      模型继续或 Stop。</strong>
+      s05 只在这条既有链上增加了一个“保存计划状态”的 handler 和一个“忘记更新时提醒”的计数器。
+    </p>
+
+    <h3>四个状态位置：同一个任务的信息分别放在哪里？</h3>
+    <p>
+      初学者很容易把“计划”“对话”“文件”和“计数”想成一个大对象。
+      实际上它们在脚本中的位置不同，生命周期也不同：
+    </p>
+    <table>
+      <tr><th>位置</th><th>里面是什么</th><th>谁会读 / 写</th><th>多久存在</th></tr>
+      <tr>
+        <td><code>TODO.items</code></td>
+        <td>规范化后的当前完整 TODO 列表</td>
+        <td><code>TodoManager.update</code> 写；<code>render</code> 读</td>
+        <td>同一 Python 进程；不自动落盘</td>
+      </tr>
+      <tr>
+        <td><code>messages</code> / <code>history</code></td>
+        <td>用户消息、模型回复、tool_result、reminder</td>
+        <td>agent_loop 不断追加；下一次 API 请求读取</td>
+        <td>同一 REPL 进程；本课也不持久化</td>
+      </tr>
+      <tr>
+        <td><code>WORKDIR</code> 下的文件</td>
+        <td>真实代码、文档和测试产物</td>
+        <td>read / write / edit / bash handler</td>
+        <td>直到文件被修改或删除</td>
+      </tr>
+      <tr>
+        <td><code>rounds_since_todo</code></td>
+        <td>距离上次使用 todo_write 的工具调用轮次</td>
+        <td>agent_loop 每轮计算</td>
+        <td>一次 agent_loop；新用户 prompt 重新从 0</td>
+      </tr>
+    </table>
+    <p class="box">
+      <strong>先建立这个区别：</strong>模型“看见的计划文字”通常来自
+      <code>messages</code> 里的 <code>tool_result</code>；程序“保存的计划状态”在
+      <code>TODO.items</code>。文件内容又是第三份独立状态。它们可以互相反映，
+      但没有哪一份会自动替代另外两份。
+    </p>
+
+    <h2>再看一遍：一次请求怎样穿过这些模块？</h2>
+    <p>
+      s05 没有另起一根循环。它保留 s04 的 UserPromptSubmit、PreToolUse、PostToolUse、
+      Stop 四个 hook，也保留五个旧工具；只新增一条工具和一段计数逻辑。
+      一次 <code>todo_write</code> 的路线如下：
+    </p>
+    <pre>User 输入
+    ↓
+LLM 返回 tool_use(name="todo_write", input={"todos": [...]})
+    ↓
+PreToolUse：权限 hook 放行 → 日志 hook
+    ↓
+TOOL_HANDLERS 查表 → run_todo_write
+    ↓
+TodoManager.update：解析 → 校验 → 替换 TODO.items → render
+    ↓
+tool_result(content=当前清单或 Error)
+    ↓
+messages 追加观察 → LLM 决定下一步</pre>
+    <p>
+      如果模型连续调用的是 <code>read_file</code>、<code>edit_file</code>、<code>bash</code> 等其他工具，
+      每个“模型回复含有工具调用的轮次”都会让 <code>rounds_since_todo</code> 加一。
+      第三轮仍没调用 <code>todo_write</code> 时，Harness 在同一批结果末尾增加一条文本提醒，
+      再把整批结果送回模型。这是“提醒模型”，不是“替模型更新”。
+    </p>
+    <h3>先走一个完整故事，再读局部代码</h3>
+    <p>
+      假设你输入：
+      <code>Refactor s05_todo_write/example/hello.py and run a check</code>。
+      不看细节时，先预测这支脚本应该发生什么：
+    </p>
+    <ol>
+      <li>
+        外层 REPL 在
+        <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:351">L351–358</a>
+        读入 prompt，把它追加到 <code>history</code>，调用一次 <code>agent_loop</code>。
+      </li>
+      <li>
+        agent_loop 在
+        <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:295">L295–303</a>
+        把 SYSTEM、历史消息和工具列表交给模型。SYSTEM 建议多步任务先用
+        <code>todo_write</code>，模型若遵循这个建议，才可能先返回它；
+        这几行代码本身不判断任务是否多步，也不强制首个工具必须是它。
+      </li>
+      <li>
+        这个 tool_use 先经过 s04 的 PreToolUse hooks，然后 dispatch map
+        按名字找到 <code>run_todo_write</code>。
+      </li>
+      <li>
+        <code>TodoManager</code> 把清单解析、校验并保存到 <code>TODO.items</code>；
+        渲染文字同时打印到终端，并作为 tool_result 回给模型。
+      </li>
+      <li>
+        模型看到计划后，可能再调用 <code>read_file</code> 读取
+        <code>hello.py</code>，用 <code>edit_file</code> 修改，再用
+        <code>bash</code> 做检查。每个工具仍然经过同一套 Pre / Post hooks。
+      </li>
+      <li>
+        模型若在过程中更新计划，就再次调用 <code>todo_write</code>，把相应项目改成
+        <code>in_progress</code> 或 <code>completed</code>；代码不会替它自动改状态。
+      </li>
+      <li>
+        某一轮模型只返回文本、不再返回 tool_use 时，agent_loop 触发 Stop hook，
+        然后退出这次 agent_loop，REPL 打印最后的文本。
+      </li>
+    </ol>
+    <p>
+      如果模型连续三轮只调用其他工具，L334–340 会把 reminder 附加进结果，再让模型继续。
+      所以“计划模块”并不是把任务包在一个函数里，而是通过一条工具调用和一条反馈，
+      反复插入原来的模型—工具循环。
+    </p>
+    <p class="src">
+      工具只更新状态、实际工作仍由旧工具完成：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/README.zh.md:23">README L23–29</a>；
+      三轮提醒：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:311">code.py L311–340</a>。
+    </p>
+
+    <h2>现在按模块拆解</h2>
+    <p>
+      刚才先看了“这支脚本有哪些分区”和“一次请求怎样走完”。
+      下面按源码的职责来读：先读计划数据和状态，再读状态更新，
+      然后看它如何变成工具、如何接回主循环，最后再看 reminder。
+      这样遇到一个局部名字时，你已经知道它在全局链条中的位置。
+    </p>
+
+    <h3>模块一：一个 todo 项到底是什么？</h3>
+    <p>
+      先从最小的数据形状开始。当前实现把一条任务表示为一个字典，至少有两个键：
+      <code>content</code> 是人和模型都能读懂的任务描述，<code>status</code> 是机器可以判断的阶段。
+      例如下面是一个完整的三项计划：
+    </p>
+    <pre>本例 L1  [
+本例 L2      {"content": "阅读现有实现", "status": "completed"},
+本例 L3      {"content": "修改代码", "status": "in_progress"},
+本例 L4      {"content": "运行测试", "status": "pending"},
+本例 L5  ]</pre>
+    <p>
+      左边的“本例 Lx”只是本例行号。它不是 North 源码的行号，也不要复制进 Python。
+      这个列表表达的是“第一步已经完成，第二步正在做，第三步还没开始”。
+      North 的渲染结果会把它变成人类更容易扫读的形式：
+    </p>
+    <pre>[x] 阅读现有实现
+[>] 修改代码
+[ ] 运行测试
+
+(1/3 completed)</pre>
+    <p>
+      三种状态的规则要分清：
+    </p>
+    <table>
+      <tr><th>状态</th><th>含义</th><th>渲染标记</th><th>本课是否自动改变</th></tr>
+      <tr>
+        <td><code>pending</code></td>
+        <td>任务存在，但还没开始</td>
+        <td><code>[ ]</code></td>
+        <td>不会；模型必须再次调用 <code>todo_write</code> 更新</td>
+      </tr>
+      <tr>
+        <td><code>in_progress</code></td>
+        <td>当前正在处理</td>
+        <td><code>[&gt;]</code></td>
+        <td>不会；工具不会因为执行了 bash 就自动变成进行中</td>
+      </tr>
+      <tr>
+        <td><code>completed</code></td>
+        <td>模型认为这一步已完成</td>
+        <td><code>[x]</code></td>
+        <td>不会；脚本不替模型判断文件是否真的正确</td>
+      </tr>
+    </table>
+    <p>
+      这里的 <code>completed</code> 只是模型写入的状态，不是测试通过证明。
+      如果任务要求“修改后必须通过测试”，还要调用 <code>bash</code> 跑测试；
+      这正是阶段 1 学过的“计划”和“验证”不能混为一谈。
+    </p>
+
+    <h3>模块一的边界：计划工具不等于执行工具</h3>
+    <p>
+      现在把这份数据放回刚才的全局图。下面两次调用看起来都叫工具，
+      但它们改动的状态层完全不同：
+    </p>
+    <table>
+      <tr><th>调用</th><th>它改变什么</th><th>它不改变什么</th></tr>
+      <tr>
+        <td><code>todo_write</code></td>
+        <td>Python 进程里的 <code>TODO.items</code>，以及回传给模型的计划文本</td>
+        <td>不创建文件、不改代码、不运行测试、不自动调下一个工具</td>
+      </tr>
+      <tr>
+        <td><code>write_file</code> / <code>edit_file</code></td>
+        <td>工作区中的真实文件</td>
+        <td>不会自动把 TODO 标为 <code>completed</code></td>
+      </tr>
+      <tr>
+        <td><code>bash</code></td>
+        <td>命令的真实副作用和输出</td>
+        <td>不会自动生成或修正计划状态</td>
+      </tr>
+    </table>
+    <p>
+      所以一个合理的多步轨迹可能是：
+      <code>todo_write</code> 列出三步 →
+      <code>read_file</code> 调查 →
+      <code>todo_write</code> 把第一步改成 <code>in_progress</code> →
+      <code>edit_file</code> 修改 →
+      <code>bash</code> 验证 →
+      <code>todo_write</code> 把第一步改成 <code>completed</code>。
+      脚本没有任何一行会替模型自动安排这条路线；列表只是让路线可见。
+    </p>
+    <p class="src">
+      “不增加执行能力，只增加规划能力”是 North 的关键洞察：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/README.zh.md:108">README L108–110</a>。
+    </p>
+
+    <h3>模块二：一次 <code>update</code> 如何改变计划状态？</h3>
+    <p>
+      到这里我们已经知道三件事：一条任务是字典，状态有三个允许值，
+      <code>todo_write</code> 只负责计划状态。现在再追踪一次
+      <code>TodoManager.update</code>：模型把一份清单交给它后，
+      它怎样决定“接受这份新状态”？
+    </p>
+    <h4>先回答：为什么需要校验？要校验什么？</h4>
+    <p>
+      这里的输入来自模型的 tool call。模型通常会按照 schema 输出，但
+      <strong>“通常符合”不等于“程序可以直接信任”</strong>：输入也可能来自手写调用、
+      测试数据，或者只是缺字段、状态拼错的输出。
+      因此 <code>update</code> 不能一拿到 <code>todos</code> 就直接写入
+      <code>self.items</code>，它要先做 <strong>validation（校验）</strong>。
+      校验的意思是：检查“这份数据能不能作为一份合法的 TODO 状态保存”，
+      不是检查“用户的代码任务是否已经完成”。
+    </p>
+    <table>
+      <tr><th>校验层次</th><th>要问的问题</th><th>源码位置</th></tr>
+      <tr>
+        <td>整体形状</td>
+        <td>顶层是不是列表？是不是超过 20 项？</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:129">L129–132</a></td>
+      </tr>
+      <tr>
+        <td>每一项形状</td>
+        <td>列表中的每一项是不是字典？</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:136">L136–138</a></td>
+      </tr>
+      <tr>
+        <td>字段内容</td>
+        <td>content 去空白后是否非空？status 是否属于三个允许值？</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:140">L140–145</a></td>
+      </tr>
+      <tr>
+        <td>跨项目规则</td>
+        <td>整份列表中是否最多只有一个 in_progress？</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:146">L146–151</a></td>
+      </tr>
+    </table>
+    <p>
+      先只记检查清单，不急着记实现细节：
+      <strong>列表 → 数量 → 每项是字典 → content 有内容 →
+      status 合法 → 进行中最多一个</strong>。
+      任一项不合格，就不应该把这份输入当成新的计划状态。
+    </p>
+    <h4>先看一份输入如何被判定</h4>
+    <pre>合法：
+[
+    {"content": "阅读实现", "status": "completed"},
+    {"content": "运行测试", "status": "pending"}
+]
+
+不合法：
+[
+    {"content": "   ", "status": "pending"},
+    {"content": "运行测试", "status": "working"}
+]</pre>
+    <p>
+      第一份满足“每项是字典、content 非空、status 合法”；
+      第二份至少有两个问题：第一项去掉空格后没有内容，第二项的
+      <code>working</code> 不在允许状态列表中。它们不是“任务执行失败”，
+      而是“计划数据本身不合格”。后面 L142–145 的
+      <code>ValueError</code> 就是在报告这类输入问题。
+    </p>
+    <h4>验证通过后，为什么采用整体替换？</h4>
+    <p>
+      先看结论：North 的 <code>update</code> 是<strong>整体替换</strong>，不是追加一条。
+      这个结论不是凭方法名猜出来的，而是从后面 L153 的赋值位置读出来的。
+      先理解下面这个“旧状态 → 新状态”的例子，再看为什么代码必须这样安排。
+    </p>
+    <p>
+      它的实现不是 <code>self.items.append(...)</code>，而是先构造一份新的
+      <code>validated</code>，所有项目通过后才执行
+      <code>self.items = validated</code>。因此每次 <code>todo_write</code>
+      都应发送“更新后的完整清单”。
+    </p>
+    <p>
+      假设当前状态是三项：
+    </p>
+    <pre>旧状态：
+[x] 阅读实现
+[>] 修改代码
+[ ] 运行测试</pre>
+    <p>
+      如果下一次只发送下面这一项：
+    </p>
+    <pre>[{"content": "修改代码", "status": "completed"}]</pre>
+    <p>
+      结果不是“给第二项打勾，同时保留另外两项”，而是整个清单被替换成一项：
+    </p>
+    <pre>新状态：
+[x] 修改代码</pre>
+    <p>
+      正确更新应该把三项都发送回去：
+    </p>
+    <pre>[
+    {"content": "阅读实现", "status": "completed"},
+    {"content": "修改代码", "status": "completed"},
+    {"content": "运行测试", "status": "in_progress"}
+]</pre>
+    <p>
+      这和“局部 patch”不同。局部 patch 是“只描述要改哪一个字段”；本课的协议是
+      “发送完整快照”。把这一点记住，才能读懂后面的
+      <code>self.items = validated</code>。
+    </p>
+
+    <h4>现在再看失败分支：为什么旧状态不会被半成品覆盖？</h4>
+    <p>
+      上面已经知道要检查什么。现在回到代码，问题就变成：
+      如果某一项检查失败，<code>update</code> 怎样保证旧计划不被一半新数据覆盖？
+      关键是：真实代码把赋值放在所有检查之后。下面是带 North 行号的核心片段：
+    </p>
+    <pre>L134  validated = []
+L135  in_progress_count = 0
+L136  for index, todo in enumerate(todos):
+L137      if not isinstance(todo, dict):
+L138          raise ValueError(f"todos[{index}] must be an object")
+L139
+L140      content = str(todo.get("content", "")).strip()
+L141      status = str(todo.get("status", "pending")).lower()
+L142      if not content:
+L143          raise ValueError(f"todos[{index}] requires content")
+L144      if status not in ("pending", "in_progress", "completed"):
+L145          raise ValueError(f"todos[{index}] has invalid status '{status}'")
+L146      if status == "in_progress":
+L147          in_progress_count += 1
+L148      validated.append({"content": content, "status": status})
+L149
+L150  if in_progress_count &gt; 1:
+L151      raise ValueError("Only one todo can be in_progress at a time")
+L152
+L153  self.items = validated
+L154  return self.render()</pre>
+    <p class="src">
+      上述源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:134">L134–154</a>。
+    </p>
+    <ol>
+      <li>新数据先放在局部变量 <code>validated</code> 中，旧的 <code>self.items</code> 暂时不动。</li>
+      <li>只要任何一项触发 <code>raise ValueError</code>，函数立即离开，根本走不到 L153。</li>
+      <li>因此旧列表不会被半成品覆盖；这是一种“全部通过才替换”的简单保护。</li>
+      <li>所有检查通过后，L153 才把新列表交给对象，L154 再渲染它。</li>
+    </ol>
+    <p>
+      注意这不是数据库事务，也不是跨进程的原子提交；它只是这个单线程教学对象里的
+      “先用临时变量检查，最后一次赋值”结构。
+    </p>
+
+    <h3>模块二续：逐行读 <code>TodoManager.update</code> 的解析与校验</h3>
+    <p>
+      上一节先建立了“完整清单通过后才替换”的目的。
+      现在回到源码内部，按实际执行顺序看它怎样接收输入、解析字符串、逐项检查，
+      最后才走到那个关键赋值。局部变量的名字会有上下文，不再是凭空出现。
+      先看方法签名：
+    </p>
+    <pre>L115  class TodoManager:
+L116      def __init__(self):
+L117          self.items: list[dict] = []
+L119      def update(self, todos: list | str) -&gt; str:</pre>
+    <p>
+      <code>class</code> 定义一张对象模板，<code>__init__</code> 在创建实例时执行。
+      <code>self.items</code> 是这个实例自己的状态格子；<code>list[dict]</code>
+      是类型标注，表达“预期是一个由字典组成的列表”，默认不会在运行时替你检查。
+      <code>list | str</code> 是联合类型，表示调用方可以给已经解析好的列表，
+      也可以给一段字符串。
+    </p>
+    <p class="src">
+      真实定义：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:115">code.py L115–119</a>。
+      “类型标注默认不等于运行时验证”可回看 0009；本课的真正检查从 L120 开始。
+    </p>
+
+    <h4>2.1 字符串输入先尝试 JSON，再尝试 Python 字面量</h4>
+    <pre>L120  if isinstance(todos, str):
+L121      try:
+L122          todos = json.loads(todos)
+L123      except json.JSONDecodeError:
+L124          try:
+L125              todos = ast.literal_eval(todos)
+L126          except (SyntaxError, ValueError) as e:
+L127              raise ValueError(
+L128                  "todos must be a list or JSON array string"
+L129              ) from e</pre>
+    <p class="src">
+      源码行号：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:120">L120–129</a>。
+    </p>
+    <p>
+      逐行拆开：
+    </p>
+    <ol>
+      <li>
+        <code>isinstance(todos, str)</code> 问“这个值是不是字符串？”。
+        如果模型 SDK 已经给了 Python 列表，就跳过解析；只有字符串才进入这段。
+      </li>
+      <li>
+        <code>json.loads</code> 把 JSON 文本转换成 Python 对象。比如
+        <code>'[{"content":"读文件","status":"pending"}]'</code> 会变成列表。
+        这里的 <code>loads</code> 中的 s 表示 string；它读的是字符串，不是文件路径。
+      </li>
+      <li>
+        如果文本不是合法 JSON，<code>json.loads</code> 抛出
+        <code>JSONDecodeError</code>，程序进入第二个 <code>try</code>。
+      </li>
+      <li>
+        <code>ast.literal_eval</code> 只解析 Python 字面量，例如单引号字典、列表、数字、
+        <code>True</code>、<code>None</code>；它不会像 <code>eval</code> 一样把任意字符串当成可执行代码。
+      </li>
+      <li>
+        两种解析都失败时，代码用 <code>raise ValueError(...) from e</code> 把底层解析失败改写成
+        对调用方更有意义的“todos 必须是列表或 JSON 数组字符串”，同时保留原因链。
+      </li>
+    </ol>
+    <p>
+      为什么 schema 明明要求数组，还要接受字符串？因为 schema 是给模型的契约，
+      而 handler 仍处在不可信输入边界：实际调用可能来自测试、手写请求或格式不完全正确的模型输出。
+      这段兼容逻辑让代码能处理两种文本表示，但后面仍会检查解析结果是不是列表。
+    </p>
+    <table>
+      <tr><th>文本</th><th>谁能解析</th><th>结果</th></tr>
+      <tr>
+        <td><code>'[{"content":"读","status":"pending"}]'</code></td>
+        <td><code>json.loads</code></td>
+        <td>合法 JSON；双引号、JSON 数组</td>
+      </tr>
+      <tr>
+        <td><code>"[{'content': '读', 'status': 'pending'}]"</code></td>
+        <td><code>ast.literal_eval</code></td>
+        <td>不是合法 JSON，但可以是 Python 字面量列表</td>
+      </tr>
+      <tr>
+        <td><code>"not a list"</code></td>
+        <td>两者都不能变成合格列表</td>
+        <td>抛出 / 返回校验错误，不更新状态</td>
+      </tr>
+    </table>
+    <p class="box">
+      <strong>安全辨析：</strong><code>eval</code> 会把字符串当 Python 表达式执行，能力可能包含函数调用；
+      <code>ast.literal_eval</code> 只接受字面量。模型输出不可信时不要用 <code>eval</code> 解析。
+      本课脚本选择 <code>json.loads</code> + <code>ast.literal_eval</code>，不是因为文本解析“天然安全”，
+      而是因为它把允许的输入范围收窄到了数据表示。
+      官方参考：
+      <a href="https://docs.python.org/3/library/ast.html#ast.literal_eval">ast.literal_eval</a>、
+      <a href="https://docs.python.org/3/library/json.html#json.loads">json.loads</a>。
+    </p>
+
+    <h4>2.2 解析之后仍然要验证顶层形状</h4>
+    <pre>L129  if not isinstance(todos, list):
+L130      raise ValueError("todos must be a list")
+L131  if len(todos) &gt; 20:
+L132      raise ValueError("Max 20 todos allowed")</pre>
+    <p class="src">
+      源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:129">L129–132</a>。
+    </p>
+    <p>
+      这里有两次不同问题的检查：
+    </p>
+    <ul>
+      <li><code>isinstance(todos, list)</code> 检查“容器是不是列表”。解析出一个字典也不行。</li>
+      <li><code>len(todos) &gt; 20</code> 检查“列表有多少项”。超过 20 项就拒绝。</li>
+    </ul>
+    <p>
+      <code>maxItems: 20</code> 也出现在 schema，但不能因此删除 L129–132：
+      schema 是“请模型按这个形状输出”，Python 校验是“即使输入已经到达 handler，
+      也不让坏数据进入 <code>TODO.items</code>”。
+    </p>
+
+    <h4>2.3 遍历每一项：<code>enumerate</code> 让错误能指出位置</h4>
+    <pre>L134  validated = []
+L135  in_progress_count = 0
+L136  for index, todo in enumerate(todos):
+L137      if not isinstance(todo, dict):
+L138          raise ValueError(f"todos[{index}] must be an object")</pre>
+    <p class="src">
+      源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:134">L134–138</a>。
+    </p>
+    <p>
+      <code>enumerate(todos)</code> 每次同时给出“从 0 开始的下标”和“当前元素”。
+      例如列表第二项的 <code>index</code> 是 1；所以错误会写成
+      <code>todos[1]</code>，方便定位。<code>todo</code> 应该是字典，
+      因为后面要用 <code>todo.get(...)</code> 读它的字段。
+    </p>
+    <p>
+      <code>validated</code> 是新的干净列表；<code>in_progress_count</code> 是遍历过程中的计数器。
+      它们都不是 <code>self.items</code>，所以在整批校验结束前不会污染旧状态。
+    </p>
+
+    <h4>2.4 读取字段、做轻量归一化</h4>
+    <pre>L140  content = str(todo.get("content", "")).strip()
+L141  status = str(todo.get("status", "pending")).lower()
+L142  if not content:
+L143      raise ValueError(f"todos[{index}] requires content")
+L144  if status not in ("pending", "in_progress", "completed"):
+L145      raise ValueError(f"todos[{index}] has invalid status '{status}'")
+L146  if status == "in_progress":
+L147      in_progress_count += 1
+L148  validated.append({"content": content, "status": status})</pre>
+    <p class="src">
+      源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:140">L140–148</a>。
+    </p>
+    <ol>
+      <li>
+        <code>todo.get("content", "")</code> 读取 content；键不存在时先得到空字符串。
+        外层 <code>str(...)</code> 把值转成字符串，<code>strip()</code> 去掉首尾空白。
+        因此 <code>"   "</code> 最后会变成空字符串。
+      </li>
+      <li>
+        <code>todo.get("status", "pending")</code> 缺 status 时默认 pending；
+        <code>lower()</code> 把 <code>"IN_PROGRESS"</code> 归一成
+        <code>"in_progress"</code>。
+      </li>
+      <li>
+        <code>if not content</code> 拒绝空内容。它检查的是归一化后的结果，不是原始空格字符串。
+      </li>
+      <li>
+        <code>status not in (...)</code> 是白名单检查：只允许三个精确值。
+        这不是 Python 的 Enum 类，而是元组成员判断。
+      </li>
+      <li>
+        每遇到一个 <code>in_progress</code> 就把计数加一；先把规范化后的两个字段放入
+        <code>validated</code>，额外字段不会被保留。
+      </li>
+    </ol>
+    <p>
+      有一个值得记录的边界：schema 把 <code>content</code> 声明为字符串，
+      但 Python 代码使用 <code>str(...)</code> 转换，因此直接调用
+      <code>TodoManager.update([{"content": 123, "status": "pending"}])</code>
+      时，教学实现可能接受它并保存成字符串 <code>"123"</code>。这说明“schema 的声明”
+      和“运行时实现的实际规则”并非自动完全一致；读代码时以真正执行的 Python 为准。
+
+    <h4>2.5 最后一条全局规则：最多一个进行中项目</h4>
+    <pre>L150  if in_progress_count &gt; 1:
+L151      raise ValueError("Only one todo can be in_progress at a time")
+L153  self.items = validated
+L154  return self.render()</pre>
+    <p class="src">
+      源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:150">L150–154</a>。
+    </p>
+    <p>
+      这一条不能放在每一项的局部检查里简单解决，因为它比较的是<strong>整批列表</strong>：
+      前面遍历完才知道总共有几个 <code>in_progress</code>。
+      如果数量超过 1，就抛出错误；只有数量不超过 1 时，L153 才替换状态。
+    </p>
+
+    <h3>模块三：<code>render</code> 把机器状态变成人能读的观察</h3>
+    <p>
+      <code>update</code> 校验并保存的是结构化列表，但模型和终端都需要看到文字。
+      <code>render</code> 专门负责这个转换：
+    </p>
+    <pre>L156  def render(self) -&gt; str:
+L157      if not self.items:
+L158          return "No todos."
+L160      lines = []
+L161      for todo in self.items:
+L162          marker = {
+L163              "pending": "[ ]",
+L164              "in_progress": "[&gt;]",
+L165              "completed": "[x]",
+L166          }[todo["status"]]
+L167          lines.append(f"{marker} {todo['content']}")
+L169      done = sum(todo["status"] == "completed" for todo in self.items)
+L170      lines.append(f"\n({done}/{len(self.items)} completed)")
+L171      return "\n".join(lines)</pre>
+    <p class="src">
+      源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:156">L156–171</a>。
+    </p>
+    <p>逐段读：</p>
+    <ol>
+      <li>
+        L157–158 处理空列表，返回固定文本。这里的 <code>return</code> 会提前结束方法，
+        所以下面不会对空列表做循环。
+      </li>
+      <li>
+        L160 创建一个空列表 <code>lines</code>，L161 逐项遍历当前状态。
+      </li>
+      <li>
+        L162–166 是一个“状态字符串 → 显示标记”的字典。通过
+        <code>...[todo["status"]]</code> 查表，得到 <code>[ ]</code>、<code>[&gt;]</code> 或
+        <code>[x]</code>。因为 L144 已经保证状态合法，这里可以直接用方括号取值。
+      </li>
+      <li>
+        L167 把标记和内容拼成一行，追加到 <code>lines</code>。
+      </li>
+      <li>
+        L169 的比较表达式对每项产生 <code>True</code> 或 <code>False</code>；
+        <code>sum</code> 会把真值按 1 计、假值按 0 计，所以得到已完成数量。
+      </li>
+      <li>
+        L170 追加总数，L171 用换行符把多行列表拼成一个字符串。
+      </li>
+    </ol>
+    <div class="box">
+      <p><strong>语法框：字典后面接 <code>[]</code> 是什么意思？</strong></p>
+      <p>
+        L162–166 里，字典字面量后面直接写了 <code>[todo["status"]]</code>。
+        这里的 <code>[]</code> <strong>不是新建列表</strong>，也不是切片，而是<strong>按键查表取值</strong>。
+      </p>
+      <pre>本例 L1  # 拆开写，两步一样：
+本例 L2  table = {
+本例 L3      "pending": "[ ]",
+本例 L4      "in_progress": "[&gt;]",
+本例 L5      "completed": "[x]",
+本例 L6  }
+本例 L7  marker = table[todo["status"]]
+本例 L8
+本例 L9  # 源码把两步合成一行：
+本例 L10 marker = {
+本例 L11     "pending": "[ ]",
+本例 L12     "in_progress": "[&gt;]",
+本例 L13     "completed": "[x]",
+本例 L14 }[todo["status"]]</pre>
+      <p>
+        若 <code>todo["status"]</code> 是 <code>"completed"</code>，就相当于：
+      </p>
+      <pre>marker = { ... }["completed"]   # → "[x]"</pre>
+      <p>
+        注意同一行里有两层 <code>[]</code>，问的是不同的东西：
+      </p>
+      <table>
+        <tr><th>写法</th><th>在问什么</th></tr>
+        <tr>
+          <td><code>todo["status"]</code></td>
+          <td>从这一项字典里取出状态字符串</td>
+        </tr>
+        <tr>
+          <td><code>{...}[todo["status"]]</code></td>
+          <td>用这个状态字符串，从对照表里取出显示标记</td>
+        </tr>
+      </table>
+      <p>
+        键不存在会报 <code>KeyError</code>。本课前面
+        <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:144">L144</a>
+        已保证 status 只能是三个允许值，所以这里可以直接查表。
+      </p>
+    </div>
+    <p>
+      <code>render</code> 只负责“读状态并生成文本”，不修改 <code>self.items</code>。
+      这让 <code>run_todo_write</code> 可以同时把同一份结果打印给人、返回给模型。
+    </p>
+
+    <h3>模块四：<code>run_todo_write</code> 把状态管理接到工具边界</h3>
+    <pre>L174  TODO = TodoManager()
+L177  def run_todo_write(todos: list | str) -&gt; str:
+L178      try:
+L179          output = TODO.update(todos)
+L180      except ValueError as e:
+L181          return f"Error: {e}"
+L182      print(f"\n\033[33m## Current Tasks\033[0m\n{output}")
+L183      return output</pre>
+    <p class="src">
+      源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:174">L174–183</a>。
+    </p>
+    <p>
+      这里出现两个不同的输出通道：
+    </p>
+    <table>
+      <tr><th>代码</th><th>送给谁</th><th>例子</th></tr>
+      <tr>
+        <td><code>print(...)</code></td>
+        <td>运行脚本的人，在终端看</td>
+        <td><code>## Current Tasks</code> 和清单</td>
+      </tr>
+      <tr>
+        <td><code>return output</code></td>
+        <td>dispatch / agent loop，再包装成 tool_result 给模型</td>
+        <td><code>[ ] 阅读实现...</code></td>
+      </tr>
+      <tr>
+        <td><code>return f"Error: {e}"</code></td>
+        <td>模型看到的错误观察</td>
+        <td><code>Error: Max 20 todos allowed</code></td>
+      </tr>
+    </table>
+    <p>
+      如果校验失败，L180 捕获的是具体的 <code>ValueError</code>，L181 返回错误字符串，
+      所以这次调用不会把异常直接炸出 Agent loop。更重要的是，因为失败发生在
+      <code>self.items = validated</code> 之前，旧计划仍保留。
+      <code>run_todo_write</code> 没有捕获所有异常；这不是“所有错误都应该吞掉”，
+      而是本课把预期的输入校验错误翻译成模型可读的工具观察。
+    </p>
+
+    <h3>模块五：从 schema 到真正执行，新增工具需要两处接线</h3>
+    <p>
+      s02 已经建立一个规则：工具要有给模型看的 schema，也要有给 Harness 执行的 handler。
+      s05 对 <code>todo_write</code> 仍然遵循同一规则。
+    </p>
+    <h4>8.1 schema：描述模型应该怎么调用</h4>
+    <pre>示意 L1  {
+示意 L2      "name": "todo_write",
+示意 L3      "description": "Create and manage a task list for your current coding session.",
+示意 L4      "input_schema": {
+示意 L5          "type": "object",
+示意 L6          "properties": {
+示意 L7              "todos": {
+示意 L8                  "type": "array",
+示意 L9                  "maxItems": 20,
+示意 L10                 "items": {
+示意 L11                     "type": "object",
+示意 L12                     "properties": {
+示意 L13                         "content": {"type": "string", "minLength": 1},
+示意 L14                         "status": {
+示意 L15                             "type": "string",
+示意 L16                             "enum": ["pending", "in_progress", "completed"]
+示意 L17                         }
+示意 L18                     },
+示意 L19                     "required": ["content", "status"]
+示意 L20                 }
+示意 L21             }
+示意 L22         }
+示意 L23     },
+示意 L24     "required": ["todos"]
+示意 L25 }</pre>
+    <p class="src">
+      为了便于阅读，上面把 North 的一行很长的字典换了排版；“示意 L1–25”是本段的阅读行号，
+      实际源码行号对应：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:196">code.py L196–199</a>。
+    </p>
+    <p>
+      第一次看到这些 schema 约束时，先把它们翻译成人话：
+    </p>
+    <ul>
+      <li><code>name</code> 是模型调用时写的工具名，必须能在 dispatch map 找到。</li>
+      <li><code>type: "array"</code> 表示 <code>todos</code> 应该是列表；<code>maxItems: 20</code> 表示最多 20 项。</li>
+      <li><code>items.type: "object"</code> 表示列表的每一项应该是对象，在 Python 里通常落成字典。</li>
+      <li><code>minLength: 1</code> 表示 content 至少有一个字符；实际 handler 还会 <code>strip</code> 后再检查。</li>
+      <li><code>enum</code> 是允许值列表，不是“把字符串自动变成 Python Enum”。</li>
+      <li><code>required</code> 表示调用形状里必须出现这些键；它不是对文件执行的权限。</li>
+    </ul>
+    <p>
+      不要把 schema 想成已经执行的校验函数。它是一份契约 / 说明；
+      真正把值写进 <code>TODO.items</code> 前，L129–151 的 Python 仍要再检查一遍。
+      甚至两者有细微差异：schema 要求 content 是字符串，当前 Python 实现却会对它调用
+      <code>str(...)</code>。这是读 Agent harness 时要建立的习惯：声明层和执行层都要看。
+    </p>
+
+    <h4>8.2 dispatch map：把工具名接到函数对象</h4>
+    <pre>L201  TOOL_HANDLERS = {
+L202      "bash": run_bash, "read_file": run_read, "write_file": run_write,
+L203      "edit_file": run_edit, "glob": run_glob, "todo_write": run_todo_write,
+L204  }</pre>
+    <p class="src">
+      源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:201">L201–204</a>。
+    </p>
+    <p>
+      <code>"todo_write"</code> 是键，<code>run_todo_write</code> 是函数对象。
+      注册时没有写 <code>run_todo_write()</code>，因为这里要保存“以后调用的函数”，
+      不是现在就更新一次空计划。这与 0022 的 <code>TOOL_HANDLERS</code> 和 0024 的
+      callback 注册是同一条 Python 规则。
+    </p>
+    <p>
+      真正 dispatch 的位置仍在 agent loop：
+    </p>
+    <pre>L320  handler = TOOL_HANDLERS.get(block.name)
+L321  try:
+L322      output = handler(**block.input) if handler else f"Unknown: {block.name}"
+L323  except Exception as e:
+L324      output = f"Error: {e}"</pre>
+    <p class="src">
+      源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:320">L320–324</a>。
+    </p>
+    <p>
+      如果模型返回的 <code>block.name</code> 是 <code>"todo_write"</code>，
+      L320 取出 <code>run_todo_write</code>；如果
+      <code>block.input</code> 是 <code>{"todos": [...]}</code>，
+      <code>handler(**block.input)</code> 等价于
+      <code>run_todo_write(todos=[...])</code>。<code>**</code> 是把字典键值拆成关键字参数，
+      不是把 TODO 列表展开成多个项目。
+    </p>
+
+    <h3>模块六：agent_loop 的 reminder 计数器</h3>
+    <p>
+      这是本课第二条主线。先看完整的新增部分：
+    </p>
+    <pre>L292  def agent_loop(messages: list):
+L293      rounds_since_todo = 0
+L294      while True:
+L295          response = client.messages.create(
+L296              model=MODEL, system=SYSTEM, messages=messages,
+L297              tools=TOOLS, max_tokens=8000,
+L298          )
+L299          messages.append({"role": "assistant", "content": response.content})
+L301          tool_calls = [
+L302              block for block in response.content if block.type == "tool_use"
+L303          ]
+L304          if not tool_calls:
+L305              force = trigger_hooks("Stop", messages)
+L306              if force:
+L307                  messages.append({"role": "user", "content": force})
+L308                  continue
+L309              return
+L311          results = []
+L312          used_todo = False
+L313          for block in tool_calls:
+L314              blocked = trigger_hooks("PreToolUse", block)
+L315              if blocked:
+L316                  results.append({"type": "tool_result", "tool_use_id": block.id,
+L317                                  "content": str(blocked)})
+L318                  continue
+L320              handler = TOOL_HANDLERS.get(block.name)
+L321              try:
+L322                  output = handler(**block.input) if handler else f"Unknown: {block.name}"
+L323              except Exception as e:
+L324                  output = f"Error: {e}"
+L326              trigger_hooks("PostToolUse", block, output)
+L328              if block.name == "todo_write":
+L329                  used_todo = True
+L331              results.append({"type": "tool_result", "tool_use_id": block.id,
+L332                              "content": str(output)})
+L334          rounds_since_todo = 0 if used_todo else rounds_since_todo + 1
+L335          if rounds_since_todo &gt;= 3:
+L336              results.append({"type": "text",
+L337                              "text": "&lt;reminder&gt;Update your todos.&lt;/reminder&gt;"})
+L338              rounds_since_todo = 0
+L340          messages.append({"role": "user", "content": results})</pre>
+    <p class="src">
+      源码分段：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:292">L292–340</a>。
+    </p>
+
+    <h4>6.1 先分清两个层次：tool call 和 tool-call round</h4>
+    <p>
+      <strong>tool call</strong> 是一个 <code>block</code>，例如一个 <code>read_file</code>；
+      <strong>tool-call round</strong> 是模型的一次回复里，只要筛出了至少一个
+      <code>tool_use</code> 块，整个 <code>for block in tool_calls</code> 处理过程就算一轮。
+      因此：
+    </p>
+    <table>
+      <tr><th>本轮模型返回</th><th><code>used_todo</code></th><th>计数变化</th></tr>
+      <tr>
+        <td>一个 <code>read_file</code></td>
+        <td><code>False</code></td>
+        <td>加 1</td>
+      </tr>
+      <tr>
+        <td>三个工具：<code>glob</code>、<code>read_file</code>、<code>bash</code></td>
+        <td><code>False</code></td>
+        <td>仍只加 1，不是加 3</td>
+      </tr>
+      <tr>
+        <td>两个工具：<code>todo_write</code>、<code>edit_file</code></td>
+        <td><code>True</code></td>
+        <td>清零，不管本轮还有几个其他工具</td>
+      </tr>
+      <tr>
+        <td>模型只返回文本，没有 tool_use</td>
+        <td>不会走计数段</td>
+        <td>先触发 Stop，再退出或按 Stop hook 继续</td>
+      </tr>
+    </table>
+    <p>
+      L328–329 在处理每一个 block 时检查工具名；只要同一轮某个 block 的名字是
+      <code>todo_write</code>，本轮就算使用过 TODO。L334 在整轮的所有 block 都处理完后，
+      才更新计数器。
+    </p>
+
+    <h4>6.2 三轮的具体演算</h4>
+    <p>假设一次用户请求进入 <code>agent_loop</code> 时计数是 0：</p>
+    <table>
+      <tr><th>轮次</th><th>tool_calls</th><th>计算</th><th>结果</th></tr>
+      <tr>
+        <td>第 1 轮</td>
+        <td><code>[glob]</code></td>
+        <td><code>0 + 1</code></td>
+        <td><code>rounds_since_todo = 1</code></td>
+      </tr>
+      <tr>
+        <td>第 2 轮</td>
+        <td><code>[read_file, bash]</code></td>
+        <td>本轮仍没有 todo → <code>1 + 1</code></td>
+        <td><code>rounds_since_todo = 2</code></td>
+      </tr>
+      <tr>
+        <td>第 3 轮</td>
+        <td><code>[edit_file]</code></td>
+        <td>本轮仍没有 todo → <code>2 + 1</code></td>
+        <td>追加 reminder，然后清零</td>
+      </tr>
+      <tr>
+        <td>第 4 轮</td>
+        <td><code>[todo_write, bash]</code></td>
+        <td>本轮使用过 todo → 直接清零</td>
+        <td><code>rounds_since_todo = 0</code></td>
+      </tr>
+    </table>
+    <p>
+      reminder 的真实结构是：
+    </p>
+    <pre>{
+    "type": "text",
+    "text": "&lt;reminder&gt;Update your todos.&lt;/reminder&gt;"
+}</pre>
+    <p>
+      它追加到了与工具结果相同的 <code>results</code> 列表，随后作为一条
+      <code>role: user</code> 消息进入 <code>messages</code>。它不是某个
+      <code>tool_use_id</code> 对应的 <code>tool_result</code>，也不是 Messages API
+      的特殊顶层字段，而是一块额外的文本观察。
+    </p>
+
+    <h4>6.3 reminder 是提醒，不是强制计划</h4>
+    <p>
+      即使模型收到 <code>&lt;reminder&gt;Update your todos.&lt;/reminder&gt;</code>，
+      当前代码也没有：
+    </p>
+    <ul>
+      <li>直接替模型调用 <code>todo_write</code>；</li>
+      <li>因为模型忽略提醒就拒绝 <code>bash</code> 或文件工具；</li>
+      <li>检查 TODO 是否真的描述了用户目标；</li>
+      <li>检查 <code>completed</code> 是否有测试证据。</li>
+    </ul>
+    <p>
+      它只是一个轻量反馈。真正的强制约束要写进执行前检查；真正的完成验证要跑测试、
+      lint 或其他命令。这也回应了书第 5 章关于“测试通过而不是代码写完才算完成”的工程原则
+      <a href="cursor://file/d:/agent-learning/AI-Agents-in-Depth-md/%E7%AC%AC05%E7%AB%A0%20Coding%20Agent%20%E4%B8%8E%E9%80%9A%E7%94%A8%20Agent/%E7%AC%AC05%E7%AB%A0%20Coding%20Agent%20%E4%B8%8E%E9%80%9A%E7%94%A8%20Agent.md:120">L120–130</a>。
+    </p>
+
+    <h4>6.4 两个计数范围：TODO 状态和提醒计数不在同一层</h4>
+    <p>
+      <code>TODO</code> 在模块级创建：
+    </p>
+    <pre>L174  TODO = TodoManager()</pre>
+    <p>
+      所以只要 Python 进程不退出，多个用户 prompt 的 <code>agent_loop</code> 都会看到同一个
+      <code>TODO.items</code>。但是提醒计数器写在函数内部：
+    </p>
+    <pre>L292  def agent_loop(messages: list):
+L293      rounds_since_todo = 0</pre>
+    <p>
+      每次外层 REPL 收到新的用户输入、再次调用 <code>agent_loop(history)</code> 时，
+      计数器重新从 0 开始。于是当前实现的准确说法是：
+      <strong>三轮提醒只在一次用户请求对应的一次 agent_loop 内连续计算；TODO 列表则在同一进程内保留。</strong>
+      不要把它误称成跨会话持久化计划。
+    </p>
+
+    <h2>最后回到主脚本：按真实调用顺序复盘</h2>
+    <p>
+      前面已经分别读过六个模块；这一节只把它们重新串成源码中的实际顺序。
+      它是“带着地图回到代码”，不是第一次介绍模块，因此可以用来核对自己是否真的读懂：
+      SYSTEM 给模型建议，TodoManager 管状态，schema / map 接工具，
+      hooks 包住执行，agent_loop 负责往返，REPL 负责下一次用户输入。
+    </p>
+    <p>
+      旧工具和 s04 hooks 的完整实现仍在脚本
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:58">L58–287</a>；
+      本课只在它们与 <code>todo_write</code> 的接线处复核。
+    </p>
+
+    <h3>10.1 SYSTEM 的作用：建议先计划，不是程序强制</h3>
+    <pre>L50  SYSTEM = (
+L51      f"You are a coding agent at {WORKDIR}. "
+L52      "Before starting any multi-step task, use todo_write to plan your steps. "
+L53      "Update status as you go."
+L54  )</pre>
+    <p class="src">
+      源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:50">L50–54</a>。
+    </p>
+    <p>
+      这三句话会作为 system 前缀发给模型：
+    </p>
+    <ol>
+      <li>告诉模型自己处在什么工作目录。</li>
+      <li>建议多步任务开始前调用 <code>todo_write</code>。</li>
+      <li>建议执行过程中同步状态。</li>
+    </ol>
+    <p>
+      但提示词不是权限管线。模型可能不遵守，Harness 才用 L334–337 的 reminder
+      轻轻提醒；本课没有在 PreToolUse 里写“没有 TODO 就拒绝所有其他工具”的硬规则。
+      这正是“指导”和“约束”的差别。
+    </p>
+
+    <h4>10.2 一次计划调用的真实顺序</h4>
+    <p>假设模型返回一个 <code>todo_write</code> block，顺序是：</p>
+    <ol>
+      <li>
+        L301–303 从 <code>response.content</code> 找出 <code>tool_use</code>，得到
+        <code>tool_calls</code>。
+      </li>
+      <li>
+        L314 调用 s04 的 <code>trigger_hooks("PreToolUse", block)</code>。
+        权限 hook 对 <code>todo_write</code> 不命中文件或 bash 规则，返回 <code>None</code>；
+        日志 hook 随后打印工具调用。
+      </li>
+      <li>
+        L320 按 <code>block.name</code> 查到 <code>run_todo_write</code>，L322 用
+        <code>**block.input</code> 传入 <code>todos</code>。
+      </li>
+      <li>
+        <code>TodoManager.update</code> 解析、校验、替换并渲染；终端看到
+        <code>## Current Tasks</code>。
+      </li>
+      <li>
+        L326 触发 PostToolUse；L328–329 把 <code>used_todo</code> 设成真。
+      </li>
+      <li>
+        L331–332 用相同的 <code>block.id</code> 回填一个 <code>tool_result</code>；
+        下一轮模型才能看到计划文本。
+      </li>
+    </ol>
+    <p>
+      计划文本进入了 <code>messages</code>，但它仍然是 tool_result 观察；真正的权威状态格子是
+      <code>TODO.items</code>。二者通常一致，但概念上不要把“模型看见的字符串”和“内存对象”混成一个东西。
+    </p>
+
+    <h4>10.3 一轮里同时有 todo 和其他工具怎么办？</h4>
+    <p>
+      Messages API 一次回复可以包含多个 <code>tool_use</code> block；本教学脚本仍按列表顺序串行处理。
+      例如：
+    </p>
+    <pre>tool_calls = [
+    todo_write(...),
+    read_file(...),
+    edit_file(...),
+]</pre>
+    <p>
+      实际顺序是：
+      Pre hook → todo handler → Post hook →
+      Pre hook → read handler → Post hook →
+      Pre hook → edit handler → Post hook；
+      三个结果都追加到 <code>results</code>，最后一起回填。
+      因为其中出现了 <code>todo_write</code>，这一轮的 <code>used_todo</code> 为真，
+      不会增加 reminder 计数。
+    </p>
+    <p>
+      这并不表示 TodoManager 会“自动包住”另外两个工具，也不表示工具并发执行。
+      TODO 只是列表中的一个 block；调度、权限、执行和结果回填仍然是各自独立的步骤。
+    </p>
+
+    <h2>综合演练：从输入推导到结果</h2>
+    <p>
+      现在把前面六个模块合起来。下面的案例不再引入新概念，
+      只练习从一个输入预测：哪个模块先运行、哪个状态会改变、模型会收到什么观察。
+    </p>
+
+    <h3>案例一：首次计划，状态从空变成三项</h3>
+    <ol>
+      <li>用户要求一个多步重构任务。</li>
+      <li>模型第一次返回 <code>todo_write</code>，三个项目都是 <code>pending</code>。</li>
+      <li>PreToolUse 放行，dispatch 找到 <code>run_todo_write</code>。</li>
+      <li>TodoManager 通过所有校验，L153 用新列表替换空的 <code>TODO.items</code>。</li>
+      <li>工具结果把渲染文本送回模型；模型现在可以决定先做哪一项。</li>
+    </ol>
+    <p>
+      这次调用没有创建任何文件。若终端出现 <code>## Current Tasks</code>，
+      那是 <code>print</code>；模型能否继续看到清单，靠的是返回值被包装成 tool_result。
+    </p>
+
+    <h3>案例二：更新第二项时只发送一项，清单被缩短</h3>
+    <p>
+      旧状态有三项，模型只发送
+      <code>[{"content": "修改代码", "status": "completed"}]</code>。
+      校验会通过，L153 会忠实执行整体替换，因此新状态只有这一项。
+      这不是脚本“丢数据”的随机 bug，而是当前协议的明确定义：更新输入是完整快照。
+    </p>
+
+    <h3>案例三：两项同时 <code>in_progress</code>，旧状态保持</h3>
+    <p>
+      假设旧状态是“阅读实现 completed、修改代码 in_progress”。新输入把
+      “运行测试”也写成 <code>in_progress</code>。遍历会把计数加到 2，L150–151 抛出
+      <code>ValueError</code>；<code>self.items = validated</code> 没有执行。
+      <code>run_todo_write</code> 返回 <code>Error: Only one todo...</code>，
+      循环把它作为 tool_result 回填。旧计划仍然是“一个进行中”。
+    </p>
+
+    <h3>案例四：三轮只做工具，提醒进入结果批次</h3>
+    <p>
+      模型连续三轮分别调用 <code>glob</code>、<code>read_file</code>、<code>edit_file</code>，
+      每轮都没有 <code>todo_write</code>。第三轮处理完工具后：
+    </p>
+    <ol>
+      <li><code>rounds_since_todo</code> 从 2 变成 3。</li>
+      <li>代码把一个 <code>{"type": "text", ...}</code> 追加到 results。</li>
+      <li>计数清零。</li>
+      <li>工具结果和 reminder 一起作为 user 消息追加给模型。</li>
+    </ol>
+    <p>
+      模型收到后可能更新 TODO，也可能继续调用工具；脚本只提供反馈，不替它做决定。
+    </p>
+
+    <h3>案例五：调用内容无效，但计数口径仍按“用了工具名”处理</h3>
+    <p>
+      这是一处要以源码为准的细节。若模型调用了 <code>todo_write</code>，但列表超过 20 项，
+      <code>run_todo_write</code> 会返回 Error。可是 L328–329 的判断只看
+      <code>block.name == "todo_write"</code>，不看 output 是否以
+      <code>Error:</code> 开头。因此这一轮仍把 <code>used_todo</code> 设为真，提醒计数清零。
+    </p>
+    <p>
+      这意味着“调用过计划工具”和“计划成功更新”是两个不同事实。生产实现若需要只在
+      成功更新后清零，应把 <code>used_todo = True</code> 放到成功结果判定之后；
+      North s05 的教学代码没有这样做，本课不擅自修改它。
+    </p>
+
+    <h2>相对 s04，究竟增加了什么？</h2>
+    <table>
+      <tr><th>位置</th><th>s04</th><th>s05</th><th>要记住的变化</th></tr>
+      <tr>
+        <td>工具数量</td>
+        <td>bash、read、write、edit、glob 五个</td>
+        <td>增加 <code>todo_write</code>，共六个</td>
+        <td>新增的是规划状态工具，不是第六种文件执行方式</td>
+      </tr>
+      <tr>
+        <td>状态</td>
+        <td>主要状态在 <code>messages</code> 和工作区</td>
+        <td>增加进程内 <code>TODO.items</code></td>
+        <td>TODO 不落盘，重启进程会清空</td>
+      </tr>
+      <tr>
+        <td>system 提示</td>
+        <td>通用 coding agent 提示</td>
+        <td>建议多步任务先计划并更新状态</td>
+        <td>提示是引导，不是硬约束</td>
+      </tr>
+      <tr>
+        <td>hooks</td>
+        <td>四个事件和 callback</td>
+        <td>原样保留</td>
+        <td>todo_write 也会先过 Pre、再过 Post</td>
+      </tr>
+      <tr>
+        <td>循环</td>
+        <td>工具结果回填后继续</td>
+        <td>增加 <code>used_todo</code> 和三轮 reminder</td>
+        <td>提醒附加在结果批次中，不改变 tool_result 配对</td>
+      </tr>
+    </table>
+    <p class="src">
+      North 的变更表：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/README.zh.md:114">README L114–121</a>。
+    </p>
+
+    <h2>动手：真跑 North s05</h2>
+    <p>
+      沿用 North 仓库的虚拟环境和 <code>.env</code>。从 North 仓库根目录启动，
+      这样 <code>WORKDIR = Path.cwd()</code> 才是练习仓库根；不要把 API key 贴到聊天里。
+    </p>
+    <pre>cd D:\agent-learning\learn-claude-code-north
+.\.venv\Scripts\Activate.ps1
+python s05_todo_write\code.py</pre>
+    <p class="src">
+      这是 README 的试运行入口
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/README.zh.md:125">L125–130</a>；
+      Windows 路径分隔符只影响终端命令，Python 工具收到的相对路径仍按当前工作目录解释。
+    </p>
+
+    <h3>第一轮：先观察计划工具，不修改文件</h3>
+    <p>先发一个只读的多步任务，观察模型是否先列计划：</p>
+    <pre>Read s05_todo_write/example/hello.py and explain what would be needed to add type hints, docstrings, and a main guard. Do not modify files.</pre>
+    <ol>
+      <li>终端先出现 UserPromptSubmit 和 PreToolUse 的 hook 日志。</li>
+      <li>
+        SYSTEM 只是建议先计划；观察模型是否遵循建议，把
+        <code>todo_write</code> 放在第一批工具调用中。即使它直接调用
+        <code>read_file</code>，当前代码也不会因此拦截。
+      </li>
+      <li>你应看到 <code>## Current Tasks</code>，并在模型回复的观察中看到同一份清单。</li>
+      <li>之后模型可能调用 <code>read_file</code>；因为请求明确只读，不应写文件。</li>
+    </ol>
+
+    <h3>第二轮：观察状态更新与真实执行分离</h3>
+    <p>
+      North README 给的可运行例子是：
+    </p>
+    <pre>Refactor s05_todo_write/example/hello.py: add type hints, docstrings, and a main guard</pre>
+    <p>
+      这个任务会修改 North 子仓库里的示例文件。运行前确认你接受这次本地教学改动；
+      完成后可以查看 <code>git diff</code>，必要时由你自己决定是否保留。
+      观察重点不是文件内容本身，而是：
+    </p>
+    <ul>
+      <li>模型是否遵循 SYSTEM 建议，把 <code>todo_write</code> 作为第一次工具调用；</li>
+      <li>计划是否先全是 <code>pending</code>；</li>
+      <li>执行过程中是否重新调用 <code>todo_write</code> 把某一步改成 <code>in_progress</code>；</li>
+      <li>代码修改由 <code>edit_file</code> / <code>write_file</code> 完成，而不是由 <code>todo_write</code> 完成；</li>
+      <li>测试或检查之后，模型是否把对应项目更新为 <code>completed</code>。</li>
+    </ul>
+
+    <h3>第三轮：主动制造安全的 reminder 场景</h3>
+    <p>
+      对一个会读多个文件、执行检查的任务，观察连续三轮没有 TODO 时是否出现：
+    </p>
+    <pre>&lt;reminder&gt;Update your todos.&lt;/reminder&gt;</pre>
+    <p>
+      reminder 是否出现取决于模型一次回复如何分批调用工具，不能把“你发了一次 prompt”
+      直接等同于“一轮”。如果模型一轮同时调用很多工具，计数仍只加一；如果它很快结束，
+      也可能根本不到三轮。
+    </p>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li>
+          <strong><code>todo_write</code> 会创建文件：</strong>错。它只更新内存里的
+          <code>TODO.items</code>，文件副作用来自 <code>write_file</code>、
+          <code>edit_file</code> 或 <code>bash</code>。
+        </li>
+        <li>
+          <strong>模型调用一次 TODO 就会自动完成第一项：</strong>错。工具只保存模型发送的
+          <code>status</code>；不会替模型跑动作，也不会自动迁移状态。
+        </li>
+        <li>
+          <strong><code>update</code> 是给列表追加一项：</strong>错。L153 用完整的
+          <code>validated</code> 替换 <code>self.items</code>；每次应发送更新后的全量列表。
+        </li>
+        <li>
+          <strong>两个 <code>in_progress</code> 会保留前一个并接受后一个：</strong>错。
+          L150–151 先拒绝整批，旧状态不会被 L153 替换。
+        </li>
+        <li>
+          <strong>只有恰好一项 <code>in_progress</code> 才合法：</strong>错。代码限制的是最多一个；
+          全部 <code>pending</code> 或全部 <code>completed</code> 也通过。
+        </li>
+        <li>
+          <strong>schema 已经校验完，所以 <code>TodoManager</code> 不需要检查：</strong>错。
+          schema 是给模型的输入契约，L129–151 是真正写入进程状态前的运行时保护。
+        </li>
+        <li>
+          <strong>写了 <code>minLength: 1</code> 就一定拒绝数字 content：</strong>不一定。
+          当前 Python 实现先 <code>str(...)</code>，直接调用 handler 时数字可能被转成字符串；
+          要以执行代码而不是只看 schema 判定边界。
+        </li>
+        <li>
+          <strong><code>eval</code> 和 <code>ast.literal_eval</code> 只是两种写法：</strong>错。
+          <code>eval</code> 可执行任意表达式，模型文本不能交给它；本课只用 JSON 解析和字面量解析。
+        </li>
+        <li>
+          <strong>三轮 reminder 是三个 tool call：</strong>错。它是三个含有一个或多个
+          <code>tool_use</code> 的模型回复轮次；一轮含三个工具仍只计一轮。
+        </li>
+        <li>
+          <strong>三轮是跨整个交互会话计算：</strong>当前实现不是。计数器在
+          <code>agent_loop</code> 内，每个新用户 prompt 重新从 0；<code>TODO.items</code>
+          在同一进程内却会保留。
+        </li>
+        <li>
+          <strong>reminder 出现就会强制模型更新计划：</strong>错。它只是附加的
+          <code>type: text</code> 观察；当前代码没有拒绝后续工具的闸门。
+        </li>
+        <li>
+          <strong>模型把项目写成 completed 就等于测试通过：</strong>错。
+          completed 是计划字段；测试、lint、类型检查等验证仍要由工具执行并观察结果。
+        </li>
+        <li>
+          <strong>TODO 是跨重启的长期记忆：</strong>错。<code>TODO = TodoManager()</code>
+          只创建进程内实例；脚本结束后它的列表不会自动落盘。
+        </li>
+        <li>
+          <strong>调用了无效的 todo_write 就一定会继续提醒：</strong>不一定。
+          当前 L328–329 只看工具名，不看 output 是否为 Error；无效调用也会把
+          <code>used_todo</code> 设为真并清零提醒计数。
+        </li>
+        <li>
+          <strong>s05 把 s04 的 hook / 权限 / tool_result 协议换掉了：</strong>错。
+          它仍先过 PreToolUse、再执行 handler、再过 PostToolUse，并用原 tool_use_id 回填结果；
+          新增的是 TODO 状态和 reminder。
+        </li>
+        <li>
+          <strong>有了 TODO 就不需要完成定义和测试：</strong>错。清单只能让步骤可见，
+          不能证明结果正确；可靠停止仍需要可运行的验证信号。
+        </li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。todo_write 只更新 TODO.items，文件动作仍由其他工具完成。"
+      data-bad="把计划状态和环境副作用分开：todo_write 不会写工作区文件。">
+      <p>调用 <code>todo_write</code> 后，当前脚本真正改变的是什么？</p>
+      <button data-correct="true">进程内的 TODO.items 状态</button>
+      <button data-correct="false">工作区里的目标源代码文件</button>
+      <button data-correct="false">操作系统里的测试执行结果</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。L153 用完整 validated 替换 self.items，update 不是 append。"
+      data-bad="请回到 L148 和 L153：每次要发送校验后的完整清单。">
+      <p>已有三项 TODO，下一次只发送一项 completed，会发生什么？</p>
+      <button data-correct="false">只给旧列表第二项追加完成标记</button>
+      <button data-correct="true">整个清单替换成这一次发送的一项</button>
+      <button data-correct="false">因为缺少其他项目而自动恢复旧清单</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。两项进行中会在 L150–151 失败，赋值尚未发生，旧状态保留。"
+      data-bad="先数 in_progress 数量，再判断是否允许替换整批状态。">
+      <p>新列表含两个 <code>in_progress</code> 项时，TodoManager 怎样处理？</p>
+      <button data-correct="false">保留最后一个并自动完成前一个</button>
+      <button data-correct="false">接受两个并把它们并行执行</button>
+      <button data-correct="true">返回校验错误且不替换旧状态</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。JSON 失败后才尝试 literal_eval；两者都失败才报 ValueError。"
+      data-bad="不要用 eval；本课允许的是 JSON 或 Python 字面量解析。">
+      <p>字符串输入的解析顺序是什么？</p>
+      <button data-correct="false">先 eval，再把结果强制转成列表</button>
+      <button data-correct="true">先 json.loads，失败后 ast.literal_eval</button>
+      <button data-correct="false">先写入文件，再让 bash 读取内容</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。schema 面向模型，L129–151 面向真正进入内存状态的输入。"
+      data-bad="声明字段不是运行时保护；handler 仍需重新验证。">
+      <p>为什么 schema 有 maxItems 后，update 还要检查 len(todos)？</p>
+      <button data-correct="true">schema 是契约，Python 检查才保护运行时状态</button>
+      <button data-correct="false">因为 maxItems 只负责把列表排序</button>
+      <button data-correct="false">因为 len 会自动调用模型再次生成列表</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。一轮按是否出现过 todo_write 判断，不按 block 数量判断。"
+      data-bad="三轮统计的是模型回复轮次；一轮多个工具仍只增加一次。">
+      <p>一轮同时调用 glob、read_file、bash，没有 todo_write，计数怎样变？</p>
+      <button data-correct="false">增加三，因为有三个工具调用</button>
+      <button data-correct="true">增加一，因为这是一个工具调用轮次</button>
+      <button data-correct="false">保持不变，因为调用了多个工具</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。任意一个 block 是 todo_write，本轮 used_todo 就为真并清零。"
+      data-bad="计数只看本轮是否出现 todo_write，不要求它是唯一工具。">
+      <p>一轮同时有 todo_write 和 edit_file，reminder 计数怎样处理？</p>
+      <button data-correct="false">按两个工具调用增加两次</button>
+      <button data-correct="false">因为还有 edit_file，所以继续增加一次</button>
+      <button data-correct="true">本轮算更新过，计数清零</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。计数器是 agent_loop 的局部变量，新用户请求会重新从 0 开始。"
+      data-bad="TODO.items 是模块级对象；不要把它和局部 reminder 计数混为一谈。">
+      <p>用户提交第二个 prompt 时，rounds_since_todo 默认怎样？</p>
+      <button data-correct="false">继承上一个 prompt 的最终计数</button>
+      <button data-correct="true">在新的 agent_loop 中重新从零开始</button>
+      <button data-correct="false">从磁盘读取上一次保存的计数</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。当前判断只看工具名；调用失败与计划更新成功是两个事实。"
+      data-bad="L328–329 不检查 output 是否为 Error，所以失败调用也会清零提醒计数。">
+      <p>todo_write 返回 Error: Max 20 todos allowed 时，当前计数代码怎样？</p>
+      <button data-correct="true">仍视为使用过 todo_write 并清零计数</button>
+      <button data-correct="false">自动回滚并把计数增加一</button>
+      <button data-correct="false">直接结束 agent_loop 且不回填结果</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。completed 是计划字段，不是测试结果；验证仍要调用工具。"
+      data-bad="状态文字不能替代 bash、测试、lint 或类型检查的真实反馈。">
+      <p>把一个 TODO 标成 completed 是否等于任务已被验证？</p>
+      <button data-correct="false">是，completed 会自动运行测试</button>
+      <button data-correct="false">是，TodoManager 会检查目标文件内容</button>
+      <button data-correct="true">否，它只是模型写入的计划状态</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>
+        能用一句话说出 <code>todo_write</code> 的边界：它更新规划状态，不执行文件、命令或测试。
+      </li>
+      <li>
+        能区分 <code>TodoManager</code>、模块级 <code>TODO</code>、<code>messages</code>、
+        工作区文件和 <code>rounds_since_todo</code> 分别保存什么、活多久。
+      </li>
+      <li>
+        能从
+        <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s05_todo_write/code.py:119">L119–154</a>
+        读出 update 的顺序：字符串解析 → 列表 / 数量 → 每项形状 → content / status → 一个进行中 → 整体替换。
+      </li>
+      <li>
+        能解释为什么每次更新要发送完整清单，以及为什么校验失败时旧列表保持不变。
+      </li>
+      <li>
+        能区分 <code>json.loads</code>、<code>ast.literal_eval</code> 和危险的
+        <code>eval</code>；能说出 <code>loads</code> 处理字符串而不是文件路径。
+      </li>
+      <li>
+        能指出 schema 的 <code>maxItems</code> / <code>enum</code> 是模型输入契约，
+        不能代替 handler 内运行时校验。
+      </li>
+      <li>
+        能从 <code>TOOL_HANDLERS["todo_write"] = run_todo_write</code> 和
+        <code>handler(**block.input)</code> 推导出一次真实 dispatch。
+      </li>
+      <li>
+        能准确解释“三轮没更新”：按模型的 tool-call round 计，不按单个 block、用户 prompt 或任务项计。
+      </li>
+      <li>
+        能指出 reminder 是附加文本观察，不是强制更新；能指出当前实现无效 todo 调用也会清零提醒计数。
+      </li>
+      <li>
+        真跑
+        <code>python s05_todo_write\code.py</code>，至少观察一次
+        <code>## Current Tasks</code>、一次 Pre / Post hook 和一次最终 Stop；
+        能解释计划工具与真实文件工具各自做了什么。
+      </li>
+    </ul>
+
+    <h2>速查</h2>
+    <div class="box">
+      <p>
+        本课压缩版：
+        <a href="../../reference/phase-2/s05-todo-write.html">阶段 2 · s05 TodoWrite 速查</a>。
+        先用课件理解“为什么”和控制流，再用速查复习状态、校验和 reminder 公式。
+      </p>
+      <p>
+        本课新增稳定术语已追加到
+        <a href="../../GLOSSARY.md">GLOSSARY.md</a> 的 Planning / TodoWrite 部分。
+      </p>
+    </div>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>
+          主阅读：
+          <a href="../../learn-claude-code-north/s05_todo_write/README.zh.md">North s05 中文 README</a>；
+          本课已把 README 的骨架和源码关键分支展开，不打开也可以按过关标准学习。
+        </li>
+        <li>
+          原理补充：
+          <a href="../../AI-Agents-in-Depth-md/%E7%AC%AC05%E7%AB%A0%20Coding%20Agent%20%E4%B8%8E%E9%80%9A%E7%94%A8%20Agent/%E7%AC%AC05%E7%AB%A0%20Coding%20Agent%20%E4%B8%8E%E9%80%9A%E7%94%A8%20Agent.md">书第 5 章</a> 的
+          5.1.3 Coding Agent 整体流程与 5.1.4 Harness 工程；
+          它解释计划、验证和完成定义的工程背景，但不提供 <code>todo_write</code> 实现。
+        </li>
+        <li>
+          对照上一课：
+          <a href="./0024-hooks.html">0024 s04 Hooks</a>；
+          重点看 s05 如何在不复制 agent loop 的情况下新增工具和 reminder。
+        </li>
+        <li>
+          Python 解析参考：
+          <a href="https://docs.python.org/3/library/ast.html#ast.literal_eval">ast.literal_eval</a>、
+          <a href="https://docs.python.org/3/library/json.html#json.loads">json.loads</a>。
+        </li>
+        <li>
+          下一课：
+          s06 Subagent（后续课件）会处理“一个 TODO 仍然太大”的问题。
+        </li>
+      </ul>
+    </div>
+
+    <p>
+      <a href="./index.html">阶段 2 分册</a>
+      · <a href="./0024-hooks.html">上一课 0024</a>
+    </p>
+    <div data-lesson-id-footer="0025"></div>
+    <footer>
+      不清楚的立刻问我。下一课 s06：把过大的任务拆给拥有干净上下文的 Subagent。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

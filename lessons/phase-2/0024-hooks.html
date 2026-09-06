@@ -1,0 +1,1246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0024 · s04 Hooks</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0024"></div>
+    <h1>s04：把扩展逻辑挂到循环上</h1>
+    <p class="mission">
+      0023 已经在 handler 前面加了权限管线。本课继续沿用同一根 Agent loop，
+      但把「每次工具调用都要记录」「工具执行后要检查输出」「退出前要收尾」这类扩展，
+      从循环正文里搬到 <strong>hook</strong>（钩子，North 的格言是“挂在循环上，不写进循环里”）。
+      主技能是<strong>用事件注册表扩展稳定核心</strong>，不是再写一套循环。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      主材料：North
+      <a href="../../learn-claude-code-north/s04_hooks/README.zh.md">s04 中文 README</a>
+      （问题与方案
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:12">L12–52</a>，
+      工作原理
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:56">L56–180</a>，
+      相对 s03
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:188">L188–196</a>，
+      试一下
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:202">L202–214</a>）
+      +
+      <a href="../../learn-claude-code-north/s04_hooks/code.py"><code>s04_hooks/code.py</code></a>
+      全文（
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:1">L1–271</a>
+      ）。
+      原理对照：书
+      <a href="../../AI-Agents-in-Depth-md/%E7%AC%AC04%E7%AB%A0%20%E5%B7%A5%E5%85%B7/%E7%AC%AC04%E7%AB%A0%20%E5%B7%A5%E5%85%B7.md">第04章《工具》</a>
+      只负责帮助定位“工具执行边界”；书没有把本章这套进程内 hook 注册表单独实现。
+      Python Day 不另开：本章所需语法已在阶段 0（0001–0016）内化。
+      本课已把 README 和脚本中与 hooks 有关的概念、语法和真实控制流拆开讲清；
+      s01–s03 已讲过的 API 配置、五个工具、权限细节只做必要对照。
+    </p>
+    <p class="muted">
+      <strong>已内化</strong>：事件名 → 回调列表的注册表；
+      <code>register_hook</code> / <code>trigger_hooks</code>；
+      UserPromptSubmit、PreToolUse、PostToolUse、Stop 四个时机；
+      PreToolUse 阻止工具、Stop 阻止退出；s03 权限逻辑搬成 hook；
+      hook 返回值如何进入或不进入控制流。
+      <strong>故意跳过</strong>：生产框架的异步 hook、插件发现、优先级配置、跨进程事件总线、
+      hook 的持久化和并发安全；本章是一个进程内的教学注册表。
+      <strong>不另写</strong> playground；过关以真跑本章
+      <code>code.py</code> 为准。
+    </p>
+
+    <h3>本课新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>出处</th></tr>
+      <tr>
+        <td><strong>hook</strong>（钩子）</td>
+        <td>
+          预先挂在某个事件时机上的扩展入口；事件发生时，Harness 调用它，不必把扩展代码写进循环正文。
+        </td>
+        <td>
+          North 格言
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:6">README L6–8</a>；
+          方案
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:38">L38–52</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>event</strong>（事件）</td>
+        <td>
+          Harness 规定的一个时机名称，如 <code>PreToolUse</code>；它描述“什么时候触发”，不是具体功能。
+        </td>
+        <td>
+          四个事件表
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:46">README L46–52</a>；
+          注册表
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:128">code.py L128</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>callback</strong>（回调）</td>
+        <td>
+          先作为值保存、以后由触发器调用的函数；本课的 <code>permission_hook</code> 等都是 callback。
+        </td>
+        <td>
+          <code>register_hook(event, callback)</code>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:130">code.py L130–131</a>；
+          注册具体函数
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:203">L203–208</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>HOOKS</strong>（hook 注册表）</td>
+        <td>
+          字典：事件名 → 回调列表；它是“哪些扩展要在何时运行”的表，不是执行结果表。
+        </td>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:128">code.py L128</a>；
+          README 工作原理
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:56">README L56–80</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong><code>register_hook</code></strong></td>
+        <td>
+          把一个 callback 用 <code>append</code> 加到某个事件的列表末尾；注册时传函数本身，不加括号。
+        </td>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:130">code.py L130–131</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong><code>trigger_hooks</code></strong></td>
+        <td>
+          取出某个事件的回调列表，按注册顺序依次调用；遇到第一个非 <code>None</code> 返回值就停止继续调用。
+        </td>
+        <td>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:133">code.py L133–137</a>；
+          README
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:64">L64–80</a>。
+        </td>
+      </tr>
+      <tr>
+        <td><strong><code>*args</code></strong>（可变位置参数）</td>
+        <td>
+          让触发器接收任意数量的位置参数，并把这组参数再逐个转交给 callback；所以四种事件可携带不同数据。
+        </td>
+        <td>
+          <code>trigger_hooks(event, *args)</code> 与
+          <code>callback(*args)</code>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:133">code.py L133–134</a>。
+          本书未用这个词，来自 Python 函数参数语法。
+        </td>
+      </tr>
+      <tr>
+        <td><strong>短路</strong>（short-circuit）</td>
+        <td>
+          回调链收到第一个非 <code>None</code> 结果后立即停止；后注册的同事件 callback 不再运行。
+        </td>
+        <td>
+          <code>if result is not None: return result</code>
+          <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:135">code.py L135–137</a>。
+          这里是本课对控制流的称呼。
+        </td>
+      </tr>
+    </table>
+
+    <h2>为什么现在学？</h2>
+    <p>
+      s03 的循环已经承担了太多角色：拿回复、筛 tool call、查权限、执行 handler、
+      组装观察、决定退出。现在如果再加“每次调用写审计日志”“执行后检查输出大小”
+      “退出时打印统计”，最直接的写法是继续往 <code>agent_loop</code> 里塞
+      <code>if</code> 和函数调用。
+    </p>
+    <pre>def agent_loop(messages):
+    while True:
+        # ... 调模型 ...
+        for block in response.content:
+            log_to_file(block)          # 新需求
+            check_permission(block)     # s03 需求
+            notify_somewhere(block)     # 又一个需求
+            output = execute(block)
+            check_output(output)        # 执行后需求</pre>
+    <p>
+      这段代码能跑，但循环的<strong>稳定骨架</strong>和每个项目的<strong>扩展策略</strong>混在一起。
+      下一次改日志规则，你必须重新打开并修改循环；下一次加新工具，也更容易碰到循环。
+      hook 的边界是：循环只保留“在这个时机触发扩展”的一行，
+      具体扩展由注册表管理。
+    </p>
+    <p class="src">
+      问题示例
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:12">README L12–34</a>；
+      解法概览
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:38">L38–52</a>。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>s04 概念</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr>
+        <td>hook / callback</td>
+        <td>接口实现、监听器或拦截器方法</td>
+        <td>
+          本课直接把 Python 函数放进列表；没有接口类、依赖注入容器或注解扫描。
+        </td>
+      </tr>
+      <tr>
+        <td><code>HOOKS</code></td>
+        <td><code>Map&lt;String, List&lt;Callback&gt;&gt;</code></td>
+        <td>
+          键是普通字符串，不是 Java <code>enum</code>；拼错事件名时，Python 运行到查表才出错。
+        </td>
+      </tr>
+      <tr>
+        <td><code>register_hook</code></td>
+        <td>向某个事件注册 listener</td>
+        <td>
+          传 <code>log_hook</code> 是保存方法；传 <code>log_hook()</code> 是现在立刻执行，通常会得到
+          <code>None</code>，不是注册 callback。
+        </td>
+      </tr>
+      <tr>
+        <td><code>trigger_hooks</code></td>
+        <td>发布事件、依次调用 listener</td>
+        <td>
+          本课自己实现发布循环，并且用第一个非 <code>None</code> 返回值短路；没有消息总线。
+        </td>
+      </tr>
+      <tr>
+        <td><code>None</code></td>
+        <td>常见地类似“无结果”的 <code>null</code></td>
+        <td>
+          这里是 Python 的空值对象。触发器判断的是“是否为 <code>None</code>”，不是只判断布尔真假；
+          callback 返回字符串就是控制信号。
+        </td>
+      </tr>
+      <tr>
+        <td>PreToolUse</td>
+        <td>调用 service 前的过滤器 / 授权拦截器</td>
+        <td>
+          s04 中返回原因字符串就不进 handler，但循环仍要回填 <code>tool_result</code> 给模型。
+        </td>
+      </tr>
+      <tr>
+        <td>PostToolUse</td>
+        <td>调用完成后的 listener</td>
+        <td>
+          当前 <code>trigger_hooks</code> 的返回值没有被调用方使用，所以它只能观察或打印，不能替换
+          <code>output</code>。
+        </td>
+      </tr>
+      <tr>
+        <td>Stop</td>
+        <td>请求结束前的拦截器</td>
+        <td>
+          返回非空继续；本课把返回文本作为新的 user 观察追加进同一份 <code>messages</code>。
+        </td>
+      </tr>
+    </table>
+
+    <h2>系统讲解</h2>
+
+    <h3>1. 先分清三件事：事件、表、函数</h3>
+    <p>
+      这三个词不能混成“hook 就是一行魔法”：
+    </p>
+    <table>
+      <tr><th>东西</th><th>问题</th><th>s04 的例子</th></tr>
+      <tr>
+        <td><strong>event</strong></td>
+        <td>什么时候发生？</td>
+        <td><code>"PreToolUse"</code>、<code>"Stop"</code></td>
+      </tr>
+      <tr>
+        <td><strong>callback</strong></td>
+        <td>发生时要调用哪个函数？</td>
+        <td><code>permission_hook</code>、<code>log_hook</code></td>
+      </tr>
+      <tr>
+        <td><strong>HOOKS</strong></td>
+        <td>这个事件要调用哪些函数，顺序是什么？</td>
+        <td><code>{"PreToolUse": [permission_hook, log_hook]}</code></td>
+      </tr>
+      <tr>
+        <td><strong>trigger</strong></td>
+        <td>现在把这组函数真正调用起来</td>
+        <td><code>trigger_hooks("PreToolUse", block)</code></td>
+      </tr>
+    </table>
+    <p>
+      <code>HOOKS</code> 是<strong>配置 / 注册状态</strong>；<code>trigger_hooks</code> 才是<strong>执行动作</strong>。
+      就像 0022 的 <code>TOOL_HANDLERS</code> 是“工具名 → handler”的表，
+      这里是“事件名 → callback 列表”的表。两张表都不会因为存在就自动执行。
+    </p>
+
+    <h3>2. 函数对象：注册时不加括号</h3>
+    <p>
+      0012 已经见过把函数放进字典。这里把同样的规则用于列表：
+    </p>
+    <pre>def log_hook(block):
+    print(f"[HOOK] {block.name}")
+
+HOOKS["PreToolUse"].append(log_hook)   # 保存函数本身
+HOOKS["PreToolUse"].append(log_hook())  # 错：现在执行，保存返回值</pre>
+    <p>
+      <code>log_hook</code> 是“以后可以调用的函数对象”；<code>log_hook()</code> 是“现在就调用，
+      并把返回值拿回来”。本课的注册表需要前者，因为事件还没有发生，
+      <code>block</code> 也还没有准备好。
+    </p>
+    <p>
+      s04 用 <code>register_hook</code> 把这一步包起来：
+    </p>
+    <pre>def register_hook(event: str, callback):
+    HOOKS[event].append(callback)</pre>
+    <p>
+      传入 <code>register_hook("PreToolUse", log_hook)</code> 后，表里多出一个函数；
+      直到未来执行 <code>trigger_hooks("PreToolUse", block)</code>，它才会收到
+      <code>block</code>。这就是“延后调用”。
+    </p>
+    <p class="src">
+      代码
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:128">L128–131</a>；
+      North README 的注册表说明
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:56">L56–72</a>。
+    </p>
+
+    <h3>3. <code>trigger_hooks</code>：取表、传参、按顺序执行</h3>
+    <pre>def trigger_hooks(event: str, *args):
+    for callback in HOOKS[event]:
+        result = callback(*args)
+        if result is not None:
+            return result
+    return None</pre>
+    <ol>
+      <li>
+        <code>HOOKS[event]</code>：按事件名取出 callback 列表。例如
+        <code>event == "PreToolUse"</code> 时，得到
+        <code>[permission_hook, log_hook]</code>。
+      </li>
+      <li>
+        <code>for callback in ...</code>：按照注册顺序逐个取函数。先注册的先运行。
+      </li>
+      <li>
+        <code>*args</code>（定义处）：把 <code>event</code> 后面多出来的位置参数收进一个元组。
+        元组是一组按位置保存的值。详见下面「打包 / 解包」。
+      </li>
+      <li>
+        <code>callback(*args)</code>（调用处）：把元组再拆开传给 callback。
+        详见下面对照表。
+      </li>
+      <li>
+        callback 返回非 <code>None</code> 时，立刻 <code>return result</code>；
+        后面的 callback 不再运行。所有 callback 都返回 <code>None</code>，触发器最后返回
+        <code>None</code>。
+      </li>
+    </ol>
+
+    <h4>3′. <code>*</code> 出现两次：先打包，再解包</h4>
+    <p>
+      同一行代码里有两个带星号的 <code>args</code>，但方向相反。
+      可以记成：触发器先把本次事件的参数<strong>收进包</strong>，再把同一包
+      <strong>拆给每个 callback</strong>。
+    </p>
+    <pre>def trigger_hooks(event: str, *args):   # ① 定义处：打包
+    for callback in HOOKS[event]:
+        result = callback(*args)        # ② 调用处：解包
+        ...</pre>
+    <table>
+      <tr><th>位置</th><th>写法</th><th>方向</th><th>在干什么</th></tr>
+      <tr>
+        <td>函数<strong>定义</strong></td>
+        <td><code>def trigger_hooks(event, *args)</code></td>
+        <td>外面 → 里面</td>
+        <td>
+          把调用时写在 <code>event</code> 后面的额外位置参数，收成一个元组
+          <code>args</code>。多传几个都行。
+        </td>
+      </tr>
+      <tr>
+        <td>函数<strong>调用</strong></td>
+        <td><code>callback(*args)</code></td>
+        <td>里面 → 外面</td>
+        <td>
+          把元组 <code>args</code> 拆开，按位置传给 callback。
+          不是把「整个元组」当成一个参数塞进去。
+        </td>
+      </tr>
+    </table>
+    <p>
+      为什么需要这一套？因为四个事件<strong>多出来的参数个数不一样</strong>，
+      但希望共用同一个触发器：
+    </p>
+    <table>
+      <tr><th>调用</th><th>打包后的 <code>args</code></th><th>解包后实际调用</th></tr>
+      <tr>
+        <td><code>trigger_hooks("UserPromptSubmit", query)</code></td>
+        <td><code>(query,)</code></td>
+        <td><code>context_inject_hook(query)</code></td>
+      </tr>
+      <tr>
+        <td><code>trigger_hooks("PreToolUse", block)</code></td>
+        <td><code>(block,)</code></td>
+        <td><code>permission_hook(block)</code> 等</td>
+      </tr>
+      <tr>
+        <td><code>trigger_hooks("PostToolUse", block, output)</code></td>
+        <td><code>(block, output)</code></td>
+        <td><code>large_output_hook(block, output)</code></td>
+      </tr>
+      <tr>
+        <td><code>trigger_hooks("Stop", messages)</code></td>
+        <td><code>(messages,)</code></td>
+        <td><code>summary_hook(messages)</code></td>
+      </tr>
+    </table>
+    <p>
+      注意 <code>(block,)</code> 里的逗号：单元素元组必须写逗号，否则
+      <code>(block)</code> 只是加了括号的表达式，不是元组。
+    </p>
+    <p>
+      若不用 <code>*args</code>，触发器就得为参数个数写死签名，例如只能多传一个：
+    </p>
+    <pre># 假想：写死「只能多传一个」——PostToolUse 的 output 塞不进去
+def trigger_hooks(event, arg1):
+    callback(arg1)
+
+# 假想：写死「必须多传两个」——PreToolUse 的 permission_hook(block) 会多收一个参数而报错
+def trigger_hooks(event, arg1, arg2):
+    callback(arg1, arg2)</pre>
+    <p>
+      有了打包 / 解包：触发器只写一次；多传几个、传什么，由<strong>调用点</strong>决定；
+      每个 callback 自己声明要几个参数，触发器原样转交，不关心内容。
+      像快递中转站：箱子里有 1 件还是 2 件它不管，只负责原封不动交给收件人。
+    </p>
+    <p>
+      两个易混点：
+    </p>
+    <ul>
+      <li>
+        <code>callback(*args)</code> ≠ <code>callback(args)</code>。
+        前者拆开传位置参数；后者把整个元组当成<strong>一个</strong>参数，
+        <code>permission_hook</code> 会收到「元组」而不是 <code>block</code>。
+      </li>
+      <li>
+        这里的 <code>*</code> 不是乘法，也不是「并行启动所有 callback」。
+        它只做参数的收发。
+      </li>
+    </ul>
+    <p class="src">
+      触发器真实代码
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:133">L133–138</a>；
+      Pre 调用
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:236">L236</a>；
+      Post 调用
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:245">L245</a>。
+      本课对 <code>*args</code> 的语法说明是 Python 补充，North README 只展示了调用效果。
+      官方：
+      <a href="https://docs.python.org/3/tutorial/controlflow.html#arbitrary-argument-lists">Arbitrary Argument Lists</a>、
+      <a href="https://docs.python.org/3/tutorial/controlflow.html#unpacking-argument-lists">Unpacking Argument Lists</a>。
+    </p>
+
+    <h3>4. 返回值协议：<code>None</code> 不是“失败”</h3>
+    <p>
+      hook 返回值要先分成两层看：
+    </p>
+    <table>
+      <tr><th>callback 返回</th><th><code>trigger_hooks</code> 怎么做</th><th>通常表达什么</th></tr>
+      <tr>
+        <td><code>None</code></td>
+        <td>继续调用下一个 callback</td>
+        <td>本 callback 没有阻止意见；例如记录完日志后放行</td>
+      </tr>
+      <tr>
+        <td>非 <code>None</code>，如 <code>"Permission denied"</code></td>
+        <td>立刻返回，不调用后面的 callback</td>
+        <td>本 callback 给出了控制信号或原因</td>
+      </tr>
+    </table>
+    <p>
+      “返回非 <code>None</code>”是触发器层的协议；“这个返回值是否改变主循环”
+      还由调用位置决定：
+    </p>
+    <table>
+      <tr><th>调用点</th><th>拿到非 <code>None</code> 后</th><th>主循环效果</th></tr>
+      <tr>
+        <td>UserPromptSubmit</td>
+        <td>当前脚本忽略返回值</td>
+        <td>原始 query 仍被 append，hook 只能打印</td>
+      </tr>
+      <tr>
+        <td>PreToolUse</td>
+        <td>保存到 <code>blocked</code> 并判断</td>
+        <td>回填拒绝观察，跳过 handler</td>
+      </tr>
+      <tr>
+        <td>PostToolUse</td>
+        <td>当前脚本忽略返回值</td>
+        <td>输出照原样回填，hook 只能观察 / 提醒</td>
+      </tr>
+      <tr>
+        <td>Stop</td>
+        <td>保存到 <code>force</code> 并判断</td>
+        <td>把文本追加为 user 消息，继续下一轮</td>
+      </tr>
+    </table>
+    <p>
+      这也解释了一个容易误读的地方：README 说“返回值不为
+      <code>None</code> 时 hook 说停”，但并不表示四个事件都拥有同样的业务效果。
+      <code>trigger_hooks</code> 只负责传回信号；调用者决定把信号当成拒绝、继续、
+      还是完全忽略。
+    </p>
+
+    <h3>5. 四个事件放在 Agent cycle 的哪里？</h3>
+    <p>
+      s04 的四个事件不是四个平行 Agent，而是同一根循环上的四个插口：
+    </p>
+    <p>
+      <img
+        src="../../learn-claude-code-north/s04_hooks/images/hooks-overview.svg"
+        alt="UserPromptSubmit、PreToolUse、PostToolUse、Stop 四个 hook 时机"
+        width="720"
+      />
+    </p>
+    <table>
+      <tr><th>事件</th><th>发生时机</th><th>传给 callback</th><th>本课用途</th></tr>
+      <tr>
+        <td><strong>UserPromptSubmit</strong></td>
+        <td>用户输入提交后、进入模型前</td>
+        <td><code>query: str</code></td>
+        <td>打印工作目录；可作为将来输入校验 / 上下文注入的入口</td>
+      </tr>
+      <tr>
+        <td><strong>PreToolUse</strong></td>
+        <td>handler 执行前</td>
+        <td><code>block</code></td>
+        <td>把 s03 权限检查和调用日志接在工具前</td>
+      </tr>
+      <tr>
+        <td><strong>PostToolUse</strong></td>
+        <td>handler 返回 output 后</td>
+        <td><code>block, output</code></td>
+        <td>提醒超大输出；不改变当前 output</td>
+      </tr>
+      <tr>
+        <td><strong>Stop</strong></td>
+        <td>本轮没有 tool_use、循环准备退出时</td>
+        <td><code>messages</code></td>
+        <td>打印工具调用统计；非空返回可以阻止退出</td>
+      </tr>
+    </table>
+    <p class="src">
+      事件表和触发位置
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:46">README L46–52</a>、
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:82">L82–180</a>。
+    </p>
+
+    <h3>6. 一个重要的事实：名字叫 inject，不代表真的注入</h3>
+    <pre>def context_inject_hook(query: str):
+    print(f"\033[90m[HOOK] UserPromptSubmit: working in {WORKDIR}\033[0m")
+    return None</pre>
+    <p>
+      这个函数名叫 <code>context_inject_hook</code>，但它的真实代码只打印工作目录，
+      没有修改 <code>query</code>，也没有向 <code>history</code> append 新消息。
+      而且入口这样调用：
+    </p>
+    <pre>trigger_hooks("UserPromptSubmit", query)
+history.append({"role": "user", "content": query})</pre>
+    <p>
+      返回值也没有被接住。因此当前版本准确的说法是：
+      <strong>UserPromptSubmit 提供了“将来可以注入”的扩展点，本章示例只做日志。</strong>
+      不能把函数名当成行为证明；要看参数是否被修改、返回值是否被调用方使用。
+    </p>
+    <p class="src">
+      hook 定义
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:192">code.py L192–195</a>；
+      REPL 调用
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:260">L260–264</a>。
+    </p>
+
+    <h3>7. callback 的顺序是行为的一部分</h3>
+    <p>
+      s04 按以下顺序注册两个 PreToolUse callback：
+    </p>
+    <pre>register_hook("PreToolUse", permission_hook)
+register_hook("PreToolUse", log_hook)</pre>
+    <p>
+      所以正常工具调用的顺序是：
+      <code>permission_hook</code> → <code>log_hook</code> → handler。
+      如果权限 hook 返回拒绝字符串，<code>trigger_hooks</code> 在第一步就短路，
+      <code>log_hook</code> 不会执行，handler 也不会执行。
+      这和“每次调用都必然留下日志”不是一回事。
+    </p>
+    <p>
+      如果审计日志必须覆盖<strong>被拒绝的调用</strong>，可以把日志放在权限检查前，
+      或让权限 hook 自己记录；注册顺序不是排版细节，而是程序语义。
+      本课不改上游代码，只要求你能从真实顺序推出结果。
+    </p>
+    <p class="src">
+      注册顺序
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:203">L203–208</a>；
+      短路规则
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:133">L133–137</a>。
+    </p>
+
+    <h3>8. Stop 是“退出前最后一问”，不是每轮都跑</h3>
+    <p>
+      Agent 收到模型回复后，先筛出 <code>tool_calls</code>。只有列表为空，才会触发
+      Stop：
+    </p>
+    <pre>tool_calls = [
+    block for block in response.content if block.type == "tool_use"
+]
+if not tool_calls:
+    force = trigger_hooks("Stop", messages)
+    if force:
+        messages.append({"role": "user", "content": force})
+        continue
+    return</pre>
+    <p>
+      这里要分三案：
+    </p>
+    <table>
+      <tr><th>情况</th><th>Stop hook</th><th>结果</th></tr>
+      <tr>
+        <td>回复含 tool_use</td>
+        <td>不触发</td>
+        <td>先执行工具，把 tool_result 回填，再调模型</td>
+      </tr>
+      <tr>
+        <td>回复无 tool_use，所有 Stop callback 返回 <code>None</code></td>
+        <td>触发但放行</td>
+        <td><code>return</code>，本次 agent_loop 结束</td>
+      </tr>
+      <tr>
+        <td>回复无 tool_use，某个 Stop callback 返回字符串</td>
+        <td>触发并阻止退出</td>
+        <td>字符串进 <code>messages</code>，<code>continue</code>，模型再来一轮</td>
+      </tr>
+    </table>
+    <p>
+      因此 Stop hook 可以把“模型说完了”改成“还不准结束”。这已经是一个很小的
+      持续执行机制，但它仍然不是测试框架：除非 callback 自己检查文件或结果，
+      它不会凭空知道任务是否真的完成。
+    </p>
+    <p class="src">
+      Stop 示例
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:136">README L136–150</a>；
+      循环接入
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:221">code.py L221–233</a>。
+    </p>
+
+    <h2>主脚本导读：<code>s04_hooks/code.py</code></h2>
+    <p>
+      打开
+      <a href="../../learn-claude-code-north/s04_hooks/code.py"><code>learn-claude-code-north/s04_hooks/code.py</code></a>。
+      文件前半保留 s03 的五个工具和权限规则；真正新增的是
+      <code>HOOKS</code>、两个管理函数、五个 callback，以及循环中的三个触发点。
+    </p>
+
+    <h3>A. 旧的工具层先不重学：L48–124</h3>
+    <p>
+      <code>WORKDIR</code>、<code>run_bash</code>、<code>run_read</code>、<code>run_write</code>、
+      <code>run_edit</code>、<code>run_glob</code>、<code>TOOLS</code> 和
+      <code>TOOL_HANDLERS</code> 与 s03 同构。s04 的目标不是增加第六个工具，
+      而是让这些工具执行前后拥有统一插口。
+    </p>
+    <p>
+      仍然要记住边界：hook 可以在 handler 前拦截，但工具本身的
+      <code>run_bash</code> 仍用了 <code>shell=True</code>，危险命令判断仍是教学版
+      字符串 / 正则规则。hook 这个结构不等于生产安全。
+    </p>
+    <p class="src">
+      旧工具层
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:48">L48–124</a>；
+      s04 变化说明
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:188">README L188–196</a>。
+    </p>
+
+    <h3>B. 注册表和两个管理函数：L128–138</h3>
+    <pre>HOOKS = {
+    "UserPromptSubmit": [],
+    "PreToolUse": [],
+    "PostToolUse": [],
+    "Stop": [],
+}
+
+def register_hook(event: str, callback):
+    HOOKS[event].append(callback)
+
+def trigger_hooks(event: str, *args):
+    for callback in HOOKS[event]:
+        result = callback(*args)
+        if result is not None:
+            return result
+    return None</pre>
+    <table>
+      <tr><th>代码</th><th>读法</th><th>不要误读成</th></tr>
+      <tr>
+        <td><code>HOOKS = {...}</code></td>
+        <td>预先创建四个事件的空 callback 列表</td>
+        <td>四个事件已经自动运行</td>
+      </tr>
+      <tr>
+        <td><code>HOOKS[event].append(callback)</code></td>
+        <td>按键取列表，把函数追加到末尾</td>
+        <td>立刻调用 callback</td>
+      </tr>
+      <tr>
+        <td><code>for callback in ...</code></td>
+        <td>运行当前事件的所有 callback，直到短路</td>
+        <td>四个事件一起运行</td>
+      </tr>
+      <tr>
+        <td><code>return None</code></td>
+        <td>列表跑完但没人给控制信号</td>
+        <td>发生了错误</td>
+      </tr>
+    </table>
+    <p>
+      事件名是普通字符串，所以 <code>"PreToolUse"</code>、<code>"pre_tool_use"</code>
+      和 <code>"PreTooluse"</code> 是三个不同的键。当前脚本没有对未知键做友好错误处理；
+      <code>HOOKS[event]</code> 取不到时会抛 <code>KeyError</code>（字典中不存在所取键时的异常）。
+      这是 Python 的字典边界，不是模型 API 的错误码。
+    </p>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:128">L128–138</a>。
+    </p>
+
+    <h3>C. <code>permission_hook</code>：s03 逻辑换了位置，没换语义</h3>
+    <p>
+      s03 的 <code>check_permission(block)</code> 被改名 / 包装为
+      <code>permission_hook(block)</code>，内部仍是同一组边界：
+      bash 先扫 <code>DENY_LIST</code>；危险命令或工作区外文件再询问；
+      不允许时返回原因字符串；没有问题时返回 <code>None</code>。
+    </p>
+    <pre>def permission_hook(block):
+    if block.name == "bash":
+        # deny list / destructive command / ask user
+        ...
+    if block.name in ("read_file", "write_file", "edit_file"):
+        # workspace boundary / ask user
+        ...
+    return None</pre>
+    <p>
+      最重要的变化不是 if 条件，而是<strong>谁调用它</strong>：
+    </p>
+    <pre># s03：循环知道权限函数的名字
+if not check_permission(block):
+    ...
+
+# s04：循环只知道 PreToolUse 这个扩展点
+blocked = trigger_hooks("PreToolUse", block)
+if blocked:
+    ...</pre>
+    <p>
+      以后再加审计、速率限制或参数检查，循环不需要知道每个函数的名字；
+      只要注册到正确事件即可。权限本身仍然是约束，不是模型提示词。
+    </p>
+    <p class="src">
+      新 hook
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:145">L145–175</a>；
+      与 s03 的差异
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:188">README L188–196</a>。
+    </p>
+
+    <h3>D. 另外四个 callback：观察不等于改变</h3>
+
+    <h4>D1. <code>log_hook</code>：工具执行前打印预览</h4>
+    <pre>def log_hook(block):
+    args_preview = str(list(block.input.values())[:2])[:60]
+    print(f"\033[90m[HOOK] {block.name}({args_preview})\033[0m")
+    return None</pre>
+    <p>
+      <code>block.input.values()</code> 取参数字典的值；
+      <code>list(...)</code> 把这些值变成列表；<code>[:2]</code> 只留前两个；
+      外层 <code>[:60]</code> 再把显示文本截到 60 个字符。
+      这是<strong>给人看的预览</strong>，不是发给模型的参数，也不是对工具输入做截断。
+      返回 <code>None</code> 让下一个 callback / handler 继续。
+    </p>
+
+    <h4>D2. <code>large_output_hook</code>：工具执行后提醒</h4>
+    <pre>def large_output_hook(block, output):
+    if len(str(output)) &gt; 100000:
+        print(f"\033[33m[HOOK] Large output from {block.name}: "
+              f"{len(str(output))} chars\033[0m")
+    return None</pre>
+    <p>
+      它接收两个位置参数，所以只能在 PostToolUse 触发：
+      <code>block</code> 说明哪个工具，<code>output</code> 是 handler 的返回值。
+      <code>len(str(output))</code> 数的是字符串字符数；超过 100000 才打印提醒。
+      它没有返回一个新 output，调用方也没有接住返回值，因此不会截断结果、
+      不会重试工具，也不会阻止下一轮。
+    </p>
+
+    <h4>D3. <code>context_inject_hook</code>：当前只记录输入时机</h4>
+    <pre>def context_inject_hook(query: str):
+    print(f"\033[90m[HOOK] UserPromptSubmit: working in {WORKDIR}\033[0m")
+    return None</pre>
+    <p>
+      这个函数的参数是原始 query，但没有改它。它证明了
+      UserPromptSubmit 的时机，不证明“上下文已注入”。如果未来真的要注入，
+      需要同时设计数据通道，例如让调用方接住返回的新文本，或显式 append 一条
+      允许的消息；仅仅改函数名不会改变 <code>messages</code>。
+    </p>
+
+    <h4>D4. <code>summary_hook</code>：退出前统计轨迹里的 tool_result</h4>
+    <pre>def summary_hook(messages: list):
+    tool_count = sum(
+        1 for m in messages
+        for b in (m.get("content")
+                  if isinstance(m.get("content"), list) else [])
+        if isinstance(b, dict) and b.get("type") == "tool_result"
+    )
+    print(f"\033[90m[HOOK] Stop: session used {tool_count} tool calls\033[0m")
+    return None</pre>
+    <p>
+      它遍历已有的 <code>messages</code>，只统计 content 是列表、且列表项是 dict、
+      类型为 <code>tool_result</code> 的块。拒绝的工具调用也会在循环里回填
+      <code>tool_result</code>，所以这个数字表示“回填过多少工具结果”，不一定表示
+      “多少次 handler 成功执行”。这是统计口径，不能随便把它叫成成功调用数。
+    </p>
+    <p class="src">
+      四个 callback
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:178">L178–201</a>。
+    </p>
+
+    <h3>E. 注册顺序：L203–208</h3>
+    <pre>register_hook("UserPromptSubmit", context_inject_hook)
+register_hook("PreToolUse", permission_hook)
+register_hook("PreToolUse", log_hook)
+register_hook("PostToolUse", large_output_hook)
+register_hook("Stop", summary_hook)</pre>
+    <p>
+      这里没有把一个 callback 注册到所有事件；每个 callback 的参数形状决定它应该挂在哪：
+      <code>permission_hook(block)</code> 不能直接挂到需要
+      <code>(block, output)</code> 的 PostToolUse。
+      同一事件可以有多个 callback，列表顺序就是执行顺序。
+    </p>
+
+    <h3>F. 主循环：三处触发，核心形状没被扩展代码污染</h3>
+
+    <h4>F1. 退出前的 Stop：L221–233</h4>
+    <pre>if not tool_calls:
+    force = trigger_hooks("Stop", messages)
+    if force:
+        messages.append({"role": "user", "content": force})
+        continue
+    return</pre>
+    <p>
+      <code>summary_hook</code> 会打印统计并返回 <code>None</code>，所以正常情况下落到
+      <code>return</code>。如果另一个 Stop callback 返回非空字符串，字符串会进同一份
+      <code>messages</code>，下一次 while 又会调模型。它没有重新进入 REPL，
+      也没有创建第二个 agent_loop。
+    </p>
+
+    <h4>F2. 工具前的 PreToolUse：L238–243</h4>
+    <pre>for block in tool_calls:
+    blocked = trigger_hooks("PreToolUse", block)
+    if blocked:
+        results.append({
+            "type": "tool_result",
+            "tool_use_id": block.id,
+            "content": str(blocked),
+        })
+        continue</pre>
+    <ol>
+      <li>先触发权限 callback；没有拒绝时它返回 <code>None</code>，再轮到日志 callback。</li>
+      <li>如果得到非空拒绝字符串，追加带有相同 <code>block.id</code> 的 tool_result。</li>
+      <li><code>continue</code> 跳过当前 for 迭代，因此当前 block 的 handler 不会运行。</li>
+      <li>这个 <code>continue</code> 只跳过当前工具，不跳过同一轮后面的其他 tool_use。</li>
+    </ol>
+    <p>
+      注意这里调用方写的是 <code>if blocked:</code>，判断的是 Python 的真假。
+      触发器虽然按“非 <code>None</code>”短路，但 callback 应返回有内容的原因字符串；
+      返回空字符串 <code>""</code> 会被触发器传回来，却在这里被当成假值，结果不会进入拒绝分支。
+      这是本教学脚本的接口约定：拒绝请返回非空消息。
+    </p>
+
+    <h4>F3. 工具后的 PostToolUse：L245–248</h4>
+    <pre>handler = TOOL_HANDLERS.get(block.name)
+output = handler(**block.input) if handler else f"Unknown: {block.name}"
+
+trigger_hooks("PostToolUse", block, output)
+results.append({
+    "type": "tool_result",
+    "tool_use_id": block.id,
+    "content": output,
+})</pre>
+    <p>
+      handler 已经返回后才触发 PostToolUse。<code>large_output_hook</code> 此处只是检查并打印；
+      它的返回值没有赋给变量，原来的 <code>output</code> 照样放入结果。
+      以后若想让 post hook 能修改 output，就必须重新设计协议，例如让触发器返回新值，
+      再由循环明确写成 <code>output = trigger_post_hooks(...)</code>；当前 s04 没有这条通道。
+    </p>
+    <p class="src">
+      Stop
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:221">L221–233</a>；
+      Pre / Post
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:238">L238–248</a>。
+    </p>
+
+    <h3>G. 外层 REPL：UserPromptSubmit 在 agent_loop 外</h3>
+    <pre>query = input("\001\033[36m\002s04 &gt;&gt; \001\033[0m\002")
+if query.strip().lower() in ("q", "exit", ""):
+    break
+trigger_hooks("UserPromptSubmit", query)
+history.append({"role": "user", "content": query})
+agent_loop(history)</pre>
+    <p>
+      外层 REPL 负责“读你的一行、送入本次 agent_loop、打印最后文本、再读下一行”；
+      UserPromptSubmit 在这层触发，因为它描述的是<strong>用户提交输入</strong>，
+      不是模型每次调用前。它与 PreToolUse / PostToolUse / Stop 都挂在同一进程里，
+      但时机和参数不同。
+    </p>
+    <p class="src">
+      入口
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/code.py:251">L251–271</a>。
+    </p>
+
+    <h2>把一次调用完整走一遍</h2>
+
+    <h3>案例一：普通 <code>read_file</code>，所有前置 hook 放行</h3>
+    <ol>
+      <li>你输入 query，触发 UserPromptSubmit；它打印工作目录，返回 <code>None</code>，原 query 进入 history。</li>
+      <li>模型返回一个 <code>tool_use</code>，名字是 <code>read_file</code>。</li>
+      <li>PreToolUse 先跑 <code>permission_hook</code>；工作区内路径没有命中规则，返回 <code>None</code>。</li>
+      <li>同一事件继续跑 <code>log_hook</code>，终端看到 <code>[HOOK] read_file(...)</code>。</li>
+      <li>dispatch map 取出 <code>run_read</code> 并执行，得到 output。</li>
+      <li>PostToolUse 跑 <code>large_output_hook</code>；普通小输出不打印提醒。</li>
+      <li>循环把 output 和原 <code>block.id</code> 组成 tool_result，追加到 messages，再调模型。</li>
+    </ol>
+    <p>
+      hook 没有替代 dispatch；它只包住执行前后。权限、日志、实际 handler、观察回填仍是四件不同的事。
+    </p>
+
+    <h3>案例二：危险 bash，PreToolUse 短路</h3>
+    <ol>
+      <li>模型给出 bash tool_use，例如命令包含 deny list 中的 <code>sudo</code>。</li>
+      <li><code>permission_hook</code> 打印阻止原因，返回 <code>"Permission denied by deny list"</code>。</li>
+      <li><code>trigger_hooks</code> 立即返回；同一事件后注册的 <code>log_hook</code> 不运行。</li>
+      <li>主循环把这个原因转成 tool_result，使用相同的 <code>tool_use_id</code>。</li>
+      <li><code>continue</code> 跳过 handler；模型下一轮会看到拒绝观察。</li>
+    </ol>
+    <p>
+      这说明“hook 能拦”与“hook 一定记录”不能同时默认成立；取决于 callback 顺序。
+      若想拒绝也审计，需要改变注册顺序或在权限 callback 中记录。
+    </p>
+
+    <h3>案例三：模型没有 tool_use，Stop 放行</h3>
+    <ol>
+      <li>模型回复只有 text，<code>tool_calls</code> 是空列表。</li>
+      <li>触发 <code>summary_hook(messages)</code>，统计已有 tool_result 并打印。</li>
+      <li>summary 返回 <code>None</code>，<code>force</code> 为空。</li>
+      <li>主循环执行 <code>return</code>，把本轮最后的 text 交给外层 REPL 打印。</li>
+    </ol>
+
+    <h3>案例四：Stop callback 要求继续</h3>
+    <p>
+      这不是上游脚本已注册的 callback，而是为了读懂接口的最小假设：
+    </p>
+    <pre>def require_check_hook(messages):
+    if "CHECK_OK" not in str(messages):
+        return "请继续运行检查命令，并把结果写进对话。"
+    return None</pre>
+    <p>
+      如果把它注册到 Stop，模型即使本轮没有 tool_use，只要对话中没有
+      <code>CHECK_OK</code>，就会收到这条 user 消息并继续。这个 hook 不是验证命令本身；
+      它只根据现有 <code>messages</code> 做判断。真正的检查仍必须由 bash 等工具执行。
+      这正是 Harness 中“触发继续”和“实际验证”之间的区别。
+    </p>
+
+    <h2>相对 s03，究竟改了什么？</h2>
+    <table>
+      <tr><th>位置</th><th>s03</th><th>s04</th><th>结果</th></tr>
+      <tr>
+        <td>权限逻辑</td>
+        <td><code>check_permission(block)</code> 写在循环调用点</td>
+        <td><code>permission_hook</code> 注册到 PreToolUse</td>
+        <td>语义保留，依赖方向改变</td>
+      </tr>
+      <tr>
+        <td>工具前扩展</td>
+        <td>没有统一插口</td>
+        <td><code>trigger_hooks("PreToolUse", block)</code></td>
+        <td>权限 / 日志可由列表管理</td>
+      </tr>
+      <tr>
+        <td>工具后扩展</td>
+        <td>handler 返回后直接组装结果</td>
+        <td>先触发 PostToolUse</td>
+        <td>可以观察 output</td>
+      </tr>
+      <tr>
+        <td>退出点</td>
+        <td>没有 Stop callback</td>
+        <td>先触发 Stop，再决定 return / continue</td>
+        <td>扩展可以阻止自然退出</td>
+      </tr>
+      <tr>
+        <td>用户输入</td>
+        <td>直接 append history</td>
+        <td>append 前触发 UserPromptSubmit</td>
+        <td>多一个输入侧扩展点；当前示例只打印</td>
+      </tr>
+    </table>
+    <p>
+      用一句话压缩：s03 把“权限检查”放进循环；s04 把“在某个时机做什么”
+      变成可注册的 callback 链。循环仍然负责协议、执行、观察和循环出口，
+      但不再硬编码每一个扩展名称。
+    </p>
+    <p class="src">
+      README 对照表
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:188">L188–196</a>。
+    </p>
+
+    <h2>动手：跑本章 <code>code.py</code></h2>
+    <p>
+      沿用 North 仓库的 <code>.venv</code> 和 <code>.env</code>。不要把 API key 发到聊天。
+      建议从 North 仓库根目录启动，让 <code>WORKDIR</code> 指向这个可控的练习仓库：
+    </p>
+    <pre>cd D:\agent-learning\learn-claude-code-north
+.\.venv\Scripts\Activate.ps1
+python s04_hooks\code.py</pre>
+    <p>按下面顺序观察：</p>
+    <ol>
+      <li>
+        <code>Read the file README.md and summarize it</code>：
+        先看到 UserPromptSubmit 日志；模型选择文件工具后，看到 PreToolUse 的
+        <code>[HOOK] read_file(...)</code>；工具结束后回到模型。
+      </li>
+      <li>
+        <code>What files are in this repository?</code>：
+        观察模型可能调用 <code>glob</code>，同一套 PreToolUse / PostToolUse 仍会运行。
+        hook 不依赖工具名字才能触发，触发点是事件。
+      </li>
+      <li>
+        让它创建可丢弃文件，例如
+        <code>Create hooks-demo.txt with the text "hook demo"</code>。
+        工作区内写入通常直接通过；你应看到工具前的 hook。
+      </li>
+      <li>
+        删除刚才的文件时，模型若选择 bash + <code>del hooks-demo.txt</code>，
+        会进入权限 hook 的询问。只对你确认的这个临时文件输入 <code>y</code>；
+        其他危险命令输入 <code>n</code>，不要为了看效果执行破坏性操作。
+      </li>
+      <li>
+        观察模型自然回答后 Stop 日志：<code>[HOOK] Stop: session used ... tool calls</code>。
+        小输出不会触发 Large output 提醒；这是阈值检查的正常结果。
+      </li>
+    </ol>
+    <p class="src">
+      North 的试运行清单
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s04_hooks/README.zh.md:202">README L202–214</a>。
+    </p>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li>
+          <strong>写了 hook 就会自动运行</strong>：错。必须先注册到对应事件，
+          还必须在循环 / REPL 的正确时机调用 <code>trigger_hooks</code>。
+        </li>
+        <li>
+          <strong>注册写成 <code>register_hook("PreToolUse", log_hook())</code></strong>：
+          错。括号会立刻执行；注册应传 <code>log_hook</code> 函数对象。
+        </li>
+        <li>
+          <strong>四个事件都传同样的参数</strong>：错。UserPromptSubmit 收 query，
+          Pre 收 block，Post 收 block + output，Stop 收 messages。
+        </li>
+        <li>
+          <strong>所有 callback 都会执行</strong>：不一定。某个 callback 返回非
+          <code>None</code> 就短路；s04 的权限拒绝会跳过后面的 log hook。
+        </li>
+        <li>
+          <strong>返回 <code>False</code> 和返回 <code>None</code> 完全一样</strong>：
+          在触发器层不一样——<code>False is not None</code>，会短路；但主循环的
+          <code>if blocked</code> 会把 False 当假值。因此控制 hook 应返回非空原因字符串。
+        </li>
+        <li>
+          <strong>PostToolUse 能自动改掉 output</strong>：错。当前调用方忽略 Post 的返回值；
+          <code>large_output_hook</code> 只能提醒，原 output 仍回填。
+        </li>
+        <li>
+          <strong><code>context_inject_hook</code> 已经把 WORKDIR 发给模型</strong>：
+          错。当前它只打印；query 没有被改写，返回值也没有被外层接住。
+        </li>
+        <li>
+          <strong>Stop 每次工具执行后都会跑</strong>：错。只有本轮没有
+          <code>tool_use</code>、循环准备退出时才触发。
+        </li>
+        <li>
+          <strong>hook 代替了 agent loop</strong>：错。模型请求、tool_use 筛选、
+          handler 执行、tool_result 配对和 while 仍由循环负责；hook 是插口。
+        </li>
+        <li>
+          <strong>hook 系统本身就是安全沙箱</strong>：错。它只是把检查接到某个时机；
+          s04 仍继承教学版字符串黑名单、<code>shell=True</code> 等边界。
+        </li>
+        <li>
+          <strong>Stop 返回非空就一定安全地继续</strong>：错。它只是追加一条消息；
+          如果没有全局预算或其他出口，设计不当的 Stop hook 可能让循环持续很久。
+        </li>
+        <li>
+          <strong>把权限移到 hook 后，拒绝就不用回填结果</strong>：错。位置变了，
+          Messages 协议没变；仍须用原 <code>tool_use_id</code> 回填 tool_result。
+        </li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。表负责保存，触发器负责按时调用；循环只接事件入口。"
+      data-bad="不要复制 agent_loop；把 callback 注册到对应事件即可。">
+      <p>想给每次工具调用增加日志，最符合 s04 的做法是什么？</p>
+      <button data-correct="true">写 log_hook，注册到 PreToolUse，让循环触发事件</button>
+      <button data-correct="false">为每个工具复制一份 agent_loop</button>
+      <button data-correct="false">把日志规则写进模型 system prompt</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。注册要保存函数对象，括号表示现在调用。"
+      data-bad="log_hook() 会在注册阶段立刻执行，而不是等事件发生。">
+      <p>下面哪一行是在注册 callback，而不是现在执行 callback？</p>
+      <button data-correct="true">register_hook("PreToolUse", log_hook)</button>
+      <button data-correct="false">register_hook("PreToolUse", log_hook())</button>
+      <button data-correct="false">register_hook(log_hook(), "PreToolUse")</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。返回非 None 会让触发器短路；循环再回填拒绝观察并跳过 handler。"
+      data-bad="权限 hook 的拒绝不是直接 return 整个 agent_loop，还要回填 tool_result。">
+      <p>permission_hook 返回拒绝字符串后，s04 的实际顺序是什么？</p>
+      <button data-correct="true">停止后续 Pre hook，回填 tool_result，跳过当前 handler</button>
+      <button data-correct="false">继续执行 log_hook 和 handler，但不告诉模型</button>
+      <button data-correct="false">直接结束 REPL，不再处理任何输入</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。当前 PostToolUse 的返回值没有被调用方接住，只能观察。"
+      data-bad="要改变 output，循环必须显式接住并采用 hook 返回的新值；s04 没有这条通道。">
+      <p>large_output_hook 返回一段新的字符串，当前脚本会怎样？</p>
+      <button data-correct="true">返回值被忽略，原 output 仍作为 tool_result</button>
+      <button data-correct="false">原 output 自动被替换成新字符串</button>
+      <button data-correct="false">handler 会自动再执行一次</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。当前入口只触发并忽略返回值，随后仍 append 原始 query。"
+      data-bad="名字里有 inject 不等于真的修改 query 或 messages。">
+      <p>当前 context_inject_hook 真正做了什么？</p>
+      <button data-correct="true">打印工作目录，不修改 query，也不向 messages 注入内容</button>
+      <button data-correct="false">把 WORKDIR 自动追加成一条 system 消息</button>
+      <button data-correct="false">把用户 query 替换成工作目录字符串</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。Stop 只在没有 tool_use 的退出位置触发；非空结果会让循环继续。"
+      data-bad="有 tool_use 时先执行并回填结果，不会先跑 Stop。">
+      <p>Stop hook 返回非空字符串时，循环做什么？</p>
+      <button data-correct="true">把字符串追加为 user 消息，然后 continue 下一轮</button>
+      <button data-correct="false">立即 return，并把字符串当最终答案</button>
+      <button data-correct="false">把字符串当 bash 命令直接执行</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。定义处打包，调用处解包；同一触发器才能转交不同事件参数。"
+      data-bad="这里的 *args 不是乘法，也不是把整段 messages 自动传给所有 hook。">
+      <p><code>trigger_hooks(event, *args)</code> 和 <code>callback(*args)</code> 中的星号解决什么问题？</p>
+      <button data-correct="true">接收并转交数量可变的位置参数</button>
+      <button data-correct="false">把所有 callback 并行启动</button>
+      <button data-correct="false">把工具 schema 转成 JSON 字符串</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。列表顺序是 permission_hook 先、log_hook 后；前者拒绝会短路后者。"
+      data-bad="注册表不是无序广播；本课的 for 按列表顺序运行。">
+      <p>为什么 s04 中被拒绝的工具调用可能没有出现 log_hook 的日志？</p>
+      <button data-correct="true">permission_hook 注册在前并返回非 None，触发器提前短路</button>
+      <button data-correct="false">因为拒绝的工具没有 tool_use_id</button>
+      <button data-correct="false">因为 PostToolUse 会删除所有 PreToolUse 输出</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>
+        能区分 event、callback、HOOKS、register_hook、trigger_hooks：
+        什么时候、哪个函数、存在哪里、何时真正调用。
+      </li>
+      <li>
+        能解释注册时传 <code>log_hook</code> 而不是 <code>log_hook()</code>，
+        并能读懂 <code>*args</code> 的打包 / 解包。
+      </li>
+      <li>
+        能说出四个事件的触发时机和参数：query、block、block + output、messages。
+      </li>
+      <li>
+        能从返回值推出控制流：None 继续，非 None 触发器短路；
+        PreToolUse 阻止工具，Stop 阻止退出；UserPromptSubmit / PostToolUse 当前忽略返回值。
+      </li>
+      <li>
+        能指出 s04 的 callback 注册顺序，并解释为什么权限拒绝时后面的 log hook 不一定运行。
+      </li>
+      <li>
+        能指出 <code>context_inject_hook</code> 当前只是打印，不是真正修改 query 或 messages。
+      </li>
+      <li>
+        能说明 PostToolUse 当前只能观察 output，不能自动替换 output。
+      </li>
+      <li>
+        真跑 <code>python s04_hooks/code.py</code>，至少观察到一次
+        UserPromptSubmit、一次 PreToolUse 工具日志和一次 Stop 统计；
+        对临时删除操作理解并正确处理审批。
+      </li>
+    </ul>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>
+          主阅读：
+          <a href="../../learn-claude-code-north/s04_hooks/README.zh.md">s04 中文 README</a>
+          到“试一下”即可；本课已经把其代码骨架展开。
+        </li>
+        <li>
+          对照上一课：
+          <a href="./0023-permission.html">0023 s03 Permission</a>；
+          重点看权限函数从循环调用点移到 PreToolUse 注册表。
+        </li>
+        <li>
+          压缩：
+          <a href="../../reference/phase-2/s04-hooks.html">阶段 2 · s04 速查</a>。
+        </li>
+        <li>
+          书中“工具”是理解 hook 所包围的执行边界的原理补充：
+          <a href="../../AI-Agents-in-Depth-md/%E7%AC%AC04%E7%AB%A0%20%E5%B7%A5%E5%85%B7/%E7%AC%AC04%E7%AB%A0%20%E5%B7%A5%E5%85%B7.md">第04章.md</a>；
+          不打开也不影响本课过关。
+        </li>
+      </ul>
+    </div>
+
+    <p>
+      <a href="./index.html">阶段 2 分册</a>
+      · <a href="./0023-permission.html">上一课 0023</a>
+    </p>
+    <div data-lesson-id-footer="0024"></div>
+    <footer>
+      不清楚的立刻问我。下一课 s05：让 Agent 先维护 TodoWrite 计划，再开始复杂工作。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>
