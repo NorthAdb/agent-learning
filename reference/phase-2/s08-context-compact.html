@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>阶段 2 · s08 Context Compact 速查</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+  <link rel="stylesheet" href="../../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="../index.html">速查索引</a> · 课 0028 · 打印友好</p>
+    <h1>s08：Context Compact</h1>
+    <p class="mission">
+      上下文会满；先保留可恢复细节，再逐步缩短消息，最后才让模型摘要。
+    </p>
+    <p class="src">
+      来源：
+      <a href="../../learn-claude-code-north/s08_context_compact/README.zh.md">s08 README</a>
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/README.zh.md:35">L35–49</a>；
+      <a href="../../learn-claude-code-north/s08_context_compact/code.py">code.py</a>
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:248">L248–521</a>。
+    </p>
+
+    <h2>一张图</h2>
+    <pre>每次模型调用前
+  ↓
+tool_result_budget：最新批次超 200000？
+  ↓ 大结果写盘 + 2000 字符预览
+snip_compact：消息 > 50？
+  ↓ transcript + 保留头 3 / 尾 46
+仍超 50000？
+  ↓ micro_compact：较早已消费结果替换为路径
+仍超？
+  ↓ fit_tool_results：大结果写盘 + 1000 字符预览
+仍超？
+  ↓ compact_history：模型生成事实摘要
+  ↓
+messages.create</pre>
+
+    <h2>ContextCompactor 方法地图</h2>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:247">code.py L247–521</a>；
+      详细讲解见
+      <a href="../../lessons/phase-2/0028-context-compact.html">0028 课件 · ContextCompactor 节</a>。
+    </p>
+    <table>
+      <tr><th>组合</th><th>方法</th><th>用途</th></tr>
+      <tr>
+        <td>A 转存</td>
+        <td><code>persist_large_output</code> → <code>persisted_preview</code> → <code>save_output</code> / <code>persisted_output_path</code></td>
+        <td>全文落盘，消息留路径+预览</td>
+      </tr>
+      <tr>
+        <td>B 归档</td>
+        <td><code>has_tool_use</code> / <code>is_tool_result</code> / <code>is_archive_marker</code> + <code>write_transcript</code> + <code>snip_compact</code></td>
+        <td>消息过多时头尾保留，中间进 transcript</td>
+      </tr>
+      <tr>
+        <td>C 微压缩</td>
+        <td><code>unseen_tool_result_positions</code> + <code>estimate_chars</code> + <code>micro_compact</code></td>
+        <td>缩短较早已消费结果</td>
+      </tr>
+      <tr>
+        <td>D 摘要</td>
+        <td><code>summary_input</code> + <code>summarize_history</code> + <code>summary_message</code> + <code>write_transcript</code></td>
+        <td>被 <code>compact_history</code> / <code>reactive_compact</code> 复用</td>
+      </tr>
+      <tr>
+        <td>E 入口</td>
+        <td><code>prepare</code>（请求前）；旁路 <code>reactive_compact</code> / <code>compact_history</code></td>
+        <td>编排 A–D；API 拒绝与主动 compact 走旁路</td>
+      </tr>
+    </table>
+    <p class="box">
+      叶子函数（识别、落盘）不要先读；从 <code>prepare</code> 和 <code>agent_loop</code> 往下跟调用。
+    </p>
+
+    <h2>阈值</h2>
+    <table>
+      <tr><th>常量</th><th>含义</th></tr>
+      <tr><td><code>CONTEXT_CHAR_LIMIT=50000</code></td><td>消息 JSON 字符近似的上下文阈值</td></tr>
+      <tr><td><code>TOOL_RESULT_BATCH_CHAR_LIMIT=200000</code></td><td>最新工具结果批次预算</td></tr>
+      <tr><td><code>LARGE_RESULT_CHAR_LIMIT=30000</code></td><td>单条结果超过此值可转存</td></tr>
+      <tr><td><code>KEEP_RECENT_RESULTS=3</code></td><td>微压缩保留最近三条已消费结果</td></tr>
+      <tr><td><code>KEEP_RECENT_MESSAGES=5</code></td><td>API 拒绝后的 reactive compact 保留最近消息</td></tr>
+      <tr><td><code>max_tokens=8000</code></td><td>模型本轮输出上限，不是输入窗口或轮数上限</td></tr>
+    </table>
+
+    <h2>四步规则</h2>
+    <ol>
+      <li><strong>budget：</strong>只处理最新 user 工具结果批次；按大小从大到小，完整输出存入 <code>.task_outputs/tool-results/</code>，消息留路径和预览。</li>
+      <li><strong>snip：</strong>超过 50 条时写完整 <code>.transcripts/</code>，保留头 3、尾 46 和一个 archive marker；切点保护 tool_use / tool_result 配对。</li>
+      <li><strong>micro：</strong>只缩短较早且已被模型消费的长结果；完整内容已保存，消息替换为恢复路径。</li>
+      <li><strong>fit：</strong>若最新未消费结果自己就撑爆上下文，写盘并留 1000 字符预览。</li>
+      <li><strong>summary：</strong>仍超限才调用模型；摘要是有损继续工作状态，完整 transcript 才是备份。</li>
+    </ol>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:360">budget L360–378</a>；
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:390">snip L390–410</a>；
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:410">micro L410–452</a>；
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:510">prepare L510–521</a>。
+    </p>
+
+    <h2>状态与恢复</h2>
+    <table>
+      <tr><th>位置</th><th>作用</th><th>模型是否继续看到全文</th></tr>
+      <tr><td><code>messages</code></td><td>当前请求轨迹</td><td>压缩前是；压缩后可能只有路径/摘要</td></tr>
+      <tr><td><code>.task_outputs/tool-results/</code></td><td>完整大工具结果</td><td>不会自动看到，需 read_file</td></tr>
+      <tr><td><code>.transcripts/</code></td><td>完整消息历史</td><td>不会自动看到，需工具读取</td></tr>
+      <tr><td><code>Current user request</code></td><td>压缩后保留的当前目标</td><td>会</td></tr>
+      <tr><td><code>Conversation summary</code></td><td>旧轨迹的事实摘要</td><td>会，作为参考资料</td></tr>
+    </table>
+
+    <h2>compact 工具的闭合顺序</h2>
+    <pre>tool_calls = response 中所有 tool_use
+逐个执行（包括 write_file）
+为每个调用追加 tool_result
+messages.append(user(results))
+如果包含 compact：
+    messages[:] = compact_history(...)</pre>
+    <p class="box">
+      不能见到 compact 就提前摘要；否则同一轮的其他副作用没有结果配对，模型可能重复执行。
+    </p>
+
+    <h2>API 拒绝补救</h2>
+    <pre>try:
+    messages.create(...)
+except Exception as error:
+    if "prompt_too_long" in str(error).lower():
+        reactive_compact(...)
+        retry once
+    else:
+        raise</pre>
+    <ul>
+      <li>字符估算只是近似，服务端仍可能拒绝。</li>
+      <li><code>reactive_compact</code> 保存 transcript、摘要旧历史、保留最近 5 条。</li>
+      <li><code>MAX_REACTIVE_RETRIES=1</code> 防止无限压缩循环。</li>
+    </ul>
+
+    <h2>过关句</h2>
+    <p class="box">
+      <strong>Context Compact = 先转存，后裁剪；只在仍超限时摘要。</strong>
+      压缩管理当前会话窗口；s09 Memory 才负责跨压缩、跨会话值得保留的信息。
+    </p>
+    <p><a href="../../lessons/phase-2/0028-context-compact.html">打开 0028 课件</a> · <a href="./s07-skill-loading.html">s07 Skill Loading 速查</a></p>
+    <footer>下一课：s09 Memory。记住该记的，忘掉该忘的。</footer>
+  </main>
+</body>
+</html>

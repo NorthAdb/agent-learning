@@ -189,4 +189,18 @@ window.LESSON_CURRICULUM = [
     phase: "2",
     duration: "60–90 分钟",
   },
+  {
+    id: "0028",
+    file: "phase-2/0028-context-compact.html",
+    title: "s08：上下文压缩；先整理再总结",
+    phase: "2",
+    duration: "60–90 分钟",
+  },
+  {
+    id: "0029",
+    file: "phase-2/0029-memory.html",
+    title: "s09：记忆；筛选、提取、整理持久知识",
+    phase: "2",
+    duration: "60–90 分钟",
+  },
 ];

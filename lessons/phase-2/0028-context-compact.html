@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0028 · s08 Context Compact</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0028"></div>
+    <h1>s08：上下文总会满，先整理，再总结</h1>
+    <p class="mission">
+      s07 让技能正文按需进入 <code>messages</code>，但“按需加载”并不意味着它从此不占空间：
+      一旦加载，正文、文件内容、命令日志和模型回复都会继续留在当前轨迹。长任务最终会遇到
+      上下文窗口上限。本课给 Agent 加一条<strong>可恢复优先的压缩管线</strong>：
+      先把大结果转存，接着归档旧消息、缩短已消费结果，仍然超限时才让模型生成摘要。
+      主技能是读懂<strong>哪些状态能丢、哪些状态必须保留、什么时候会增加一次模型调用</strong>。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      主材料：North
+      <a href="../../learn-claude-code-north/s08_context_compact/README.zh.md">s08 中文 README</a>
+      （上下文问题
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/README.zh.md:17">L17–31</a>，
+      四步管线
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/README.zh.md:35">L35–49</a>，
+      工具与循环
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/README.zh.md:250">L250–286</a>）
+      +
+      <a href="../../learn-claude-code-north/s08_context_compact/code.py"><code>s08_context_compact/code.py</code></a>
+      （
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:248">L248–521</a>
+      ）。
+      本课的 <code>ContextCompactor</code>、字符阈值和 <code>compact</code> 工具是 North 的教学实现，
+      不是 Anthropic API 的统一内置 API。
+    </p>
+    <p class="muted">
+      <strong>本课已内化</strong>：<code>ContextCompactor</code> 的方法职责与五组组合（转存 / 归档 / 微压缩 / 摘要 / 入口）；
+      上下文大小估算；大工具结果转存；
+      消息数量归档；工具结果的“已消费 / 未消费”边界；微压缩；
+      新结果过大时的预览；历史摘要；API 拒绝后的单次补救；
+      <code>compact</code> 工具的批次闭合；压缩前后 tool_use / tool_result 配对。
+      <strong>故意跳过</strong>：真实 tokenizer、模型厂商的精确 token 计费、
+      多轮摘要质量评测、跨会话记忆、向量检索、无限滚动历史、压缩后的自动事实校验。
+      这些不属于 s08 的最小机制；跨压缩和跨会话必须保留的知识留给 s09 Memory。
+      <strong>不另写</strong> playground；过关以真跑本章 <code>code.py</code> 为准。
+    </p>
+    <p class="muted">
+      <strong>行号约定：</strong>后文源码块中的 <code>L510</code> 等是 North 源码导航，
+      不属于 Python 代码。需要核对真实实现时，点击旁边的 <code>cursor://file/...</code> 链接。
+    </p>
+
+    <h3>本课新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>出处</th></tr>
+      <tr>
+        <td><strong>上下文窗口</strong>（context window）</td>
+        <td>一次模型请求能接收的输入范围；本课用消息 JSON 的字符数近似它，不把字符数冒充精确 token 数。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/README.zh.md:17">README L17–31</a></td>
+      </tr>
+      <tr>
+        <td><strong>压缩</strong>（compaction）</td>
+        <td>减少当前 <code>messages</code> 的信息量，同时保留继续任务所需的目标、约束和状态。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/README.zh.md:35">README L35–49</a></td>
+      </tr>
+      <tr>
+        <td><strong>可恢复转存</strong>（persist）</td>
+        <td>把完整工具输出写入工作区文件，消息里只留下路径和预览；需要时可以重新读取。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/README.zh.md:50">README L50–87</a></td>
+      </tr>
+      <tr>
+        <td><strong>工具结果批次</strong></td>
+        <td>同一轮模型回复产生的多个 <code>tool_result</code>，由最后一条 user 消息一起携带。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:559">code.py L559–573</a></td>
+      </tr>
+      <tr>
+        <td><strong>已消费结果</strong></td>
+        <td>已经被模型回复覆盖、进入下一轮之前的旧工具结果；可优先缩短，最新未读结果不能随便丢。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:287">code.py L287–306</a>、<a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:410">L410–434</a></td>
+      </tr>
+      <tr>
+        <td><strong>微压缩</strong>（micro compact）</td>
+        <td>不调用模型，把较早且已消费的长结果替换为可恢复路径，直到接近目标大小。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:410">code.py L410–434</a></td>
+      </tr>
+      <tr>
+        <td><strong>历史摘要</strong>（history summary）</td>
+        <td>让模型把旧轨迹整理成目标、文件、决定、剩余工作和约束等事实状态。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:464">code.py L464–488</a></td>
+      </tr>
+      <tr>
+        <td><strong>反应式压缩</strong>（reactive compact）</td>
+        <td>API 已因输入过长拒绝请求后，保存历史、摘要旧部分、保留最近消息并只重试一次。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/README.zh.md:201">README L201–220</a></td>
+      </tr>
+    </table>
+
+    <h2>为什么现在学？</h2>
+    <p>
+      s06 隔离了子 Agent 的中间消息，s07 控制了技能正文进入上下文的时机；但当前会话本身仍会增长。
+      读长文件、跑测试、搜索目录、加载技能，都会把观察追加到 <code>messages</code>。
+      每次下一轮请求又要带上这些历史。上下文一旦超过模型限制，请求不是“效果变差”而是直接被 API 拒绝。
+    </p>
+    <p>
+      压缩不能简单理解为“删旧消息”。工具结果常常可以重新从磁盘读取或重新执行，
+      适合先变成路径；而当前用户请求、最近工具结果、工具调用与结果的配对不能随意删。
+      因此本课把信息损失和成本排成顺序：<strong>保存 → 归档 → 替换旧结果 → 必要时摘要</strong>。
+      前三步是本地确定性操作；最后一步才会增加一次模型调用。
+    </p>
+    <p class="src">
+      North 对“先处理工具结果、最后才总结”的理由见
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/README.zh.md:35">README L35–49</a>。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>s08 概念</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr>
+        <td><code>messages</code></td>
+        <td><code>List&lt;Message&gt;</code> 会话状态</td>
+        <td>列表同时承载模型消息和工具结果，且每轮会重新作为 API 输入发送。</td>
+      </tr>
+      <tr>
+        <td><code>estimate_chars</code></td>
+        <td>序列化 DTO 后统计字符串长度</td>
+        <td>这是字符近似，不是 tokenizer 得出的 token 数，也不是 API 的真实剩余窗口。</td>
+      </tr>
+      <tr>
+        <td><code>write_transcript</code></td>
+        <td>写审计日志 / JSONL 文件</td>
+        <td>它保存完整历史供恢复，不代表这些消息仍会发给模型。</td>
+      </tr>
+      <tr>
+        <td><code>prepare</code></td>
+        <td>请求前的 middleware / interceptor</td>
+        <td>它会原地返回或替换消息列表；每次模型调用前都要经过，不能只在 CLI 启动时做一次。</td>
+      </tr>
+      <tr>
+        <td><code>compact_history</code></td>
+        <td>把旧状态折叠成一个 snapshot DTO</td>
+        <td>snapshot 的摘要来自模型，可能丢细节；完整 transcript 仍保留在磁盘。</td>
+      </tr>
+      <tr>
+        <td><code>messages[:]</code></td>
+        <td>保持同一个可变 List 引用</td>
+        <td>函数通过切片赋值更新原列表，让调用者持有的 <code>history</code> 也看到压缩后的内容。</td>
+      </tr>
+    </table>
+
+    <h2>先看全局：一条请求前管线 + 一个循环</h2>
+    <pre>当前 messages
+  ↓ 每次模型调用前
+tool_result_budget：最新批次超预算？大结果写盘 + 预览
+  ↓
+snip_compact：消息太多？写完整 transcript，保留头尾
+  ↓ 若仍超过 50000 字符
+micro_compact：缩短较早、已消费的长结果
+  ↓ 若仍超过目标
+fit_tool_results：连最新结果都太大？写盘 + 1000 字符预览
+  ↓ 若仍超过 50000
+compact_history：写 transcript + 模型生成事实摘要
+  ↓
+client.messages.create(...)
+  ↓ tool_use？
+执行完整工具批次 → 追加全部 tool_result
+  ↓ compact 工具被调用？
+批次闭合后立即 compact_history</pre>
+    <p class="box">
+      <strong>核心判断：</strong>压缩发生在“发请求前”，但 <code>compact</code> 工具的压缩发生在
+      “完整执行本轮工具批次并回填结果后”。前者保护下一次请求，后者响应模型明确的阶段性整理请求。
+    </p>
+
+    <h2><code>ContextCompactor</code>：这个类在干什么</h2>
+    <p class="src">
+      类定义与全部方法：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:247">code.py L247–521</a>；
+      模块级实例 <code>COMPACTOR</code> 在
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:523">L523</a>。
+    </p>
+    <p>
+      <code>ContextCompactor</code> 是 s08 的<strong>上下文整理器</strong>：持有模型客户端、模型名、
+      transcript 目录和 tool-results 目录；对外只暴露少数入口（主要是
+      <code>prepare</code>、<code>compact_history</code>、<code>reactive_compact</code>），
+      其余方法是入口内部用的零件。Agent loop 在每次
+      <code>messages.create</code> 前调用 <code>COMPACTOR.prepare(...)</code>，
+      自己不写压缩细节。
+    </p>
+
+    <h3>方法一览（按职责分组）</h3>
+    <table>
+      <tr><th>分组</th><th>方法</th><th>一句话作用</th></tr>
+      <tr>
+        <td rowspan="1">构造</td>
+        <td><code>__init__</code></td>
+        <td>保存 client、model、transcript 目录、tool-results 目录</td>
+      </tr>
+      <tr>
+        <td rowspan="5">识别 / 估算</td>
+        <td><code>estimate_chars</code></td>
+        <td>用 <code>json.dumps</code> 估算 messages 字符数（触发器）</td>
+      </tr>
+      <tr>
+        <td><code>block_type</code></td>
+        <td>兼容 dict / SDK 对象，读出 content block 的 type</td>
+      </tr>
+      <tr>
+        <td><code>has_tool_use</code></td>
+        <td>判断某条消息是否是带 tool_use 的 assistant 回复</td>
+      </tr>
+      <tr>
+        <td><code>is_tool_result</code></td>
+        <td>判断某条消息是否是带 tool_result 的 user 消息</td>
+      </tr>
+      <tr>
+        <td><code>unseen_tool_result_positions</code></td>
+        <td>找出“最后一条 assistant 之后”尚未被模型消费的结果位置</td>
+      </tr>
+      <tr>
+        <td rowspan="5">落盘 / 路径</td>
+        <td><code>write_transcript</code></td>
+        <td>把完整 messages 写成 <code>.transcripts/*.jsonl</code></td>
+      </tr>
+      <tr>
+        <td><code>save_output</code></td>
+        <td>把完整工具输出写成 <code>.task_outputs/tool-results/&lt;id&gt;.txt</code></td>
+      </tr>
+      <tr>
+        <td><code>persisted_output_path</code></td>
+        <td>若 content 已是“已转存”占位，解析出可信路径；否则返回 None</td>
+      </tr>
+      <tr>
+        <td><code>persisted_preview</code></td>
+        <td>写盘（或复用已有路径）+ 拼出「Full output + Preview」字符串</td>
+      </tr>
+      <tr>
+        <td><code>persist_large_output</code></td>
+        <td>超过 <code>LARGE_RESULT_CHAR_LIMIT</code> 才转存预览，否则原样返回</td>
+      </tr>
+      <tr>
+        <td rowspan="5">管线步骤</td>
+        <td><code>tool_result_budget</code></td>
+        <td>最新一批工具结果超预算时，从大到小转存预览</td>
+      </tr>
+      <tr>
+        <td><code>is_archive_marker</code></td>
+        <td>识别 snip 留下的「N messages archived at …」标记，避免重复归档</td>
+      </tr>
+      <tr>
+        <td><code>snip_compact</code></td>
+        <td>消息过多时写 transcript，保留头尾，中间换成 archive marker</td>
+      </tr>
+      <tr>
+        <td><code>micro_compact</code></td>
+        <td>缩短较早、已消费的长结果为路径占位（不调模型）</td>
+      </tr>
+      <tr>
+        <td><code>fit_tool_results</code></td>
+        <td>仍超限时，连大结果也强制转存（预览 1000 字符）</td>
+      </tr>
+      <tr>
+        <td rowspan="4">摘要</td>
+        <td><code>summary_input</code></td>
+        <td>给摘要模型准备输入；过长则头尾截断并注明中间在磁盘</td>
+      </tr>
+      <tr>
+        <td><code>summarize_history</code></td>
+        <td>真正调用模型生成事实摘要（本课唯一常走的额外 API）</td>
+      </tr>
+      <tr>
+        <td><code>summary_message</code></td>
+        <td>拼一条 user 消息：当前请求 + 摘要 + transcript 路径</td>
+      </tr>
+      <tr>
+        <td><code>compact_history</code></td>
+        <td>写 transcript → 摘要 → 用一条 Compacted 消息替换历史</td>
+      </tr>
+      <tr>
+        <td rowspan="2">对外入口</td>
+        <td><code>prepare</code></td>
+        <td>每次模型调用前的总编排：budget → snip →（必要时）micro → fit → summary</td>
+      </tr>
+      <tr>
+        <td><code>reactive_compact</code></td>
+        <td>API 因过长拒绝后的补救：摘要旧段、保留最近几条，供重试一次</td>
+      </tr>
+    </table>
+
+    <h3>哪些方法组合在一起用</h3>
+    <table>
+      <tr><th>组合</th><th>成员</th><th>怎么串</th></tr>
+      <tr>
+        <td><strong>A. 大结果转存</strong></td>
+        <td><code>persist_large_output</code> → <code>persisted_preview</code> → <code>save_output</code> / <code>persisted_output_path</code></td>
+        <td>
+          budget / fit 发现结果太大 → 先看是否已经转存过 → 否则
+          <code>save_output</code> 写全文 → 消息换成路径 + 预览
+        </td>
+      </tr>
+      <tr>
+        <td><strong>B. 消息数量归档</strong></td>
+        <td><code>has_tool_use</code> / <code>is_tool_result</code> / <code>is_archive_marker</code> + <code>write_transcript</code> + <code>snip_compact</code></td>
+        <td>
+          切点保护 tool_use↔tool_result 配对 → 完整历史落盘 → 头尾 + marker 替换中间
+        </td>
+      </tr>
+      <tr>
+        <td><strong>C. 旧结果微压缩</strong></td>
+        <td><code>unseen_tool_result_positions</code> + <code>estimate_chars</code> + <code>persisted_output_path</code> / <code>save_output</code> + <code>micro_compact</code></td>
+        <td>
+          分清“已消费 / 未消费” → 只动较早已消费结果 → 换成
+          <code>[Earlier tool result saved at …]</code>
+        </td>
+      </tr>
+      <tr>
+        <td><strong>D. 历史摘要</strong></td>
+        <td><code>write_transcript</code> + <code>summary_input</code> + <code>summarize_history</code> + <code>summary_message</code></td>
+        <td>
+          先备份 → 再调模型做事实摘要 → 拼 Compacted / Reactive compact 消息；
+          <code>compact_history</code> 与 <code>reactive_compact</code> 都复用这组零件
+        </td>
+      </tr>
+      <tr>
+        <td><strong>E. 总入口</strong></td>
+        <td><code>prepare</code> 编排 A–D；循环里另调 <code>reactive_compact</code> / <code>compact_history</code></td>
+        <td>见下方流程</td>
+      </tr>
+    </table>
+
+    <h3>类内流程（读这张就够）</h3>
+    <pre>Agent loop 每次发请求前：
+  COMPACTOR.prepare(messages, active_request)
+      │
+      ├─① tool_result_budget          ← 组合 A（每轮都跑）
+      ├─② snip_compact                ← 组合 B（每轮都跑；消息不多则空操作）
+      └─③ 若 estimate_chars &gt; 50000：
+            micro_compact             ← 组合 C
+            若仍超限 → fit_tool_results  ← 组合 A（预览改 1000）
+            若仍超限 → compact_history   ← 组合 D（才调模型）
+
+API 返回 prompt_too_long：
+  COMPACTOR.reactive_compact(...)     ← 组合 D 变体：摘要旧段 + 保留最近 5 条
+  最多重试 1 次
+
+模型主动调用 compact 工具：
+  先执行完整工具批次并回填全部 tool_result
+  再 COMPACTOR.compact_history(...)   ← 组合 D</pre>
+    <p class="box">
+      <strong>记忆口诀：</strong>识别函数帮切点与“新旧结果”划界；落盘函数保证可恢复；
+      四个管线步骤按成本升序；摘要三件套（input / summarize / message）只在最后启用；
+      <code>prepare</code> 是总调度，loop 里另外两条旁路是“API 拒绝补救”和“模型主动 compact”。
+    </p>
+    <p>
+      读源码时建议顺序：先看
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:509"><code>prepare</code> L509–521</a>
+      和
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:527"><code>agent_loop</code> L527–573</a>，
+      再按调用跳进各步骤；不要从
+      <code>persisted_output_path</code> 这种叶子函数往上猜整体流程。
+    </p>
+
+    <h2>四步管线的规则</h2>
+
+    <h3>1. <code>estimate_chars</code>：先有可解释的触发器</h3>
+    <pre>CONTEXT_CHAR_LIMIT = 50000
+
+@staticmethod
+def estimate_chars(messages: list) -&gt; int:
+    return len(json.dumps(messages, default=str, ensure_ascii=False))</pre>
+    <p class="src">
+      真实源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:248">L248–270</a>。
+    </p>
+    <p>
+      <code>json.dumps</code> 把消息列表序列化成字符串，<code>default=str</code> 让 SDK 对象等无法直接 JSON
+      序列化的值先转成字符串，<code>ensure_ascii=False</code> 保留中文而不是转成
+      <code>\u</code> 转义。最后用 <code>len</code> 统计字符数。它适合教学和稳定触发，
+      但不能精确预测服务端 token 计数；所以 API 仍可能返回“输入过长”。
+    </p>
+    <p>
+      三个阈值不要混为一谈：<code>CONTEXT_CHAR_LIMIT=50000</code> 是估算上下文阈值；
+      <code>TOOL_RESULT_BATCH_CHAR_LIMIT=200000</code> 是最新工具批次预算；
+      <code>LARGE_RESULT_CHAR_LIMIT=30000</code> 是单条结果是否值得转存。
+      <code>max_tokens=8000</code> 又是模型本轮输出上限，和这三个输入阈值不同。
+    </p>
+
+    <h3>2. <code>tool_result_budget</code>：最新大结果先保存</h3>
+    <pre>blocks = [block for block in content
+          if isinstance(block, dict) and block.get("type") == "tool_result"]
+total = sum(len(str(block.get("content", ""))) for block in blocks)
+
+for block in sorted(blocks, key=lambda item: len(str(item.get("content", ""))),
+                    reverse=True):
+    if total &lt;= limit:
+        break
+    output = str(block.get("content", ""))
+    if len(output) &lt;= self.LARGE_RESULT_CHAR_LIMIT:
+        continue
+    block["content"] = self.persist_large_output(
+        block.get("tool_use_id", "unknown"), output)
+    total = sum(len(str(item.get("content", ""))) for item in blocks)</pre>
+    <p class="src">
+      真实源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:360">L360–378</a>。
+    </p>
+    <ol>
+      <li>只看最后一条 <code>role=user</code> 的工具结果批次；旧历史交给后续步骤。</li>
+      <li>按结果长度从大到小处理，超预算时优先解决最大的那个。</li>
+      <li>完整内容写入 <code>.task_outputs/tool-results/&lt;tool_use_id&gt;.txt</code>，消息只留路径和前 2000 字符预览。</li>
+      <li>替换后重新计算总长度；可能需要继续处理第二大的结果。</li>
+    </ol>
+    <p>
+      这一步不是删除：路径是恢复指针。以后模型若需要细节，可以调用
+      <code>read_file</code> 读取保存文件。<code>tool_use_id</code> 既能关联原调用，也经过字符清理，
+      因此不会直接成为任意文件名。
+    </p>
+
+    <h3>3. <code>snip_compact</code>：消息过多时留头尾</h3>
+    <pre>head_end = 3
+tail_start = len(messages) - (max_messages - head_end - 1)
+transcript = self.write_transcript(messages)
+marker = {"role": "user", "content":
+          f"[{tail_start - head_end} messages archived at {transcript}]"}
+return [*messages[:head_end], marker, *messages[tail_start:]]</pre>
+    <p class="src">
+      真实源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:390">L390–410</a>。
+    </p>
+    <p>
+      超过 50 条消息时，当前实现保留开头 3 条、结尾 46 条，再用 1 条 marker 占位，总数回到 50。
+      但切点不能机械地落在任意下标：如果切点正好是 <code>user(tool_result)</code>，
+      它必须连同前一条 <code>assistant(tool_use)</code> 一起保留，否则下一次 API 请求会收到孤立结果。
+      <code>has_tool_use</code> 和 <code>is_tool_result</code> 正是用来保护这组协议关系的。
+    </p>
+    <p>
+      <code>write_transcript</code> 使用 JSONL（每条消息一行）保存完整历史；marker 只告诉模型“旧消息在哪里”，
+      不把完整旧内容重新塞回上下文。归档是可追溯性，保留头尾是继续工作的上下文。
+    </p>
+
+    <h3>4. <code>micro_compact</code> 与 <code>fit_tool_results</code>：只动安全的结果</h3>
+    <p>
+      <code>unseen_tool_result_positions</code> 从最后一条 assistant 消息往后找，得到最近一批尚未被模型
+      回复覆盖的工具结果。<code>micro_compact</code> 只处理已经消费的结果，并保留最近
+      <code>KEEP_RECENT_RESULTS=3</code> 条完整结果；较早且超过 120 字符的结果被替换成：
+      <code>[Earlier tool result saved at ...]</code>。
+    </p>
+    <pre>unseen = self.unseen_tool_result_positions(messages)
+consumed = [entry for entry in results if entry[:2] not in unseen]
+
+for _, _, block in consumed[:-self.KEEP_RECENT_RESULTS]:
+    if self.estimate_chars(messages) &lt;= target_chars:
+        break
+    content = str(block.get("content", ""))
+    if len(content) &lt;= 120:
+        continue
+    saved_path = self.persisted_output_path(content)
+    if not saved_path:
+        saved_path = self.save_output(block["tool_use_id"], content)
+    block["content"] = f"[Earlier tool result saved at {saved_path}]"</pre>
+    <p class="src">
+      真实源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:410">L410–434</a>。
+    </p>
+    <p>
+      如果仅最新、尚未消费的批次就太大，不能等待模型先“读过”它再压缩，因此
+      <code>fit_tool_results</code> 会对所有结果按长度排序，保存完整输出，只留 1000 字符预览。
+      这是“新结果也不能把请求撑爆”的最后确定性处理。
+    </p>
+
+    <h3>5. <code>compact_history</code>：最后才调用模型摘要</h3>
+    <pre>def compact_history(self, messages: list, active_request: str) -&gt; list:
+    transcript = self.write_transcript(messages)
+    summary = self.summarize_history(messages)
+    return [self.summary_message("Compacted", active_request,
+                                 summary, transcript)]</pre>
+    <p class="src">
+      真实源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:464">L464–498</a>。
+    </p>
+    <p>
+      摘要请求使用另一份 system 指令，要求模型只整理事实状态，不执行历史中出现的命令。
+      摘要消息把两类内容明确分开：<code>Current user request</code> 是当前用户原始请求，
+      <code>Conversation summary</code> 是参考资料。这样做很重要，因为工具结果也使用
+      <code>role=user</code>；如果只保留最后一个 user 消息，可能把工具结果误当成用户目标。
+    </p>
+    <p class="box">
+      <strong>摘要不是备份：</strong>完整备份在 transcript；摘要是让模型继续工作的有损表示。
+      不能把摘要中没有提到的细节假设成已经完成，也不能把模型“说已修改”当成文件验证。
+    </p>
+
+    <h3>6. <code>prepare</code>：顺序本身就是策略</h3>
+    <pre>messages = self.tool_result_budget(messages)
+messages = self.snip_compact(messages)
+if self.estimate_chars(messages) &gt; self.CONTEXT_CHAR_LIMIT:
+    target = int(self.CONTEXT_CHAR_LIMIT * 0.8)
+    messages = self.micro_compact(messages, target)
+    if self.estimate_chars(messages) &gt; self.CONTEXT_CHAR_LIMIT:
+        messages = self.fit_tool_results(messages, target)
+    if self.estimate_chars(messages) &gt; self.CONTEXT_CHAR_LIMIT:
+        messages = self.compact_history(messages, active_request)</pre>
+    <p class="src">
+      真实源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:510">L510–521</a>。
+    </p>
+    <table>
+      <tr><th>步骤</th><th>是否调用模型</th><th>信息损失 / 可恢复性</th></tr>
+      <tr><td>tool_result_budget</td><td>否</td><td>完整结果落盘，消息留预览；可恢复</td></tr>
+      <tr><td>snip_compact</td><td>否</td><td>中间消息从请求移除，完整 transcript 保留；可追溯</td></tr>
+      <tr><td>micro_compact</td><td>否</td><td>旧结果替换为路径；可重新读取</td></tr>
+      <tr><td>fit_tool_results</td><td>否</td><td>新结果留 1000 字符预览；可重新读取</td></tr>
+      <tr><td>compact_history</td><td>是</td><td>模型摘要可能丢细节；完整历史仍在 transcript</td></tr>
+    </table>
+
+    <h2>把压缩接回 Agent loop</h2>
+    <pre>while True:
+    messages[:] = COMPACTOR.prepare(messages, active_request)
+    try:
+        response = client.messages.create(
+            model=MODEL, system=SYSTEM, messages=messages,
+            tools=TOOLS, max_tokens=8000)
+    except Exception as error:
+        if too_long and reactive_retries &lt; MAX_REACTIVE_RETRIES:
+            messages[:] = COMPACTOR.reactive_compact(messages, active_request)
+            reactive_retries += 1
+            continue
+        raise</pre>
+    <p class="src">
+      真实源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:529">L529–548</a>。
+    </p>
+    <p>
+      <code>messages[:]</code> 是本课值得单独停一下的 Python 语法：它替换原列表的全部元素，
+      保留列表对象本身。若写成 <code>messages = COMPACTOR.prepare(...)</code>，
+      只是让函数局部变量指向新列表，外层 <code>history</code> 可能仍持有旧列表。
+      这和 0016 的共享状态、以及 0027 的 registry / system 字符串分层是一致的：
+      必须分清“修改对象”与“让局部名字改指向另一个对象”。
+    </p>
+    <p>
+      字符估算仍可能和服务端真实 token 数不一致，所以 <code>try/except</code> 捕获异常文本中的
+      <code>prompt_too_long</code> 或 <code>too many tokens</code>。<code>reactive_compact</code>
+      保存 transcript、摘要旧历史、保留最近 5 条消息，并且最多重试一次；第二次仍过长就继续抛出，
+      不无限循环掩盖问题。
+    </p>
+
+    <h2><code>compact</code> 工具：先闭合本轮，再压缩</h2>
+    <pre>compact_requested = False
+for block in tool_calls:
+    if block.name == "compact":
+        output = "Compaction requested after this tool batch."
+        compact_requested = True
+    else:
+        output = execute_tool(block)
+    results.append({"type": "tool_result",
+                    "tool_use_id": block.id, "content": output})
+
+messages.append({"role": "user", "content": results})
+if compact_requested:
+    messages[:] = COMPACTOR.compact_history(messages, active_request)</pre>
+    <p class="src">
+      真实源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:549">L549–573</a>。
+    </p>
+    <p>
+      模型可能在同一回复里同时要求 <code>write_file</code> 和 <code>compact</code>。Harness 不能见到
+      <code>compact</code> 就立刻摘要，否则前一个写文件的 <code>tool_use</code> 还没有对应的
+      <code>tool_result</code>，下一次请求就会留下协议不完整的轨迹。正确顺序是：
+      <strong>执行所有工具 → 为每个调用回填结果 → 再压缩</strong>。压缩是对一轮已经闭合的状态做整理。
+    </p>
+
+    <h2>三个由现象推回实现的案例</h2>
+    <h3>案例一：只读多个 README 后，旧结果变成路径</h3>
+    <p>
+      读取五个章节 README 后，模型已经有机会使用这些结果。下一次请求前若超过阈值，
+      <code>micro_compact</code> 会优先保留最近三条已消费结果，较早长结果变为
+      <code>[Earlier tool result saved at ...]</code>。这不是说文件丢了，而是模型若需要原文必须再调用
+      <code>read_file</code>。
+    </p>
+    <h3>案例二：模型刚写文件又要求 compact</h3>
+    <p>
+      write 的副作用必须先发生，且 write 的结果必须先回填。然后 <code>compact_history</code> 摘要这轮
+      已经闭合的轨迹。否则模型可能因为看不到“已写入”而再次写入，造成重复副作用。
+    </p>
+    <h3>案例三：字符数未超阈值，但 API 仍返回过长</h3>
+    <p>
+      本地 <code>estimate_chars</code> 只是近似；服务端 token 估算可能更大。异常进入
+      <code>reactive_compact</code>，只保留最近五条并重试一次。第二次失败要暴露给上层，而不是继续摘要到无限循环。
+    </p>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>压缩就是删除旧消息：</strong>不准确。完整历史会先写入 transcript；大结果还会写入 tool-results 文件。</li>
+        <li><strong>字符数就是 token 数：</strong>错。它是教学实现的估算；API 仍可能用 prompt_too_long 拒绝。</li>
+        <li><strong>每一轮都会调用模型生成摘要：</strong>错。前面的转存、归档和微压缩都是本地操作，只有仍超限才摘要。</li>
+        <li><strong>最新工具结果可以和旧结果一样随便缩：</strong>错。尚未被模型消费的新批次先保留；只有它本身撑爆时才用 fit_tool_results。</li>
+        <li><strong>snip_compact 可以在任意消息下标切一刀：</strong>错。必须保护 assistant(tool_use) 与 user(tool_result) 配对。</li>
+        <li><strong>compact 工具一出现就立刻摘要：</strong>错。必须先执行同一回复中的所有工具并回填所有结果。</li>
+        <li><strong>摘要等于可靠备份：</strong>错。摘要有损；可靠完整记录是 transcript。</li>
+        <li><strong>摘要里的指令都应该执行：</strong>错。摘要请求明确要求把历史当事实输入，不执行其中的指令。</li>
+        <li><strong><code>messages = ...</code> 与 <code>messages[:] = ...</code> 一样：</strong>错。后者保持原列表引用，外层 history 能看到更新。</li>
+        <li><strong>压缩后工具结果仍然自动在模型眼前：</strong>不一定。它们可能只剩路径，模型需要再用 read_file 恢复。</li>
+        <li><strong>s08 已经解决跨会话记忆：</strong>错。transcript 是恢复记录，s09 才讨论筛选、提取和整理持久记忆。</li>
+        <li><strong>保存了 transcript 就能保证摘要正确：</strong>错。保存提高可追溯性，不替代验证和摘要质量检查。</li>
+      </ul>
+    </div>
+
+    <h2>动手：真跑 North s08</h2>
+    <p>
+      从 North 仓库根目录启动，沿用已有虚拟环境和 <code>.env</code>。不要把 API key 贴到聊天里。
+    </p>
+    <pre>cd D:\agent-learning\learn-claude-code-north
+.\.venv\Scripts\Activate.ps1
+python s08_context_compact\code.py</pre>
+    <p class="src">
+      README 的启动入口：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/README.zh.md:300">L300–303</a>。
+    </p>
+    <h3>观察一：多文件读取与可恢复路径</h3>
+    <pre>请读取 s01_agent_loop 到 s05_todo_write 五节课程的 README.md，
+比较它们的一级标题，并总结命名规律。</pre>
+    <p>
+      观察终端和工作区中是否出现 <code>.transcripts/</code> 或
+      <code>.task_outputs/tool-results/</code>。不要只看最终答案；重点确认旧结果被替换时是否留下恢复路径。
+    </p>
+    <h3>观察二：显式请求 compact</h3>
+    <pre>先读取 s08_context_compact/README.zh.md 的前 80 行，
+再把这部分内容总结成三个要点，并在总结前主动 compact。</pre>
+    <p>
+      如果模型在同一回复里先读文件再调用 compact，Harness 应先回填 read_file 的结果，
+      然后才生成 <code>[Compacted]</code> 消息。你要能说明为什么不能在 read_file 结果回填前压缩。
+    </p>
+    <h3>观察三：恢复压缩前的事实</h3>
+    <p>
+      当终端出现 transcript 或 persisted-output 路径时，要求模型“读取那个路径，核对一个具体事实”。
+      观察：压缩减少了上下文体积，但并没有让恢复动作自动发生；模型必须再次调用工具。
+    </p>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。转存只改变消息里的表示，完整输出留在 .task_outputs/tool-results/，可按路径重新读取。"
+      data-bad="不要把“从 messages 移除全文”理解成“从工作区删除文件”。">
+      <p>tool_result_budget 把超大的工具结果替换成预览后，完整结果去哪了？</p>
+      <button data-correct="true">写入 .task_outputs/tool-results/，消息保留恢复路径和预览</button>
+      <button data-correct="false">被永久删除，无法恢复</button>
+      <button data-correct="false">被自动放进 system prompt</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。先处理确定性且可恢复的结果，只有仍超限才调用模型摘要。"
+      data-bad="四步管线的重点正是成本和信息损失逐步上升。">
+      <p>为什么历史摘要不应该成为每轮压缩的第一步？</p>
+      <button data-correct="false">因为模型不能读取任何历史</button>
+      <button data-correct="true">它增加一次模型调用且可能丢细节，应先做可恢复的本地压缩</button>
+      <button data-correct="false">因为摘要会自动执行历史命令</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。切断配对会留下孤立 tool_result，下一次 Messages 请求可能无效。"
+      data-bad="工具调用和工具结果是协议上的一对，不能只按消息数量随意切。">
+      <p>snip_compact 为什么要保护 assistant(tool_use) 与 user(tool_result) 的配对？</p>
+      <button data-correct="true">避免下一次请求出现没有对应调用的孤立工具结果</button>
+      <button data-correct="false">因为两个角色必须永远相邻，不能有普通文本</button>
+      <button data-correct="false">因为配对决定文件是否真的写入磁盘</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。compact 只是请求；必须先把同一回复中的全部 tool_result 回填，再压缩闭合回合。"
+      data-bad="先执行所有工具并回填，再摘要，才能避免遗漏副作用记录。">
+      <p>模型同时调用 write_file 和 compact 时，正确顺序是什么？</p>
+      <button data-correct="false">先 compact，取消 write_file</button>
+      <button data-correct="true">执行完整工具批次、回填所有结果，然后 compact_history</button>
+      <button data-correct="false">只回填 compact 的结果，忽略 write_file</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。messages[:] 修改原列表，外层 history 仍持有同一个列表对象。"
+      data-bad="区分重新绑定局部名字和原地替换共享列表内容。">
+      <p>为什么 s08 使用 messages[:] = COMPACTOR.prepare(...)？</p>
+      <button data-correct="true">保持原列表引用，让外层 history 看到压缩后的消息</button>
+      <button data-correct="false">让 Python 自动复制所有消息两份</button>
+      <button data-correct="false">把消息从内存永久写入 transcript</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。estimate_chars 是近似，所以 API 拒绝后还需要一次受限的 reactive_compact。"
+      data-bad="本地字符阈值不是服务端 token 计数；补救最多重试一次。">
+      <p>本地估算未超 50000 字符，但 API 返回 prompt_too_long，代码怎么办？</p>
+      <button data-correct="false">忽略错误，继续无限请求</button>
+      <button data-correct="true">执行 reactive_compact 并最多重试一次，仍失败则抛出</button>
+      <button data-correct="false">把 max_tokens 调大以扩大输入窗口</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能用一句话解释 s08：上下文超限时，按可恢复性和成本从工具结果整理逐步走到历史摘要。</li>
+      <li>能按五组组合说出 <code>ContextCompactor</code> 里方法怎么串：转存 A、归档 B、微压缩 C、摘要 D、入口 E；并能指出 <code>prepare</code> 是总调度。</li>
+      <li>能区分上下文字符近似、工具批次预算、单条大结果阈值和 <code>max_tokens</code>。</li>
+      <li>能从 <code>tool_result_budget</code> 说明完整输出如何落盘、消息为何只留预览和路径。</li>
+      <li>能从 <code>snip_compact</code> 解释头尾保留、transcript marker 和 tool_use / tool_result 配对保护。</li>
+      <li>能解释“已消费结果”与“最新未消费结果”的区别，以及 <code>micro_compact</code> 和 <code>fit_tool_results</code> 的差异。</li>
+      <li>能说明 <code>compact_history</code> 为什么分开保存 active_request 与 conversation summary，以及摘要为什么是有损表示。</li>
+      <li>能按真实顺序讲出 <code>prepare</code>：budget → snip → micro → fit → summary。</li>
+      <li>能解释 <code>messages[:]</code> 与普通重新绑定的区别，并说明它对外层 history 的影响。</li>
+      <li>能说明 API 过长拒绝后的 reactive compact 只重试一次，不是无限自我压缩。</li>
+      <li>能解释 compact 工具为什么必须等同一轮所有 tool_result 回填后才压缩。</li>
+      <li>真跑 <code>python s08_context_compact\code.py</code>，至少观察一次读取、一次恢复路径或 transcript，以及一次主动或自动压缩。</li>
+    </ul>
+
+    <h2>速查</h2>
+    <div class="box">
+      <p>
+        本课压缩版：
+        <a href="../../reference/phase-2/s08-context-compact.html">阶段 2 · s08 Context Compact 速查</a>。
+        先用本课理解“哪些能恢复、哪些不能断配对”，再用速查回忆阈值和控制流。
+      </p>
+      <p>
+        本课的新稳定术语已追加到
+        <a href="../../GLOSSARY.md">GLOSSARY.md</a> 的 Context Compact 部分。
+      </p>
+    </div>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>
+          主阅读：
+          <a href="../../learn-claude-code-north/s08_context_compact/README.zh.md">North s08 中文 README</a>；
+          本课已把四步管线、工具批次和异常补救展开，不打开也可以按过关标准学习。
+        </li>
+        <li>
+          对照上一课：
+          <a href="./0027-skill-loading.html">0027 s07 Skill Loading</a>；
+          重点观察：skill 正文进入 messages 后，正是本课要管理的上下文负担。
+        </li>
+        <li>
+          原理回看：
+          <a href="../phase-1/0017-agent-formula.html">0017 Agent 公式</a>；
+          重点是每次模型请求都重新接收 system、tools 和 messages。
+        </li>
+        <li>
+          下一课：s09 Memory 会处理“哪些信息值得跨压缩、跨会话继续存在”，不是简单保存全部历史。
+        </li>
+      </ul>
+    </div>
+
+    <p>
+      <a href="./index.html">阶段 2 分册</a>
+      · <a href="./0027-skill-loading.html">上一课 0027</a>
+    </p>
+    <div data-lesson-id-footer="0028"></div>
+    <footer>
+      不清楚的立刻问我。下一课 s09：把值得留下的知识从当前上下文中筛出来，形成持久记忆。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0029 · s09 Memory</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0029"></div>
+    <h1>s09：记住该记的，忘掉该忘的</h1>
+    <p class="mission">
+      s08 解决的是<strong>当前会话太长</strong>：先转存、裁剪，再必要时摘要。
+      但新会话开始时，<code>messages</code> 仍然是空的。用户反复说明的编码偏好、
+      项目稳定事实和以后仍有用的排查线索，不应该每次都重新输入。
+      本课给 Harness 加上<strong>选择性、可恢复、可跨会话的记忆层</strong>：
+      只保存值得复用的知识，先用目录选择，再按需加载正文。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      主材料：North
+      <a href="../../learn-claude-code-north/s09_memory/README.zh.md">s09 中文 README</a>
+      （问题与四个子系统
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/README.zh.md:13">L13–30</a>，
+      存储
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/README.zh.md:35">L35–68</a>，
+      召回与提取
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/README.zh.md:70">L70–118</a>，
+      整理
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/README.zh.md:120">L120–153</a>）
+      +
+      <a href="../../learn-claude-code-north/s09_memory/code.py"><code>s09_memory/code.py</code></a>
+      （存储与召回
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:70">L70–330</a>，
+      提取与整理
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:350">L350–530</a>，
+      loop 接入
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:720">L720–750</a>）。
+      本课的 Memory 是 North 的教学实现，不是某个模型供应商内置的统一记忆 API。
+    </p>
+    <p class="muted">
+      <strong>本课已内化</strong>：一记忆一文件、YAML frontmatter、<code>MEMORY.md</code>
+      索引、路径边界、轻量模型选择、关键词降级、召回长度上限、候选提取、持久性 scope、
+      临时记号过滤、重复过滤、回合结束接入、阈值整理、快照恢复，以及记忆与当前请求的优先级。
+      <strong>故意跳过</strong>：向量数据库、embedding、语义相似度评测、跨进程并发锁、
+      记忆自动过期策略、用户可视化编辑器、生产级加密和多租户隔离。
+      s09 先钉住“选择性存取”的最小闭环；这些规模化问题不属于本章实现。
+      <strong>不另写</strong> playground；过关以真跑本章 <code>code.py</code> 为准。
+    </p>
+    <p class="muted">
+      <strong>行号约定：</strong>下文源码块中的 <code>L300</code> 等是 North 源码导航，
+      不属于 Python 代码。需要核对实现时，点击旁边的 <code>cursor://file/...</code> 链接。
+    </p>
+
+    <h3>本课新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>出处</th></tr>
+      <tr>
+        <td><strong>Memory</strong> / 记忆</td>
+        <td>跨当前会话保存、以后可能复用的结构化知识；不是当前 <code>messages</code> 的无损副本。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/README.zh.md:13">README L13–30</a></td>
+      </tr>
+      <tr>
+        <td><strong>记忆记录</strong>（memory record）</td>
+        <td><code>.memory/</code> 下的一份 Markdown 文件，frontmatter 有 name、description、type。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/README.zh.md:35">README L35–54</a></td>
+      </tr>
+      <tr>
+        <td><strong>记忆索引</strong>（memory index）</td>
+        <td><code>MEMORY.md</code> 中的短目录；用于选择，不等于所有记忆正文。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:165">code.py L165–186</a></td>
+      </tr>
+      <tr>
+        <td><strong>召回</strong>（recall）</td>
+        <td>根据当前请求选择少量相关记录，再读取它们的正文加入本次 system。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/README.zh.md:70">README L70–92</a></td>
+      </tr>
+      <tr>
+        <td><strong>提取</strong>（extraction）</td>
+        <td>从本轮对话中生成“可能值得长期保存”的候选，不代表候选已经写盘。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:388">code.py L388–445</a></td>
+      </tr>
+      <tr>
+        <td><strong>持久性 scope</strong></td>
+        <td>候选的适用范围；只有 <code>persistent</code> 才允许跨会话保存，<code>current_task</code> 是临时状态。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:360">code.py L360–386</a></td>
+      </tr>
+      <tr>
+        <td><strong>关键词降级</strong>（keyword fallback）</td>
+        <td>轻量模型选择或 JSON 解析失败时，根据请求词与记录目录的命中数选记录。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:264">code.py L264–318</a></td>
+      </tr>
+      <tr>
+        <td><strong>整理</strong>（consolidation）</td>
+        <td>记录达到阈值后合并重复、应用较新修正、丢弃无用内容，并以快照支持恢复。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:450">code.py L450–532</a></td>
+      </tr>
+    </table>
+
+    <h2>为什么现在学？</h2>
+    <p>
+      s08 的 transcript 很有价值，但它回答的是“完整历史在哪里”，不是“下次任务应该带哪几条事实”。
+      如果每次新会话都把全部 transcript 塞进 system，记忆越多，当前任务越难找到重点；
+      还可能把已经过期的旧命令误当成今天仍有效的规则。
+    </p>
+    <p>
+      Memory 做的是一次筛选：把“用户长期偏好”“稳定项目事实”“以后仍有用的反馈”
+      从当前对话中提取出来；新会话只根据当前请求召回相关记录。它不是把模型训练成记住用户，
+      也不是把所有聊天自动归档。真正的难点是<strong>边界</strong>：什么值得保存，什么只是本轮临时要求。
+    </p>
+    <p class="src">
+      North 对“完整 transcript 不适合每次发给模型”的解释见
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/README.zh.md:13">README L13–30</a>。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>s09 概念</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr>
+        <td><code>.memory/*.md</code></td>
+        <td>文件型小型持久化存储</td>
+        <td>每条记录既有人读的正文，又有 YAML metadata；不是数据库事务表。</td>
+      </tr>
+      <tr>
+        <td><code>MEMORY.md</code></td>
+        <td>索引表 / catalog</td>
+        <td>只用于发现和选择；正文仍在各自文件中，索引可由文件重建。</td>
+      </tr>
+      <tr>
+        <td><code>list_memory_files()</code></td>
+        <td>Repository 查询实体列表</td>
+        <td>这里每次扫描磁盘并解析 frontmatter，没有 ORM identity map。</td>
+      </tr>
+      <tr>
+        <td><code>select_relevant_memories()</code></td>
+        <td>先查候选 ID，再批量加载 DTO</td>
+        <td>候选选择可能调用模型；失败后有关键词降级，不让召回完全依赖模型。</td>
+      </tr>
+      <tr>
+        <td><code>should_store_memory()</code></td>
+        <td>写入前的 validator / business rule</td>
+        <td>模型返回候选不是事实；scope、类型、非空、临时性和重复都要再次检查。</td>
+      </tr>
+      <tr>
+        <td><code>consolidate_memories()</code></td>
+        <td>批量迁移 + 快照恢复</td>
+        <td>North 用文件删除后重写模拟替换；不是数据库 transaction，也不是无失败风险。</td>
+      </tr>
+    </table>
+
+    <h2>先看全局：一个跨会话闭环</h2>
+    <pre>新会话启动 / 用户发起请求
+  ↓
+读取 MEMORY.md 目录
+  ↓
+select_relevant_memories：轻量模型选最多 5 条
+  └─失败 → keyword_memory_selection
+  ↓
+load_memories：按剩余 20000 字符读取正文
+  ↓
+build_system：把“背景知识”加入 system，当前请求优先
+  ↓
+Agent loop：模型调用工具、获得观察、回答
+  ↓
+无 tool_use 的 Stop 点
+  ↓
+extract_memories：只生成耐久候选
+  ↓
+validate + should_store_memory：拒绝临时、无效、重复候选
+  ↓
+write_memory_file：一条记录一个文件
+  ↓
+rebuild_memory_index：从文件重建 MEMORY.md
+  ↓
+达到 10 条？
+  ├─否：结束本轮
+  └─是：consolidate → 校验 → 快照替换 → 失败恢复</pre>
+    <p class="box">
+      <strong>一句话：</strong>召回发生在本轮模型调用前，提取发生在本轮完成后。
+      前者把过去的知识带进来，后者决定本轮有什么值得带到未来。
+    </p>
+
+    <h2>四层状态：同一条知识放在哪里？</h2>
+    <table>
+      <tr><th>位置</th><th>保存什么</th><th>模型何时看到</th><th>生命周期</th></tr>
+      <tr>
+        <td><code>messages</code></td>
+        <td>当前会话轨迹</td>
+        <td>每次请求按历史发送</td>
+        <td>当前进程 / 当前会话</td>
+      </tr>
+      <tr>
+        <td><code>.memory/name.md</code></td>
+        <td>一条完整记忆的 metadata + body</td>
+        <td>被选择后才读取并注入</td>
+        <td>跨进程、跨会话，直到修改或删除</td>
+      </tr>
+      <tr>
+        <td><code>.memory/MEMORY.md</code></td>
+        <td>记录名称和 description 的目录</td>
+        <td>选择阶段作为目录输入</td>
+        <td>由记录文件重新生成</td>
+      </tr>
+      <tr>
+        <td><code>system</code></td>
+        <td>本次请求的工作规则 + 被召回背景</td>
+        <td>当前请求的每一次模型调用</td>
+        <td>本次 <code>agent_loop</code></td>
+      </tr>
+    </table>
+    <p>
+      这张表是本课的核心。文件存在不等于模型已经看到；索引存在不等于正文已经进入上下文；
+      召回进入 system 也不等于它拥有比当前用户请求更高的优先级。
+    </p>
+
+    <h2>系统讲解</h2>
+
+    <h3>1. 存储：一条记忆一个文件</h3>
+    <p>
+      s09 的最小记录格式是 Markdown 文件。YAML frontmatter 是文件顶部两条
+      <code>---</code> 之间的 metadata 区域；本课第一次在 s07 见过它。这里需要三个字段：
+      <code>name</code> 是人和程序识别的名称，<code>description</code> 是选择阶段使用的短说明，
+      <code>type</code> 区分用户偏好、反馈、项目事实和外部参考。
+    </p>
+    <pre>---
+name: user-preference-tabs
+description: User prefers tabs for indentation
+type: user
+---
+
+User prefers using tabs, not spaces, for indentation.</pre>
+    <p>
+      <code>type</code> 不是执行权限，也不是模型选择的唯一条件。当前允许值是
+      <code>user</code>、<code>feedback</code>、<code>project</code>、<code>reference</code>。
+      “用户喜欢 tab”适合 user；“不要 mock 数据库”若长期适用可算 feedback；
+      “认证重写由合规要求驱动”是 project；“问题记录在 Linear INGEST”是 reference。
+    </p>
+
+    <h4>1.1 <code>memory_slug</code>：名称变成文件名</h4>
+    <pre>def memory_slug(name: str) -&gt; str:
+    slug = re.sub(r"[^\w]+", "-", name.lower()).strip("-_")
+    return slug or "memory"</pre>
+    <p class="src">
+      真实实现：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:84">code.py L84–87</a>。
+    </p>
+    <p>
+      <code>re.sub</code> 把一段文本中“不属于单词字符”的连续部分替换为短横线；
+      <code>lower()</code> 做小写归一化；<code>strip("-_")</code> 去掉两端的分隔符。
+      例如 <code>"User Preference: Tabs"</code> 变成 <code>user-preference-tabs.md</code>。
+      若名称全是标点，最后用 <code>memory</code> 兜底。
+    </p>
+    <h4>1.1.1 为什么还有一个 <code>_memory_slug</code>？</h4>
+    <pre>def _memory_slug(name: str) -&gt; str:
+    return memory_slug(name)
+
+path = MEMORY_DIR / f"{_memory_slug(name)}.md"</pre>
+    <p class="src">
+      真实实现：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:102">code.py L102–103</a>；
+      调用位置：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:488">L488–510</a>。
+    </p>
+    <p>
+      函数名前面的单个 <code>_</code> 是 Python 的<strong>内部约定</strong>：
+      “这是模块内部使用的辅助名字，不是稳定的公开入口”。它不会像 Java
+      <code>private</code> 那样阻止外部调用；外部仍然可以写
+      <code>module._memory_slug("...")</code>，只是调用者不应该依赖它。
+      这里的 wrapper 暂时只转调公开的 <code>memory_slug</code>，功能结果相同；
+      代码作者把它标成内部名，通常是在表达“这个别名是实现细节，未来可删或改”。
+    </p>
+    <table>
+      <tr><th>写法</th><th>含义</th><th>是否真的禁止访问</th></tr>
+      <tr>
+        <td><code>memory_slug</code></td>
+        <td>模块提供的普通入口</td>
+        <td>否；Python 没有 public 关键字</td>
+      </tr>
+      <tr>
+        <td><code>_memory_slug</code></td>
+        <td>约定上的内部辅助入口</td>
+        <td>否；只是告诉读者“别把它当 API”</td>
+      </tr>
+      <tr>
+        <td><code>__memory_slug</code></td>
+        <td>双下划线名称改写语境</td>
+        <td>也不是真正 private；本课不需要这种写法</td>
+      </tr>
+    </table>
+    <p class="box">
+      <strong>读代码口诀：</strong>单下划线主要是“作者给人的信号”，不是权限闸门。
+      看到 <code>_helper</code>，先把它当内部零件；只有它的调用关系需要解释时，才跳进去看。
+    </p>
+
+    <h4>1.1.2 <code>_normalized_memory_text</code>：为比较准备文本</h4>
+    <pre>def _normalized_memory_text(value: str) -&gt; str:
+    return " ".join(value.lower().split())
+
+candidate_text = _normalized_memory_text(
+    f"{name}\n{description}\n{body}"
+)</pre>
+    <p class="src">
+      真实定义与调用：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:105">code.py L105–106</a>、
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:126">L126–137</a>。
+    </p>
+    <p>
+      这个函数名字前面的 <code>_</code> 同样表示“内部辅助函数”。它的用途不是改写用户要保存的正文，
+      而是生成一个<strong>比较用副本</strong>：<code>lower()</code> 把大小写统一，
+      <code>split()</code> 不带参数时按任意空白切开并丢掉多余空白，
+      <code>" ".join(...)</code> 再用一个普通空格拼回去。
+      例如 <code>" Tabs\n for   Java "</code> 会变成
+      <code>"tabs for java"</code>。
+    </p>
+    <p>
+      s09 用它比较候选是否和已有记忆的 description 或 body 重复，所以
+      <code>"Use  tabs"</code> 与 <code>"use tabs"</code> 会被视作相同形式。
+      但它不是语义去重：<code>"偏好 tab"</code> 与
+      <code>"喜欢制表符"</code> 仍可能被当成不同文本。它也不修改真正写盘的原始
+      <code>name</code>、<code>description</code> 或 <code>body</code>。
+    </p>
+    <p class="box">
+      <strong>边界：</strong>slug 只解决“用名称生成一个稳定文件名”，不负责证明名称唯一，
+      也不负责防止同义内容重复。重复规则由 <code>should_store_memory</code> 再检查。
+    </p>
+
+    <h4>1.2 <code>memory_path</code>：文件名边界是运行时保护</h4>
+    <pre>def memory_path(filename: str, allow_index: bool = False) -&gt; Path:
+    if Path(filename).name != filename:
+        raise ValueError(f"Invalid memory filename: {filename}")
+    root = MEMORY_DIR.resolve()
+    path = (root / filename).resolve()
+    if not path.is_relative_to(root):
+        raise ValueError(f"Memory path escapes the store: {filename}")
+    return path</pre>
+    <p class="src">
+      真实实现：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:89">code.py L89–103</a>。
+    </p>
+    <p>
+      这里有三步容易混淆。第一，<code>Path(filename).name != filename</code> 拒绝带目录的输入，
+      所以 <code>../secret.md</code> 不是一个合法的记忆文件名。第二，<code>resolve()</code>
+      把路径规范化为绝对路径。第三，<code>is_relative_to(root)</code> 只回答“是否仍在
+      <code>.memory</code> 根目录下面”。真正抛出错误的是外层 <code>if</code>，不是
+      <code>resolve()</code> 自动拒绝。
+    </p>
+    <p>
+      <code>allow_index=True</code> 是一个小但重要的边界：<code>MEMORY.md</code> 是索引，
+      不是一条可被当作记忆记录读取的普通文件。写索引的内部调用允许它，读取某条记录的调用不允许它。
+    </p>
+
+    <h4>1.3 写入后立即重建索引</h4>
+    <pre>path.write_text(
+    memory_document(name, mem_type, description, body),
+    encoding="utf-8",
+)
+rebuild_memory_index()
+return path</pre>
+    <p class="src">
+      真实实现：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:146">code.py L146–163</a>。
+    </p>
+    <p>
+      <code>write_text</code> 把完整记忆写入单独文件；随后 <code>rebuild_memory_index()</code>
+      重新扫描所有 <code>*.md</code>，跳过索引本身，再从每个文件的 metadata 生成一行链接。
+      因此索引是<strong>派生状态</strong>：如果索引和记录文件不一致，可以从记录文件重建。
+      这和把索引作为唯一真相不同。
+    </p>
+
+    <h3>2. 召回：先选目录，再加载正文</h3>
+    <p>
+      新会话不能把所有记忆正文都放进 system。s09 先调用
+      <code>list_memory_files()</code> 得到记录目录，再把名称和 description 拼成轻量 catalog。
+      一个小模型只负责选择 catalog 下标，最多五条；真正的正文由
+      <code>load_memories()</code> 再读取，且整个召回内容最多 20000 字符。
+    </p>
+    <pre>records = list_memory_files()
+catalog = "\n".join(
+    f"{index}: {record['name']} - {record['description']}"
+    for index, record in enumerate(records)
+)
+prompt = (
+    "Select memory records that are relevant to the current user request. "
+    "Return only a JSON array of catalog indices, such as [0, 2]. "
+    "Return [] when none are relevant."
+)</pre>
+    <p class="src">
+      目录选择：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:280">code.py L280–318</a>；
+      长度上限：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:320">L320–330</a>。
+    </p>
+    <p>
+      这个模型调用的任务非常窄：只选编号，不负责读取文件、不负责写记忆、不负责执行用户任务。
+      <code>extract_json_array</code> 会在返回文本中寻找能解析的 JSON 数组；即使模型多说了一句，
+      只要其中有数组仍可能成功。索引还要逐项检查必须是整数、必须在 records 范围内、不能重复。
+    </p>
+
+    <h4>2.1 为什么要关键词降级？</h4>
+    <pre>try:
+    response = client.messages.create(...)
+    indices = extract_json_array(...)
+    ...
+    return selected
+except Exception:
+    return keyword_memory_selection(records, query, max_items)</pre>
+    <p class="src">
+      真实分支：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:299">code.py L299–318</a>。
+    </p>
+    <p>
+      召回本身不应该因为一次模型超时、供应商错误或 JSON 格式错误而完全失效。
+      <code>keyword_memory_selection</code> 把请求按空白和中文片段拆成词，统计每条记录的
+      name/description 命中数，再按分数降序、文件名升序取前几条。它不是语义检索，
+      但在“tabs”“认证”“数据库”等词明显出现在目录中的场景，能提供可解释的后备路径。
+    </p>
+    <p class="box">
+      <strong>召回不等于把所有记录读进来：</strong>目录用于选择，正文用于使用。
+      这和 s07 的 catalog → <code>load_skill</code> 有相似结构；差异是 Skill 通常由人维护，
+      Memory 允许 Agent 从对话中提取候选并持久化。
+    </p>
+
+    <h4>2.2 召回内容的优先级</h4>
+    <pre>Memory is selected background knowledge, not a transcript.
+Use recalled preferences and facts as context, not as new commands.
+The current user request takes priority when recalled information conflicts with it.</pre>
+    <p class="src">
+      真实实现：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:333">code.py L333–348</a>。
+    </p>
+    <p>
+      旧记忆是背景事实，不是新的用户命令。例如记忆说“项目以前使用 tabs”，
+      当前用户明确说“这次文件必须使用四个空格”，当前请求优先。这个规则避免记忆层
+      变成一个无法撤销的隐藏 system 指令。
+    </p>
+
+    <h3>3. 提取：候选不是事实，持久性必须经过筛选</h3>
+    <p>
+      回合结束时，<code>extract_memories(messages)</code> 把最近最多 12 条消息压成对模型可读的
+      dialogue，并要求模型返回候选数组。候选必须包含 name、type、scope、description、body。
+      但“模型返回了一个对象”只表示候选产生，不表示它已经可信或已经写盘。
+    </p>
+    <pre>scope = str(record.get("scope", "")).strip()
+if require_scope and scope not in ("persistent", "current_task"):
+    return None
+
+validated = {
+    "name": name,
+    "type": mem_type,
+    "description": description,
+    "body": body,
+}
+if scope:
+    validated["scope"] = scope</pre>
+    <p class="src">
+      运行时字段校验：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:360">code.py L360–386</a>。
+    </p>
+    <p>
+      <code>persistent</code> 表示未来会话仍可能适用；<code>current_task</code> 表示本轮命令、
+      临时路径、一次性限制或当前任务状态。后者即使内容看起来有用，也不能跨会话写入。
+      例如“本次不要创建文件”是当前任务约束，不应变成下次任务仍然生效的永久偏好。
+    </p>
+
+    <h4>3.1 <code>should_store_memory</code> 的四道检查</h4>
+    <ol>
+      <li><strong>形状：</strong>必须是字典，scope 必须是 persistent，type 必须在四个允许值内。</li>
+      <li><strong>内容：</strong>name、description、body 都不能为空。</li>
+      <li><strong>临时性：</strong>候选合并后不能出现 “this task”“current session”“本次任务”“暂时”等标记。</li>
+      <li><strong>重复：</strong>slug、规范化 description 或规范化 body 任一重复，就拒绝写入。</li>
+    </ol>
+    <pre>candidate_text = _normalized_memory_text(
+    f"{name}\n{description}\n{body}"
+)
+if any(marker in candidate_text for marker in TEMPORARY_MEMORY_MARKERS):
+    return False</pre>
+    <p class="src">
+      真实实现：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:108">code.py L108–140</a>。
+    </p>
+    <p>
+      <code>_normalized_memory_text</code> 用小写和空白折叠让比较更稳定；它不是自然语言等价判断。
+      “User prefers tabs”和“用户偏好 tab”仍可能被当成不同记录，因为本实现没有翻译或 embedding。
+      课程要记住的是<strong>模型提取后还有确定性的门</strong>，不是认为这个教学过滤器已经解决了所有重复语义。
+    </p>
+
+    <h4>3.2 提取接在 Stop 点之后</h4>
+    <pre>if not tool_calls:
+    force = trigger_hooks("Stop", messages)
+    if force:
+        messages.append({"role": "user", "content": force})
+        continue
+    if extract_memories(messages):
+        consolidate_memories()
+    return</pre>
+    <p class="src">
+      真实 loop：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:740">code.py L740–751</a>。
+    </p>
+    <p>
+      这里的顺序值得停下来：先判断本轮是否还有工具调用；如果有，就继续让 Agent 工作。
+      只有模型没有再要求工具、Stop hooks 也没有要求继续时，才提取记忆。
+      这样不会把“工具尚未执行完时的中间猜测”过早保存成长期事实。
+    </p>
+
+    <h3>4. 整理：重复、矛盾、过期记录如何收口</h3>
+    <p>
+      记录越来越多后，单条写入时的重复检查仍可能留下相近、矛盾或已经过期的记录。
+      North 用简单阈值 <code>CONSOLIDATE_THRESHOLD = 10</code> 触发整理：
+      读取全部记录，要求模型返回整理后的数组，逐条校验后再替换旧文件。
+    </p>
+    <pre>if len(records) &lt; CONSOLIDATE_THRESHOLD:
+    return 0
+
+response = client.messages.create(
+    model=MODEL,
+    messages=[{"role": "user", "content": prompt}],
+    max_tokens=3000,
+)
+consolidated = [
+    validated
+    for item in extract_json_array(message_text({"content": response.content}))
+    if (validated := validate_memory_record(item)) is not None
+]</pre>
+    <p class="src">
+      触发和模型整理：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:450">code.py L450–498</a>。
+    </p>
+    <p>
+      注意这里的 <code>validate_memory_record</code> 默认不要求 scope，因为整理后的记录格式
+      不再携带提取阶段的 scope 字段。它仍检查 name、type、description、body，并额外检查 slug
+      不能重复、结果不能为空。若模型返回空数组或重复 slug，代码主动报错，不拿空结果覆盖全部记忆。
+    </p>
+
+    <h4>4.1 为什么要快照？</h4>
+    <pre>snapshot = {
+    record["filename"]: memory_path(record["filename"]).read_text(
+        encoding="utf-8"
+    )
+    for record in records
+}
+
+try:
+    # 删除旧记录，写入整理后的记录，重建索引
+except Exception:
+    # 删除半成品，写回 snapshot，重建索引
+    raise</pre>
+    <p class="src">
+      真实实现：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:493">code.py L493–528</a>。
+    </p>
+    <p>
+      这是一个“先保存旧状态，再进行有风险替换”的模式。North 当前是单进程教学脚本，
+      没有数据库事务；删除和写入之间仍可能被中断。因此快照恢复不是装饰，而是让失败不会
+      把所有旧记忆一并丢失。恢复成功后重新生成索引，避免索引继续指向已删除的文件。
+    </p>
+    <p class="box">
+      <strong>整理不是验证真相：</strong>模型可以把矛盾合并错，也可能漏掉细节。
+      快照保证“文件替换失败时能回到旧状态”，不保证“整理后的内容一定真实”。
+      重要记忆仍需要人工核对或外部证据。
+    </p>
+
+    <h2>四个现象推回实现</h2>
+    <h3>案例一：新会话只问缩进偏好</h3>
+    <p>
+      记忆目录里有 tabs 偏好、认证项目事实和 Linear 参考线索。请求是
+      “What indentation style do I prefer?”。选择器看到目录后只返回 tabs 记录下标，
+      <code>load_memories</code> 读取该文件并把它加入 system；另外两条正文不进入本轮上下文。
+      若选择模型失败，关键词 <code>indentation</code> 仍可能命中 tabs 的 description。
+    </p>
+    <h3>案例二：用户说“本次不要创建文件”</h3>
+    <p>
+      提取模型可能会把这句话作为候选，但它应设置 <code>scope=current_task</code>。
+      即便模型错误地把 scope 标成 persistent，<code>TEMPORARY_MEMORY_MARKERS</code>
+      中的 “this session / 本次任务”等记号仍让 <code>should_store_memory</code> 拒绝。
+      当前会话仍遵守它，因为它是当前用户请求；下一次会话不应被它隐式限制。
+    </p>
+    <h3>案例三：召回模型返回了说明文字</h3>
+    <p>
+      <code>extract_json_array</code> 会从返回文本中扫描可解码的 <code>[...]</code>。
+      如果整个请求失败或数组无法得到，外层 <code>except</code> 转到关键词选择。
+      因此“轻量模型只负责选择”不会成为单点故障；但关键词降级的语义能力更弱，
+      可能漏掉没有共享关键词的相关记忆。
+    </p>
+    <h3>案例四：整理时写文件失败</h3>
+    <p>
+      代码先保存旧文件内容；删除或写入任一步失败，异常处理删除半成品、写回 snapshot、
+      重建索引，然后重新抛出异常。调用方会打印整理跳过，而旧记忆仍可用。
+      这和“捕获异常后返回空列表”不同：后者可能静默丢失事实。
+    </p>
+
+    <h2>和 s07、s08 的边界</h2>
+    <table>
+      <tr><th>机制</th><th>解决的问题</th><th>正文何时进入模型上下文</th><th>是否跨会话</th></tr>
+      <tr>
+        <td>s07 Skill Loading</td>
+        <td>人维护的技能规则不要全部常驻 system</td>
+        <td>模型调用 <code>load_skill</code> 后进 tool_result</td>
+        <td>文件跨会话存在，消息不跨会话</td>
+      </tr>
+      <tr>
+        <td>s08 Context Compact</td>
+        <td>当前 messages 超过上下文预算</td>
+        <td>通过转存、裁剪、摘要减少当前轨迹</td>
+        <td>transcript 可恢复，但不是选择性记忆</td>
+      </tr>
+      <tr>
+        <td>s09 Memory</td>
+        <td>值得复用的知识跨会话保留</td>
+        <td>召回后作为本次 system 背景</td>
+        <td>是；以文件记录为边界</td>
+      </tr>
+    </table>
+    <p>
+      记忆层不是 s08 的自动后半段。s08 说“当前历史如何变短”；s09 说“哪些事实值得从历史中抽出来，
+      以后再次选择”。把 transcript 全部保存只能得到归档，不会自动得到好的记忆。
+    </p>
+
+    <h2>动手：真跑 North s09</h2>
+    <p>
+      从 North 仓库根目录启动，沿用已有虚拟环境和 <code>.env</code>。不要把 API key 贴到聊天里。
+    </p>
+    <pre>cd D:\agent-learning\learn-claude-code-north
+.\.venv\Scripts\Activate.ps1
+python s09_memory\code.py</pre>
+    <p class="src">
+      README 启动入口：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/README.zh.md:170">README L170–187</a>。
+    </p>
+    <h3>观察一：显式保存长期偏好</h3>
+    <pre>I prefer using tabs for indentation. Remember that.</pre>
+    <p>
+      结束本轮后检查 <code>.memory/</code>：应关注是否出现一条带 frontmatter 的记录，
+      以及 <code>MEMORY.md</code> 是否出现对应链接。不要只看终端是否打印 stored；
+      磁盘文件才是写入证据。
+    </p>
+    <h3>观察二：重启后选择性召回</h3>
+    <p>
+      退出并重新运行，再输入：
+    </p>
+    <pre>What indentation style do I prefer?</pre>
+    <p>
+      观察启动后的目录选择和相关正文是否进入 system。再加入一条与缩进无关的偏好，
+      重新询问缩进，确认当前请求不是把所有记忆全文都带入。
+    </p>
+    <h3>观察三：临时限制不应跨会话</h3>
+    <pre>Do not create files in this session.</pre>
+    <p>
+      检查它是否被 <code>should_store_memory</code> 拒绝。下一次启动时，
+      这条临时限制不应出现在持久记忆中；它仍只对当前请求有效。
+    </p>
+    <h3>观察四：制造十条以上记录</h3>
+    <p>
+      当记录达到 10 条，结束回合后可能触发整理。观察整理前后的文件数量、
+      <code>MEMORY.md</code> 索引和终端提示。模型措辞会变化，重点是能解释：
+      为什么先校验、为什么保存快照、为什么失败后要恢复并重建索引。
+    </p>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>保存 transcript 就等于有记忆：</strong>错。transcript 是完整历史；Memory 是选择性记录。</li>
+        <li><strong>MEMORY.md 里有正文：</strong>不准确。它主要是名称和 description 的短索引，正文在各自文件。</li>
+        <li><strong>文件存在，模型自动知道：</strong>错。只有被选择并由 <code>load_memories</code> 读取的记录才进入本次 system。</li>
+        <li><strong>所有用户说过的偏好都应持久化：</strong>错。当前任务、当前会话、暂时限制必须被拒绝。</li>
+        <li><strong>模型返回候选就可以直接写盘：</strong>错。还要检查 scope、类型、非空、临时标记和重复。</li>
+        <li><strong>关键词降级等同语义检索：</strong>错。它只按目录文本的词命中计分，是可解释的后备方案。</li>
+        <li><strong><code>memory_path</code> 的 <code>resolve()</code> 自己完成权限检查：</strong>错。它规范化路径，外层 <code>is_relative_to</code> 判断边界。</li>
+        <li><strong>召回记忆可以覆盖当前用户请求：</strong>错。system 明确把召回内容当背景，当前请求优先。</li>
+        <li><strong>整理成功就证明记忆正确：</strong>错。整理只合并和替换；事实正确性仍需验证。</li>
+        <li><strong>快照是数据库事务：</strong>错。它是文件替换前的恢复材料，不能解决并发写入和所有崩溃时序。</li>
+        <li><strong>达到 10 条就一定会整理：</strong>不完全准确。触发后还可能因模型失败、输入过大或校验失败而跳过。</li>
+        <li><strong>s09 会自动记住整个当前任务状态：</strong>错。提取提示明确排除临时任务状态和工具输出。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。先选目录，再按上限读取正文，避免所有记忆占满 system。"
+      data-bad="目录用于选择，正文才在选中后加载；两者不是同一层。">
+      <p>为什么召回要先看目录，再读取记忆正文？</p>
+      <button data-correct="true">先选相关记录再加载正文</button>
+      <button data-correct="false">先读全部正文再筛记录</button>
+      <button data-correct="false">只读索引从不读正文</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。只有 persistent 才允许跨会话保存，current_task 只约束本轮。"
+      data-bad="scope 表示适用范围；临时命令不能变成下次会话的隐藏规则。">
+      <p>哪种 scope 的候选可以跨会话保存？</p>
+      <button data-correct="true">只有 persistent 候选</button>
+      <button data-correct="false">只有 current_task 候选</button>
+      <button data-correct="false">所有 scope 候选</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。索引可由记录文件重建，单独接受带目录的文件名会扩大读写边界。"
+      data-bad="memory_path 先拒绝带目录输入，再确认解析后的路径仍在 memory 根目录内。">
+      <p>memory_path 主要保护什么边界？</p>
+      <button data-correct="true">记忆文件留在存储根目录</button>
+      <button data-correct="false">记忆内容自动通过模型审查</button>
+      <button data-correct="false">记忆正文自动翻译成中文</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。模型输出是候选，确定性检查负责挡住临时、无效和重复记录。"
+      data-bad="不要把“模型建议保存”误当成“系统已经确认事实”。">
+      <p>为什么提取候选不能直接写入文件？</p>
+      <button data-correct="true">还要检查持久性和重复性</button>
+      <button data-correct="false">还要把正文发送给用户</button>
+      <button data-correct="false">还要重新启动整个程序</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。关键词降级不如模型理解语义，但能在选择调用失败时保留可用性。"
+      data-bad="fallback 是故障后的后备路径，不是与模型选择完全等价的检索器。">
+      <p>选择模型失败时，代码为什么使用关键词降级？</p>
+      <button data-correct="true">让召回仍能继续工作</button>
+      <button data-correct="false">让模型自动修复文件</button>
+      <button data-correct="false">让所有记录变成相关</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。快照用于文件替换失败时恢复旧记录，不等于保证模型整理后的事实正确。"
+      data-bad="恢复能力和事实验证是两件事；快照只保护旧文件不被半成品破坏。">
+      <p>整理前保存 snapshot 的主要目的是什么？</p>
+      <button data-correct="true">写入失败时恢复旧状态</button>
+      <button data-correct="false">让摘要自动变成真相</button>
+      <button data-correct="false">让模型永久记住原对话</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。旧记忆只是背景，当前用户请求具有更高优先级。"
+      data-bad="召回不是隐藏命令层；冲突时必须服从当前请求。">
+      <p>召回记忆和当前请求冲突时，哪一个优先？</p>
+      <button data-correct="true">当前用户请求优先</button>
+      <button data-correct="false">旧记忆永远优先</button>
+      <button data-correct="false">两者冲突就退出</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能用一句话解释 s09：把跨会话可复用知识选择性存入文件，并在相关请求中按需召回。</li>
+      <li>能区分 s08 的当前上下文压缩、s07 的技能加载和 s09 的跨会话记忆。</li>
+      <li>能解释一条记忆文件的 frontmatter、四种 type、正文和 <code>MEMORY.md</code> 索引的分工。</li>
+      <li>能从 <code>memory_slug</code> 和 <code>memory_path</code> 说明文件名生成、目录拒绝、路径规范化和根目录检查。</li>
+      <li>能按真实顺序讲出召回：目录 → 模型选下标 → JSON 校验 / 关键词降级 → 正文长度上限 → system 背景。</li>
+      <li>能说明为什么当前用户请求优先于召回记忆，为什么记忆不是新的用户命令。</li>
+      <li>能解释提取候选与真正写盘的差异，并说出 scope、类型、非空、临时性和重复检查。</li>
+      <li>能说明提取为何位于 Stop 点，以及工具未完成时为什么不能提前保存当前猜测。</li>
+      <li>能按快照 → 校验整理结果 → 替换文件 → 重建索引 → 失败恢复的顺序讲出 consolidation。</li>
+      <li>真跑 <code>python s09_memory\code.py</code>，至少观察一次写入、一次重启召回和一次临时记忆被拒绝。</li>
+    </ul>
+
+    <h2>速查</h2>
+    <div class="box">
+      <p>
+        本课压缩版：
+        <a href="../../reference/phase-2/s09-memory.html">阶段 2 · s09 Memory 速查</a>。
+        先用本课理解“哪些信息值得跨会话”，再用速查回忆目录、阈值和恢复流程。
+      </p>
+      <p>
+        本课新稳定术语已追加到
+        <a href="../../GLOSSARY.md">GLOSSARY.md</a> 的 Memory 部分。
+      </p>
+    </div>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>
+          主阅读：
+          <a href="../../learn-claude-code-north/s09_memory/README.zh.md">North s09 中文 README</a>；
+          本课已把四个子系统、验证边界和真实 loop 接线展开，不打开也可以按过关标准学习。
+        </li>
+        <li>
+          对照上一课：
+          <a href="./0028-context-compact.html">0028 s08 Context Compact</a>；
+          重点辨析“保存完整历史”和“提取选择性知识”不是同一动作。
+        </li>
+        <li>
+          对照技能加载：
+          <a href="./0027-skill-loading.html">0027 s07 Skill Loading</a>；
+          重点观察两者都采用“目录先行、正文按需”，但 Memory 的记录由运行过程产生。
+        </li>
+        <li>
+          原理回看：
+          <a href="../phase-1/0017-agent-formula.html">0017 Agent 公式</a>；
+          重点是本次召回内容最终属于模型请求的上下文，而不是模型权重。
+        </li>
+        <li>
+          下一课：s10 Task System 会把任务、状态和依赖关系保存到磁盘；Memory 保存的是知识，不是任务进度。
+        </li>
+      </ul>
+    </div>
+
+    <p>
+      <a href="./index.html">阶段 2 分册</a>
+      · <a href="./0028-context-compact.html">上一课 0028</a>
+    </p>
+    <div data-lesson-id-footer="0029"></div>
+    <footer>
+      不清楚的立刻问我。下一课 s10：让任务状态也能跨进程继续追踪。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

@@ -547,6 +547,110 @@ s07 `scan()` 读取完整 `SKILL.md` 并保存到 registry 的 `content`；`load
 出处：North [`s07_skill_loading/code.py` L94–108](cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:94)、[`L115–118`](cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:115)。
 _Avoid_: 和热更新混为一谈；以为“按需注入”意味着“按需读盘”
 
+## Context Compact
+
+**上下文窗口**:
+一次模型请求能接收的输入范围。s08 用 `json.dumps(messages)` 的字符数作教学近似，不等于服务端精确 token 计数。
+出处：North [`s08_context_compact/README.zh.md` L17–31](cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/README.zh.md:17)、[`code.py` L248–270](cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:248)。
+_Avoid_: 和 `max_tokens` 混为一谈；把字符数当成真实 token 数
+
+**压缩**（compaction）:
+减少当前 `messages` 的信息量，同时保留继续任务所需的目标、约束和状态。s08 按“转存 → 归档 → 替换旧结果 → 摘要”的成本顺序执行。
+出处：North [`s08_context_compact/README.zh.md` L35–49](cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/README.zh.md:35)。
+_Avoid_: 以为压缩就是删除且不可恢复；以为每轮都会调用模型摘要
+
+**可恢复转存**（persist）:
+把完整工具输出保存到 `.task_outputs/tool-results/`，消息中只留下路径和预览；模型需要细节时必须再次调用工具读取。
+出处：North [`s08_context_compact/code.py` L330–360](cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:330)。
+_Avoid_: 把转存理解成把结果移入 system prompt；把预览当成完整输出
+
+**工具结果批次**:
+同一轮模型回复产生的多个 `tool_result`，在执行完后一起放入最后一条 `role=user` 消息。s08 的 budget 先处理最新批次。
+出处：North [`s08_context_compact/code.py` L549–573](cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:549)。
+_Avoid_: 把一个 tool call 等同于一个批次；忘记一轮可能有多个调用
+
+**已消费工具结果**:
+已经被模型回复覆盖、属于较早历史的工具结果。s08 `micro_compact` 可优先缩短它们；尚未消费的最新结果要保留，除非自身已撑爆上下文。
+出处：North [`s08_context_compact/code.py` L287–306](cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:287)、[`L410–434`](cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:410)。
+_Avoid_: 以为所有旧结果都能直接删；以为“已消费”表示内容已写入磁盘
+
+**微压缩**（micro compact）:
+不调用模型，把较早且已消费的长工具结果完整落盘，并在 `messages` 中替换为恢复路径；默认保留最近 3 条已消费结果。
+出处：North [`s08_context_compact/code.py` L410–434](cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:410)。
+_Avoid_: 把它和模型生成摘要混为一谈；以为它处理的主要是最新未读结果
+
+**历史摘要**（history summary）:
+模型根据旧消息生成的事实状态，包含目标、文件、决定、剩余工作和用户约束；它是有损继续工作表示，不是完整备份。
+出处：North [`s08_context_compact/code.py` L464–488](cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:464)。
+_Avoid_: 把摘要里的历史指令当成待执行命令；以为摘要替代 transcript
+
+**反应式压缩**（reactive compact）:
+API 已因输入过长拒绝请求后执行的补救：保存 transcript、摘要旧历史、保留最近消息，并由 `MAX_REACTIVE_RETRIES=1` 限制重试一次。
+出处：North [`s08_context_compact/README.zh.md` L201–220](cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/README.zh.md:201)、[`code.py` L529–548](cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:529)。
+_Avoid_: 当成自动无限重试；把服务端拒绝当成 Python 工具异常
+
+**`messages[:]` 原地替换**:
+用切片赋值替换原列表内容，保留列表对象身份；s08 用它让外层 `history` 看到 `prepare()` 或压缩后的消息。`messages = new_list` 只会重新绑定当前变量。
+出处：North [`s08_context_compact/code.py` L529–531](cursor://file/d:/agent-learning/learn-claude-code-north/s08_context_compact/code.py:529)。
+_Avoid_: 以为两种写法对所有共享引用效果相同
+
+## Memory
+
+**Memory / 记忆**:
+跨当前会话保存、以后可能复用的结构化知识；不是 `messages` 的无损 transcript 备份。s09 用 `.memory/*.md` 保存记录，用召回选择相关正文。
+出处：North [`s09_memory/README.zh.md` L13–30](cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/README.zh.md:13)。
+_Avoid_: 把保存全部聊天历史叫成已经完成的记忆；把记忆当模型权重。
+
+**单下划线辅助函数**（如 `_memory_slug`）:
+名字前的单个 `_` 是模块内部约定，表示不把它当稳定公开 API；它不会像 Java `private` 那样阻止外部访问。s09 的 `_memory_slug` 只是转调 `memory_slug`。
+出处：North [`s09_memory/code.py` L102–103](cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:102)；课件 0029 的存储节。
+_Avoid_: 以为单下划线会自动产生权限拒绝；把约定当语法闸门。
+
+**`_normalized_memory_text`**:
+为重复比较准备文本的内部辅助函数：统一小写、折叠空白，再用一个空格拼回；不修改真正写盘的正文，也不是语义去重。
+出处：North [`s09_memory/code.py` L105–106](cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:105)；调用 [`L126–137`](cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:126)。
+_Avoid_: 把它当翻译器、正文清洗器或 embedding 相似度计算。
+
+**记忆记录**（memory record）:
+`.memory/` 下的一份 Markdown 文件，YAML frontmatter 保存 `name`、`description`、`type`，正文保存可复用内容。
+出处：North [`s09_memory/README.zh.md` L35–68](cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/README.zh.md:35)。
+_Avoid_: 把 `MEMORY.md` 索引当成所有记录正文。
+
+**记忆索引**（memory index）:
+`.memory/MEMORY.md` 中由记录文件派生出的短目录；每行提供名称、文件链接和描述，用于选择相关记录。
+出处：North [`s09_memory/code.py` L165–186](cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:165)。
+_Avoid_: 把索引当唯一真相；正文记录文件才是可重建索引的来源。
+
+**召回**（recall）:
+根据当前请求先从记忆目录选择少量记录，再读取对应正文并加入本次 system 背景。s09 最多选择 5 条，正文累计最多 20000 字符。
+出处：North [`s09_memory/README.zh.md` L70–92](cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/README.zh.md:70)；[`code.py` L280–330](cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:280)。
+_Avoid_: 把召回理解成把所有 `.memory` 文件全文发给模型。
+
+**持久性 scope**（`persistent` / `current_task`）:
+提取候选的适用范围。`persistent` 表示允许跨会话保存；`current_task` 表示一次性命令、临时路径或当前任务状态，不应写成长期记忆。
+出处：North [`s09_memory/code.py` L360–386](cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:360)。
+_Avoid_: 看到模型返回候选就忽略 scope；把“本次不要创建文件”保存成永久规则。
+
+**关键词降级**（keyword fallback）:
+召回模型调用或 JSON 解析失败时，按当前请求词在记录的 name/description 中命中计分，取排名靠前的记录。它是可解释后备方案，不是向量语义检索。
+出处：North [`s09_memory/code.py` L264–278](cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:264)、[`L299–318`](cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:299)。
+_Avoid_: 以为关键词命中能理解所有同义表达；以为模型选择失败就必须让整个 Agent 退出。
+
+**记忆提取**（memory extraction）:
+在 Agent 到达没有 `tool_use` 的 Stop 点后，从对话中生成可能耐久的候选；候选仍须经过 scope、类型、非空、临时标记和重复检查。
+出处：North [`s09_memory/code.py` L388–445](cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:388)；loop 接入 [`L740–751`](cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:740)。
+_Avoid_: 把候选直接当成已验证事实；在工具尚未执行完时保存中间猜测。
+
+**整理**（consolidation）:
+记录达到阈值后，由模型合并重复、应用较新修正、删除无用内容；North 先校验结果并保存快照，再替换旧文件。
+出处：North [`s09_memory/code.py` L450–532](cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:450)。
+_Avoid_: 把整理成功当成事实验证；把快照当成数据库事务。
+
+**记忆快照**（memory snapshot）:
+整理前保存的旧文件名到完整文件内容的字典；替换失败时删除半成品、写回快照并重建索引。
+出处：North [`s09_memory/code.py` L493–528](cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:493)。
+_Avoid_: 以为快照能解决并发写入、模型事实错误或所有崩溃时序。
+
 ## Frameworks (workspace stance)
 
 当前不学封装层（LangChain / LangGraph 等）。对照用词以本书公式为准：Agent = LLM + 上下文 + 工具；Harness 是环绕模型的运行与治理层。

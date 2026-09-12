@@ -47,7 +47,7 @@
 ### 实践（技能脊柱）
 
 - [learn-claude-code-north](https://github.com/NorthAdb/learn-claude-code-north)（本地：[`learn-claude-code-north/`](./learn-claude-code-north)）
-  从零搭 coding agent harness。Use for: **唯一动手主线**。只跑根目录 `s01_*`–`s20_*` 的 `code.py` + 章内 README；不要混用 `docs/` / `agents/` 旧 12 章编号。阶段 1：0018 读 README-zh 前半（Agency vs Harness）；0019 看循环图；`code.py` 仍等阶段 2。
+  从零搭 coding agent harness。Use for: **唯一动手主线**。只跑根目录 `s01_*`–`s20_*` 的 `code.py` + 章内 README；不要混用 `docs/` / `agents/` 旧 12 章编号。阶段 2 起：课件把当章 `code.py` 拆进 HTML，非必要不另写练习脚本。
 
 ### Harness 工程（卫星理论）
 

@@ -3,7 +3,7 @@ name: alvar-curriculum
 description: >
   One-to-one tutor on this repo's HTML curriculum using the Alvar loop
   (probe → mermaid plan → one node → lock-in quiz). Use when the user
-  runs /teach or /probe, says 卡住, 讲一遍, 测我, 过关前测, 用 Alvar,
+  runs /alvar-teach or /alvar-probe, says 卡住, 讲一遍, 测我, 过关前测, 用 Alvar,
   or asks to learn the current lesson fitted to what they already know.
   Not for writing or editing lesson HTML, playground scripts, or curriculum.js.
 ---
@@ -18,7 +18,7 @@ Read first: [`.alvar/LEARNER.md`](../../../.alvar/LEARNER.md). Current lesson = 
 
 | Job | User is doing | You do |
 |-----|----------------|--------|
-| **Tutor** | 学、卡住、测、/teach | 本 skill：probe → plan → one node |
+| **Tutor** | 学、卡住、测、/alvar-teach | 本 skill：probe → plan → one node |
 | **Author** | 写课件、改练习、改课表 | `NOTES.md` Lesson depth；不要走本回路 |
 
 ## Loop

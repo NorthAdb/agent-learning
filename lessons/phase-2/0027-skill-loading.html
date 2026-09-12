@@ -256,6 +256,171 @@
       </tr>
     </table>
 
+    <h3>重要辨析：<code>self</code>、<code>cls</code> 和 <code>staticmethod</code></h3>
+    <p>
+      读到 Python 类方法时，最容易产生的误解是：
+      “方法写在哪个类里，自动参数不就都是这个类吗？”不是。
+      <strong>方法的归属</strong>由缩进位置决定；<strong>调用时自动传入的对象</strong>
+      则取决于方法类型。<code>self</code> 是某个具体实例，<code>cls</code> 是类对象，
+      静态方法两者都不自动接收。
+    </p>
+    <table>
+      <tr><th>写法</th><th>自动参数</th><th>它代表什么</th><th>典型问题</th></tr>
+      <tr>
+        <td>普通实例方法</td>
+        <td><code>self</code></td>
+        <td>当前这一个实例，例如某个 <code>loader</code></td>
+        <td>需要读取或修改 <code>self.skills</code>、<code>self.skills_dir</code></td>
+      </tr>
+      <tr>
+        <td><code>@classmethod</code></td>
+        <td><code>cls</code></td>
+        <td>当前调用它的类，例如 <code>SkillLoader</code> 或子类</td>
+        <td>需要访问类属性，或根据类创建实例</td>
+      </tr>
+      <tr>
+        <td><code>@staticmethod</code></td>
+        <td>无</td>
+        <td>没有隐藏的实例或类；只接收显式参数</td>
+        <td>纯粹的辅助逻辑，例如“把文本解析成 metadata 和 body”</td>
+      </tr>
+    </table>
+    <p>
+      s07 的 <code>parse_frontmatter</code> 是静态方法：
+    </p>
+    <pre>L59  @staticmethod
+L60  def parse_frontmatter(text: str) -&gt; tuple[dict, str]:
+L61      lines = text.splitlines(keepends=True)
+      ...
+L81  return metadata, body</pre>
+    <p class="src">
+      真实源码：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s07_skill_loading/code.py:59">code.py L59–81</a>。
+    </p>
+    <p>
+      这个函数只使用调用者显式传入的 <code>text</code>。它不读取
+      <code>self.skills_dir</code>，不修改 <code>self.skills</code>，也不需要知道当前
+      <code>SkillLoader</code> 实例是谁。因此不需要 <code>self</code>；使用
+      <code>@staticmethod</code> 是在代码结构上声明“它属于 SkillLoader 的解析职责，
+      但不依赖某个对象的状态”。
+    </p>
+    <h4>3.1 普通方法的 <code>self</code> 是哪个对象？</h4>
+    <pre>本例 L1  class Loader:
+本例 L2      def show_directory(self):
+本例 L3          return self.skills_dir
+本例 L4
+本例 L5  a = Loader()
+本例 L6  b = Loader()
+本例 L7  a.show_directory()  # self 是 a
+本例 L8  b.show_directory()  # self 是 b</pre>
+    <p>
+      方法虽然写在 <code>Loader</code> 类中，但调用 <code>a.show_directory()</code> 时，
+      Python 会把点号左边的 <code>a</code> 自动传给 <code>self</code>；调用
+      <code>b.show_directory()</code> 时，传入的就是 <code>b</code>。因此
+      <code>self</code> 不是“这个类”，而是“这个类造出的某一个对象”。
+      把它展开就是：
+    </p>
+    <pre>a.show_directory()
+# 大致等价于
+Loader.show_directory(a)</pre>
+    <p>
+      这也是为什么普通方法能够读取不同实例各自的状态：同一个方法定义，配合不同
+      <code>self</code>，就会访问不同的 <code>skills_dir</code> 或 <code>skills</code>。
+    </p>
+    <h4>3.2 类方法的 <code>cls</code> 是哪个类？</h4>
+    <pre>本例 L1  class Loader:
+本例 L2      @classmethod
+本例 L3      def empty(cls):
+本例 L4          return cls()
+本例 L5
+本例 L6  loader = Loader.empty()
+本例 L7  # cls 是 Loader，返回 Loader()
+</pre>
+    <p>
+      <code>cls</code> 不是第二个实例，也不是“可以随便跨到另一个类的变量”。
+      它代表调用这个类方法的类本身。调用 <code>Loader.empty()</code> 时，
+      <code>cls</code> 是 <code>Loader</code>；调用实例
+      <code>loader.empty()</code> 时，<code>cls</code> 仍然是 <code>Loader</code>。
+      这类方法适合在还没有现成实例时，通过类创建实例，或者访问类级别的共享配置。
+    </p>
+    <h4>3.3 为什么继承时 <code>cls</code> 可能变成子类？</h4>
+    <pre>class Loader:
+    @classmethod
+    def empty(cls):
+        return cls()
+
+class SkillLoader(Loader):
+    pass
+
+result = SkillLoader.empty()
+# result 是 SkillLoader 实例，而不是 Loader 实例</pre>
+    <p>
+      这里不是“跨类调用”。方法仍然定义在父类 <code>Loader</code> 中，但调用者是
+      <code>SkillLoader</code>，所以 Python 把实际调用者的类传给 <code>cls</code>。
+      <code>return cls()</code> 因而会创建子类对象；如果写死成
+      <code>return Loader()</code>，这个多态行为就消失了。
+    </p>
+    <table>
+      <tr><th>调用方式</th><th>自动绑定的值</th><th>是否跨类</th></tr>
+      <tr>
+        <td><code>a.instance_method()</code></td>
+        <td><code>self = a</code></td>
+        <td>否；绑定到点号左边的实例</td>
+      </tr>
+      <tr>
+        <td><code>Loader.class_method()</code></td>
+        <td><code>cls = Loader</code></td>
+        <td>否；绑定到调用它的类</td>
+      </tr>
+      <tr>
+        <td><code>SkillLoader.class_method()</code></td>
+        <td><code>cls = SkillLoader</code></td>
+        <td>否；这是继承后的多态绑定</td>
+      </tr>
+      <tr>
+        <td><code>SkillLoader.static_method(x)</code></td>
+        <td>没有 <code>self</code> / <code>cls</code></td>
+        <td>不自动绑定任何对象</td>
+      </tr>
+    </table>
+    <h4>3.4 回到 s07：如果不用静态方法会怎样？</h4>
+    <p>
+      可以把当前代码改成普通方法：
+    </p>
+    <pre>class SkillLoader:
+    def parse_frontmatter(self, text: str) -&gt; tuple[dict, str]:
+        ...
+
+    def scan(self):
+        ...
+        metadata, body = self.parse_frontmatter(content)</pre>
+    <p>
+      这样也能运行，因为 <code>self.parse_frontmatter(content)</code> 会自动传入当前
+      loader 实例。但这个函数实际上没有使用 <code>self</code>，所以普通方法会传递一份
+      不需要的隐含状态；读者还可能误以为解析逻辑依赖某个 loader。
+    </p>
+    <p>
+      也可以把它移到类外：
+    </p>
+    <pre>def parse_frontmatter(text: str) -&gt; tuple[dict, str]:
+    ...
+
+class SkillLoader:
+    def scan(self):
+        metadata, body = parse_frontmatter(content)</pre>
+    <p>
+      这在功能上同样合理。作者选择静态方法，是在“模块级函数”和“需要实例状态的普通方法”
+      之间取一个清晰的组织方式：解析函数概念上属于 <code>SkillLoader</code>，
+      但签名明确表明它是无状态的。它不是因为需要“跨类”才使用
+      <code>@staticmethod</code>，也不是因为 <code>cls</code> 可以跨类。
+    </p>
+    <p class="box">
+      <strong>记忆口诀：</strong><code>self</code> = 这一个成品对象；
+      <code>cls</code> = 这张类图纸；
+      <code>staticmethod</code> = 挂在类命名空间里的普通函数。
+      “写在哪个类”决定归属，“调用时传什么”决定绑定对象。
+    </p>
+
     <h2>先看全局：两层知识、三种状态、一个循环</h2>
     <p>
       先不要从 <code>yaml.safe_load</code> 的细节开始。把整支脚本压成一条信息流：
@@ -796,6 +961,76 @@ output = SKILL_LOADER.load(name="code-review")</pre>
     <p>
       <code>**block.input</code> 是把字典键值拆成关键字参数；它不是把
       <code>SKILL.md</code> 逐字执行，也不是把字典里的字段自动变成对象属性。
+    </p>
+
+    <h3>教学实现 vs 真实 Skill 机制：到底是不是启动时扫描全文？</h3>
+    <p class="box">
+      <strong>先给结论：</strong>在 North s07 中，<code>scan()</code> 确实启动时读取每个
+      <code>SKILL.md</code> 的完整内容并保存到 <code>content</code>；但这不等于完整正文
+      已经进入模型上下文。真实产品通常保证的是“启动时把轻量 metadata 提供给模型，
+      匹配后再把正文加载进上下文”，至于程序内部是否提前读过或缓存过全文，是实现细节，
+      不能从外部行为直接推断。
+    </p>
+    <p>
+      因此要把“扫描”拆成两个问题：
+    </p>
+    <table>
+      <tr><th>问题</th><th>North 教学实现</th><th>真实产品通常承诺的行为</th></tr>
+      <tr>
+        <td>启动时是否发现有哪些 Skill？</td>
+        <td>是；扫描 <code>skills/*/SKILL.md</code></td>
+        <td>是；从约定的 Skill 目录发现技能</td>
+      </tr>
+      <tr>
+        <td>启动时是否读取文件内容？</td>
+        <td>是；读取全文并缓存到 registry 的 <code>content</code></td>
+        <td>
+          至少要读取或建立 <code>name</code> / <code>description</code> 等 metadata；
+          是否把全文读入进程内存，属于具体实现细节
+        </td>
+      </tr>
+      <tr>
+        <td>启动时完整正文是否进入模型上下文？</td>
+        <td>否；system 只放 <code>catalog()</code> 生成的短目录</td>
+        <td>通常否；只有 Skill 被触发后，正文才进入上下文</td>
+      </tr>
+      <tr>
+        <td>触发后怎样得到正文？</td>
+        <td><code>load(name)</code> 直接返回 registry 中的缓存</td>
+        <td>通常由 Agent 读取 <code>SKILL.md</code>，再按需读取 references / scripts 等资源</td>
+      </tr>
+    </table>
+    <p>
+      Claude Code 的公开文档明确描述：启动时发现 Skill 的 YAML frontmatter，
+      把轻量的 name / description 用于相关性判断；当任务匹配时，才读取完整
+      <code>SKILL.md</code>。Cursor 的公开文档也描述了类似的渐进式发现：启动时发现
+      Skill 并提供给 Agent，完整说明在需要时使用。这里的“只加载 metadata”主要是
+      <strong>模型上下文层面的说法</strong>，不应擅自扩大成“实现绝对没有读取过正文”。
+    </p>
+    <p class="src">
+      真实机制参考：
+      <a href="https://code.claude.com/docs/en/skills">Claude Code Skills 文档</a>；
+      <a href="https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview">Claude Agent Skills 文档</a>；
+      <a href="https://cursor.com/docs/skills">Cursor Skills 文档</a>。
+    </p>
+    <h4>为什么 North 故意把全文先缓存？</h4>
+    <p>
+      这是为了让教学链条短而清楚：
+      <code>scan()</code> 一次完成“找文件 → 解析 metadata → 保存全文”，
+      <code>load(name)</code> 只需要做一次字典查询。这样你能专注于
+      <strong>catalog 和完整正文进入不同上下文位置</strong>，不用同时学习文件句柄、
+      触发时重新读取、缓存失效和热更新。
+    </p>
+    <p>
+      代价是 North 的内存和启动读取策略比生产实现更简单：即使模型最终不使用某项技能，
+      Python 进程也可能已经把它的全文读进内存。这个差异不破坏本课要学的核心机制，
+      因为真正节省的是“无关正文不进入模型上下文”；但如果以后设计生产 Harness，
+      就要额外决定是启动时缓存、触发时读取，还是采用带失效策略的缓存。
+    </p>
+    <p class="box">
+      <strong>不要把两句话混成一句：</strong>
+      “正文已被 Harness 读入内存”不等于“正文已被模型看到”；
+      “模型启动时只看到 metadata”也不等于“进程绝对没有碰过正文文件”。
     </p>
 
     <h3>10. 完整正文怎样穿过原有 Agent loop？</h3>
