@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>阶段 2 · s10 Task System 速查</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+  <link rel="stylesheet" href="../../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="../index.html">速查索引</a> · 课 0030 · 打印友好</p>
+    <h1>s10：Task System</h1>
+    <p class="mission">
+      把任务、前置和进度写成文件；先造节点，再连边；完成只报告这一下新解锁的下游。
+    </p>
+    <p class="src">
+      来源：
+      <a href="../../learn-claude-code-north/s10_task_system/README.zh.md">s10 README</a>
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/README.zh.md:13">L13–197</a>；
+      <a href="../../learn-claude-code-north/s10_task_system/code.py">code.py</a>
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:63">L63–273</a>。
+    </p>
+
+    <h2>一张图</h2>
+    <pre>create_task × N          拿到运行时 ID，blockedBy 仍为空
+  ↓ 下一轮，参数里才能使用这些 ID
+update_task              追加直接前置；先校验再保存
+  ↓
+claim_task               pending 且直接前置全部 completed
+  ↓
+complete_task            本人 in_progress → completed
+  ↓
+Unblocked                仅「这次之后才变得可开始」的下游标题</pre>
+
+    <h2>一条记录</h2>
+    <pre>.tasks/task_a1b2c3d4.json
+{
+  "id": "task_a1b2c3d4",
+  "subject": "create API endpoints",
+  "description": "",
+  "status": "pending",
+  "owner": null,
+  "blockedBy": ["task_11111111"]
+}</pre>
+    <table>
+      <tr><th>字段</th><th>创建时</th><th>谁可以改</th></tr>
+      <tr><td><code>id</code></td><td><code>task_</code> + 8 位小写十六进制</td><td>不改；必须匹配文件名</td></tr>
+      <tr><td><code>status</code></td><td><code>pending</code></td><td>claim、complete</td></tr>
+      <tr><td><code>owner</code></td><td><code>null</code></td><td>claim 写入；complete 保留</td></tr>
+      <tr><td><code>blockedBy</code></td><td><code>[]</code></td><td>仅 pending 且未认领时追加</td></tr>
+    </table>
+    <p><code>blockedBy</code> 存前置 ID。完成顺序是「前置 → 后继」，和列表里的引用方向相反。</p>
+
+    <h2>状态机</h2>
+    <pre>pending ──claim──▶ in_progress ──complete──▶ completed</pre>
+    <ul>
+      <li>不能跳过认领，不能从 completed 退回。</li>
+      <li>认领失败、完成失败返回普通说明，不抛异常。</li>
+      <li>非法 ID、对已认领任务加边会抛 <code>ValueError</code>，工具层收成 <code>Error:</code>。</li>
+      <li>本章工具把 owner 固定为 <code>agent</code>。</li>
+    </ul>
+
+    <h2>加边校验</h2>
+    <ol>
+      <li>目标仍是 pending，且 owner 为空。</li>
+      <li><code>dict.fromkeys</code> 按原顺序去掉重复 ID。</li>
+      <li>拒绝自依赖；每个前置文件必须存在。</li>
+      <li>新边若会沿前置链走回自己，拒绝成环。</li>
+      <li>已有边再添加一次：不双写，也不再做环检测。</li>
+      <li>全部通过后保存一次。</li>
+    </ol>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:127">环检测 L127–139</a>；
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:141">更新 L141–171</a>。
+    </p>
+
+    <h2>开工 vs 解锁</h2>
+    <ul>
+      <li><code>can_start</code> 只看直接前置是否都为 completed。空列表可以开始。</li>
+      <li>前置文件缺失或内容非法，视为未完成。</li>
+      <li>环检测会传递行走；<code>can_start</code> 不会。缺掉的边不会自动补上。</li>
+      <li><code>Unblocked</code> = 完成后新变得可开始、状态仍是 pending、且自己有前置的任务标题。</li>
+      <li>标题顺序来自文件名排序，不是拓扑顺序。</li>
+    </ul>
+    <p class="src">
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:219">依赖检查 L219–231</a>；
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:248">完成 L248–273</a>。
+    </p>
+
+    <h2>创建</h2>
+    <ul>
+      <li><code>secrets.token_hex(4)</code>：4 字节随机数，写成 8 位十六进制。</li>
+      <li><code>open(..., "x")</code>：排他创建。撞文件就换 ID，最多 100 次。</li>
+      <li><code>save()</code> 会覆盖该 ID。排他只保护创建，不保护后续更新。</li>
+      <li>ID 必须整串匹配 <code>^task_[0-9a-f]{8}$</code>，路径还必须留在 <code>.tasks</code> 内。</li>
+    </ul>
+
+    <h2>和相邻课</h2>
+    <table>
+      <tr><th>课</th><th>留下什么</th><th>不负责</th></tr>
+      <tr><td>s05 TodoWrite</td><td>进程内清单，整表替换</td><td>依赖、负责人、跨进程</td></tr>
+      <tr><td>s08 Context Compact</td><td>当前消息怎么变短</td><td>任务图</td></tr>
+      <tr><td>s09 Memory</td><td>可复用知识</td><td>谁正在做哪一步</td></tr>
+      <tr><td>s10 Task System</td><td>进度、owner、直接前置</td><td>证明工作真的做完；后台执行</td></tr>
+    </table>
+
+    <h2>过关句</h2>
+    <p class="box">
+      <strong>任务图 = 单条落盘 + 先节点后边 + 认领后再完成。</strong>
+      列表不是调度；解锁不是全部可做任务；完成不是验证。
+    </p>
+    <p>
+      <a href="../../lessons/phase-2/0030-task-system.html">打开 0030 课件</a> ·
+      <a href="../../lessons/phase-2/0025-todo-write.html">回看 s05 TodoWrite</a> ·
+      <a href="../../lessons/phase-2/0029-memory.html">回看 s09 Memory</a>
+    </p>
+    <footer>下一课：s11 Background Tasks。任务图只保存进度，慢命令仍然会堵住当前循环。</footer>
+  </main>
+</body>
+</html>

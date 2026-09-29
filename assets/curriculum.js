@@ -203,4 +203,11 @@ window.LESSON_CURRICULUM = [
     phase: "2",
     duration: "60–90 分钟",
   },
+  {
+    id: "0030",
+    file: "phase-2/0030-task-system.html",
+    title: "s10：任务图；落盘、依赖、认领与解锁",
+    phase: "2",
+    duration: "60–90 分钟",
+  },
 ];

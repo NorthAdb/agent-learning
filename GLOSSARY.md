@@ -651,6 +651,43 @@ _Avoid_: 把整理成功当成事实验证；把快照当成数据库事务。
 出处：North [`s09_memory/code.py` L493–528](cursor://file/d:/agent-learning/learn-claude-code-north/s09_memory/code.py:493)。
 _Avoid_: 以为快照能解决并发写入、模型事实错误或所有崩溃时序。
 
+## Task System
+
+**Task System / 任务系统**:
+把任务标题、描述、状态、负责人和直接前置写成 `.tasks/{id}.json`，用来跨进程恢复进度。它不是进程内清单，也不是可复用知识。
+出处：North [`s10_task_system/README.zh.md` L21–42](cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/README.zh.md:21)。
+_Avoid_: 把 TodoWrite 的整表替换当成任务图；把 s09 记忆文件当成任务进度。
+
+**任务记录**（task record）:
+`.tasks/` 下的一份 JSON。字段是 `id`、`subject`、`description`、`status`、`owner`、`blockedBy`。文件名必须等于 `id` 加 `.json`。
+出处：North [`s10_task_system/code.py` L68–75](cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:68)。
+_Avoid_: 把列表摘要当成含 description 的全文；列表按文件名排序，不是依赖拓扑序。
+
+**`blockedBy`**:
+直接前置任务的 ID 列表。这些前置全部为 `completed` 之后，当前任务才可以开始。完成顺序的箭头指向后继，列表里的引用指向前置。
+出处：North [`s10_task_system/README.zh.md` L89–98](cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/README.zh.md:89)。
+_Avoid_: 以为 `can_start` 会自动检查整条祖先链；缺掉的边不会被补上。
+
+**两阶段建图**:
+先 `create_task` 拿到运行时 ID，再在后续回复里用 `update_task` 添加依赖。同一次模型回复里的工具参数，在任何工具结果返回前已经确定。
+出处：North [`s10_task_system/README.zh.md` L78–87](cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/README.zh.md:78)；循环 [`code.py` L554–572](cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:554)。
+_Avoid_: 以为同一条回复中后执行的工具能把前一个工具的返回值写进自己的参数。
+
+**排他创建**（open 模式 `"x"`）:
+创建任务文件时使用 `open(..., "x")`。文件已存在就失败并换一个随机 ID，避免覆盖已有任务。后续 `save()` 仍会重写已知 ID。
+出处：North [`s10_task_system/code.py` L117–124](cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:117)；语义见 [Python open](https://docs.python.org/3/library/functions.html#open)。
+_Avoid_: 以为所有任务写入都不会覆盖；更新路径会重写该 ID 的 JSON。
+
+**认领**（`claim_task`）:
+把 `pending` 且直接前置都已完成的任务改为 `in_progress`，并写上 owner。状态不对或仍被挡住时返回说明文字，不抛异常。
+出处：North [`s10_task_system/code.py` L234–245](cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:234)。
+_Avoid_: 把 `can_start` 当成已经可以认领；它只表示依赖满足，不表示状态仍是 pending。
+
+**刚刚解锁**（`Unblocked`）:
+`complete_task` 对比完成前后：原先还不能开始、完成后变为可开始、状态仍是 pending、且自己带有前置的任务。返回的是标题，顺序来自文件名排序。
+出处：North [`s10_task_system/code.py` L248–273](cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:248)。
+_Avoid_: 把它读成“当前所有能做的任务”；没有前置的任务不会出现在这行里。完成也不验证工作产品是否真的做完。
+
 ## Frameworks (workspace stance)
 
 当前不学封装层（LangChain / LangGraph 等）。对照用词以本书公式为准：Agent = LLM + 上下文 + 工具；Harness 是环绕模型的运行与治理层。

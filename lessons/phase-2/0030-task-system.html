@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0030 · s10 Task System</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0030"></div>
+    <h1>s10：把任务图写到磁盘上</h1>
+    <p class="mission">
+      s05 的清单只提醒「接下来还要做什么」，进程结束就没了，也回答不了「这一步现在能不能开始」。
+      s09 留下的是以后还用得上的知识，不是「表建完了没有、谁正在写接口」。
+      本课给 Harness 加上<strong>可恢复的任务图</strong>：每个任务一个 JSON 文件，
+      用 <code>blockedBy</code> 记下前置，用 <code>claim</code> / <code>complete</code> 推进状态。
+      大目标能拆开、排上依赖、换一次进程还能接着做。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      主材料：North
+      <a href="../../learn-claude-code-north/s10_task_system/README.zh.md">s10 中文 README</a>
+      （问题
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/README.zh.md:13">L13–21</a>，
+      和 TodoWrite 的对照
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/README.zh.md:31">L31–42</a>，
+      数据结构与两阶段建图
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/README.zh.md:50">L50–87</a>，
+      认领、完成、解锁
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/README.zh.md:89">L89–167</a>，
+      合起来跑
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/README.zh.md:169">L169–197</a>）
+      +
+      <a href="../../learn-claude-code-north/s10_task_system/code.py"><code>s10_task_system/code.py</code></a>
+      （存储
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:63">L63–196</a>，
+      状态动作
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:219">L219–273</a>，
+      六个任务工具
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:341">L341–426</a>，
+      循环
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:543">L543–572</a>）。
+      本课的 Task System 是 North 的教学实现。书里没有这套 <code>TaskStore</code>。
+    </p>
+    <p class="muted">
+      <strong>本课已内化</strong>：一任务一文件、运行时 ID、排他创建、两阶段建图、
+      <code>blockedBy</code> 的方向、直接前置检查、环检测、认领条件、完成时的负责人核对、
+      「刚刚解锁」的差分、列表与详情的分工、工具把 owner 固定成 <code>agent</code>、
+      同一次回复里的工具参数在结果返回前已经定死。
+      <strong>故意跳过</strong>：后台执行、定时调度、多 Agent 抢任务、删除或重开任务、
+      去掉已有依赖、跨文件事务、以及「标记完成」就等于工作已被验证。
+      这些分别属于 s11 之后，或根本不是状态文件能证明的事。
+      <strong>不另写</strong> playground；过关以真跑本章 <code>code.py</code> 为准。
+    </p>
+    <p class="muted">
+      <strong>行号约定：</strong>下文源码块中的 <code>L110</code> 等是 North 源码导航，
+      不属于 Python 代码。需要核对实现时，点击旁边的 <code>cursor://file/...</code> 链接。
+    </p>
+
+    <h3>本课新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>出处</th></tr>
+      <tr>
+        <td><strong>Task System</strong> / 任务系统</td>
+        <td>把任务、状态、负责人和前置依赖写成磁盘上的任务图，用来恢复进度。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/README.zh.md:21">README L21–42</a></td>
+      </tr>
+      <tr>
+        <td><strong>任务记录</strong>（task record）</td>
+        <td><code>.tasks/{id}.json</code> 里的一条任务：id、标题、描述、状态、owner、<code>blockedBy</code>。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:68">code.py L68–75</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>blockedBy</code></strong></td>
+        <td>直接前置任务的 ID 列表。列表里的任务全部 <code>completed</code> 之后，这条任务才可以开始。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/README.zh.md:89">README L89–98</a></td>
+      </tr>
+      <tr>
+        <td><strong>两阶段建图</strong></td>
+        <td>先创建全部节点并拿到运行时 ID，再用这些 ID 调用 <code>update_task</code> 添加依赖边。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/README.zh.md:78">README L78–87</a></td>
+      </tr>
+      <tr>
+        <td><strong>排他创建</strong></td>
+        <td>用 <code>open(..., "x")</code> 新建文件；文件已存在就失败，从而不覆盖别人的任务。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:117">code.py L117–124</a></td>
+      </tr>
+      <tr>
+        <td><strong>认领</strong>（<code>claim_task</code>）</td>
+        <td>把 <code>pending</code> 且前置都已完成的任务改成 <code>in_progress</code>，并写上 owner。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:234">code.py L234–245</a></td>
+      </tr>
+      <tr>
+        <td><strong>完成 / 刚刚解锁</strong></td>
+        <td><code>complete_task</code> 把本人认领的任务标成 <code>completed</code>，并报告因此新变得可以开始的下游。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:248">code.py L248–273</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>can_start</code></strong></td>
+        <td>只回答「直接前置是不是都完成了」。它不检查这条任务自己是不是 <code>pending</code>。</td>
+        <td><a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:219">code.py L219–231</a></td>
+      </tr>
+    </table>
+
+    <h2>为什么现在学？</h2>
+    <p>
+      一个项目拆成「建表、写接口、补测试、写文档」时，清单上的四行字不够。
+      Harness 还要知道：接口必须等表完成，测试必须等接口完成，文档可以和接口并行，
+      而且这些关系在下次启动时还在。
+    </p>
+    <p>
+      s05 能显示「写接口仍未完成」，但不能据此判断它能不能开始。
+      s08 管的是当前 <code>messages</code> 有多长。s09 管的是哪些知识值得跨会话复用。
+      s10 管的是<strong>工作项的进度和依赖</strong>。三个都落在文件附近，回答的却是三件不同的事。
+    </p>
+    <p class="src">
+      North 对「清单没有依赖和分工」的说明见
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/README.zh.md:13">README L13–21</a>。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>s10 概念</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr>
+        <td><code>@dataclass Task</code></td>
+        <td>一条记录 / DTO</td>
+        <td>字段直接写成 JSON 文件；没有 ORM，也没有数据库事务。</td>
+      </tr>
+      <tr>
+        <td><code>TaskStore</code></td>
+        <td>按 ID 存取的 Repository</td>
+        <td>一次只安全创建或覆盖一个文件；完成任务时不会锁住整个目录。</td>
+      </tr>
+      <tr>
+        <td><code>open(..., "x")</code></td>
+        <td><code>CREATE</code> 而不是 <code>REPLACE</code></td>
+        <td>文件已在就抛 <code>FileExistsError</code>，调用方换一个新 ID 再试。</td>
+      </tr>
+      <tr>
+        <td><code>blockedBy</code></td>
+        <td>指向前置记录的外键列表</td>
+        <td>只保存直接前置。传递顺序靠每一跳自己的边，检查时不会自动补边。</td>
+      </tr>
+      <tr>
+        <td><code>claim</code> / <code>complete</code></td>
+        <td>带守卫的状态迁移</td>
+        <td>只有这两步。没有退回 <code>pending</code>，也没有「未认领就直接完成」。</td>
+      </tr>
+      <tr>
+        <td>同一次回复里的多个工具调用</td>
+        <td>同一批请求里还没拿到生成键</td>
+        <td>参数在任何一个工具结果回来之前就已经写死，所以不能边创建边引用新 ID。</td>
+      </tr>
+    </table>
+
+    <h2>整体设计</h2>
+    <h3>模块地图</h3>
+    <pre>保留 s04：bash / 读 / 写 / 改 / glob，加上 Permission、Hooks、execute_tool
+
+s10 新加上的六块
+  Task                  一条任务的字段
+  TaskStore             .tasks/{id}.json 的创建、校验、保存、列举
+  create / update       先造节点，再按返回的 ID 加边
+  can_start             直接前置是否都已 completed
+  claim / complete      pending → in_progress → completed，并报告新解锁的下游
+  六个工具              模型只能通过工具改任务；owner 在工具层固定为 agent</pre>
+    <p class="src">
+      系统提示要求模型遵守两阶段建图：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:54">code.py L54–59</a>。
+      工具表：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:389">L389–426</a>。
+    </p>
+
+    <h3>一次完整运行</h3>
+    <p>
+      下面用 README 里的四件事走一遍。ID 是运行时随机生成的，这里只用名字代表文件。
+      箭头「表 → 接口」表示<strong>完成顺序</strong>：表做完，接口才能开始。
+      文件里写的是反方向的引用：<code>接口.blockedBy = [表的 ID]</code>。
+    </p>
+    <pre>第一阶段  创建四个节点，此时谁都不引用谁
+  表        pending  owner=空  blockedBy=[]
+  接口      pending  owner=空  blockedBy=[]
+  测试      pending  owner=空  blockedBy=[]
+  文档      pending  owner=空  blockedBy=[]
+
+第二阶段  用第一阶段返回的 ID 加边
+  接口.blockedBy = [表]
+  测试.blockedBy = [接口]
+  文档.blockedBy = [表]
+
+  表 ──完成顺序──▶ 接口 ──完成顺序──▶ 测试
+   └─────────────▶ 文档
+
+认领与完成
+  claim(表)      成功，表变为 in_progress，owner=agent
+  claim(接口)    失败，返回 Blocked by: [表的 ID]
+  complete(表)   成功；接口和文档的直接前置都清掉了，测试仍被接口挡住
+  claim(接口)    成功
+  complete(接口) 成功；这次新解锁的是测试
+  claim(文档)    成功（它只等表，不等接口）
+  complete(文档) 成功；测试若已经可开始，不会再次出现在 Unblocked 里
+  claim(测试)    成功
+  complete(测试) 成功</pre>
+    <p class="box">
+      <strong>一句话：</strong>节点先落地，边后补上；能不能动手看直接前置；
+      完成只翻转本条状态，并指出哪些下游是<strong>这一下</strong>才变得可开始。
+    </p>
+    <p class="src">
+      README 的同一条剧本：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/README.zh.md:169">L169–196</a>。
+    </p>
+
+    <h3>状态放在哪一层？</h3>
+    <table>
+      <tr><th>位置</th><th>保存什么</th><th>模型何时看到</th><th>生命周期</th></tr>
+      <tr>
+        <td><code>messages</code></td>
+        <td>当前会话里的对话和工具结果</td>
+        <td>每次请求按历史发送</td>
+        <td>这次进程里的这次会话</td>
+      </tr>
+      <tr>
+        <td><code>.tasks/{id}.json</code></td>
+        <td>一条任务的全部字段</td>
+        <td>调用 <code>list_tasks</code> 或 <code>get_task</code> 之后</td>
+        <td>跨进程保留，直到文件被改掉或删掉</td>
+      </tr>
+      <tr>
+        <td><code>owner</code></td>
+        <td>谁把这条任务从 pending 认领走了</td>
+        <td>列表里的一行，或详情 JSON</td>
+        <td>认领时写入；完成后仍留在文件里</td>
+      </tr>
+      <tr>
+        <td>工具返回的字符串</td>
+        <td>创建出的 ID、拒绝原因、刚解锁的标题</td>
+        <td>作为 <code>tool_result</code> 进入下一轮</td>
+        <td>只在这条消息里</td>
+      </tr>
+    </table>
+    <p>
+      文件在磁盘上，不等于模型已经读过。新会话的 <code>messages</code> 是空的，
+      进度在 <code>.tasks/</code>。模型要调用列表或详情，才能把任务重新放进上下文。
+    </p>
+
+    <h3>为什么必须分两阶段？</h3>
+    <p>
+      <code>create_task</code> 不接收依赖。新 ID 要等文件创建成功才存在。
+      模型有时会在<strong>同一条回复</strong>里发出好几个工具调用。
+      这些调用的参数，在循环执行任何一个工具之前就已经确定了。
+      所以「创建表」和「让接口依赖刚生成的表 ID」不能写在同一次回复里：
+      第二个调用还不知道第一个调用会返回什么。
+    </p>
+    <pre>同一条 assistant 回复
+  tool_use create_task("表")          参数里没有 ID，这是合法的
+  tool_use create_task("接口")        仍然不能填写表的 ID
+  tool_use update_task(???, [???])    这里的 ID 只能是猜的，通常会失败
+
+下一轮，工具结果已经在 messages 里
+  tool_use update_task(表的真实 ID 不在这里)
+  tool_use update_task(接口的真实 ID, addBlockedBy=[表的真实 ID])</pre>
+    <p>
+      循环确实会按顺序执行同一条回复里的工具，但那只是<strong>执行顺序</strong>。
+      它不会把前一个工具的返回值塞进后一个工具早已写好的参数。
+      协议靠系统提示约束模型，代码不会自动把同轮调用重排成两阶段。
+    </p>
+    <p class="src">
+      设计说明：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/README.zh.md:84">README L84–87</a>。
+      循环先收集全部 <code>tool_use</code>，再逐个执行：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:554">code.py L554–572</a>。
+    </p>
+
+    <h3>状态机只有两个动作</h3>
+    <pre>pending ──claim_task──▶ in_progress ──complete_task──▶ completed</pre>
+    <p>
+      <code>claim</code> 和 <code>complete</code> 是动作。
+      <code>pending</code>、<code>in_progress</code>、<code>completed</code> 是状态。
+      不能从 <code>pending</code> 直接跳到 <code>completed</code>，也不能把完成的任务退回去。
+      本章也不提供删除任务、修改标题、拆除已有依赖。
+    </p>
+    <p class="src">
+      README 的状态机：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/README.zh.md:158">L158–167</a>。
+    </p>
+
+    <h3>和相邻三课的边界</h3>
+    <table>
+      <tr><th>课</th><th>留下什么</th><th>存在哪</th><th>能不能表达依赖</th></tr>
+      <tr>
+        <td>s05 TodoWrite</td>
+        <td>当前任务的执行清单</td>
+        <td>进程内，整表替换</td>
+        <td>不能</td>
+      </tr>
+      <tr>
+        <td>s08 Context Compact</td>
+        <td>当前会话还要继续用的轨迹</td>
+        <td>消息裁剪，另有 transcript</td>
+        <td>不负责任务图</td>
+      </tr>
+      <tr>
+        <td>s09 Memory</td>
+        <td>以后还用得上的知识</td>
+        <td><code>.memory/*.md</code></td>
+        <td>不记录谁正在做哪一步</td>
+      </tr>
+      <tr>
+        <td>s10 Task System</td>
+        <td>任务进度、负责人和前置</td>
+        <td><code>.tasks/{id}.json</code></td>
+        <td>用 <code>blockedBy</code> 表达直接前置</td>
+      </tr>
+    </table>
+
+    <h2>细节实现</h2>
+
+    <h3>1. 一条任务六个字段</h3>
+    <pre>@dataclass
+class Task:
+    id: str
+    subject: str
+    description: str
+    status: str          # pending | in_progress | completed
+    owner: str | None
+    blockedBy: list[str] # 直接前置的任务 ID</pre>
+    <p class="src">
+      真实定义：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:68">code.py L68–75</a>。
+      <code>@dataclass</code> 在
+      <a href="../phase-0/0012-classes-and-objects.html">0012</a>
+      已经见过：它按字段生成构造方式。
+      <code>asdict</code> 把实例收成普通字典，后面才能 <code>json.dump</code>。
+    </p>
+    <p>
+      <code>subject</code> 是列表里看得见的短标题。<code>description</code> 是长说明，
+      列表不展示，只有 <code>get_task</code> 会把整份 JSON 返回。
+      <code>blockedBy</code> 用驼峰，是因为工具参数和磁盘 JSON 用的是同一个拼写。
+      它不是 Python 强制风格，而是让模型和文件对上同一个名字。
+    </p>
+    <table>
+      <tr><th>字段</th><th>创建时</th><th>之后谁改</th></tr>
+      <tr>
+        <td><code>id</code></td>
+        <td><code>task_</code> 加 8 位十六进制</td>
+        <td>不再改；文件名和字段必须一致</td>
+      </tr>
+      <tr>
+        <td><code>status</code></td>
+        <td><code>pending</code></td>
+        <td>只有 claim、complete 这两步</td>
+      </tr>
+      <tr>
+        <td><code>owner</code></td>
+        <td><code>None</code></td>
+        <td>claim 写成调用者；complete 不清除</td>
+      </tr>
+      <tr>
+        <td><code>blockedBy</code></td>
+        <td>空列表</td>
+        <td>只在 pending 且尚未认领时追加</td>
+      </tr>
+    </table>
+
+    <h3>2. ID 和路径是两道闸门</h3>
+    <pre>TASK_ID_PATTERN = re.compile(r"^task_[0-9a-f]{8}$")
+
+def _path(self, task_id, create_root=False):
+    if not isinstance(task_id, str) or not TASK_ID_PATTERN.fullmatch(task_id):
+        raise ValueError(...)
+    path = (root / f"{task_id}.json").resolve()
+    if not path.is_relative_to(root):
+        raise ValueError(...)</pre>
+    <p class="src">
+      真实实现：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:65">code.py L65</a>、
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:82">L82–97</a>。
+    </p>
+    <p>
+      <code>re.fullmatch</code> 要求<strong>整串</strong>匹配，不是「里面含有这段」。
+      所以 <code>task_abc</code> 太短，<code>task_ABCDEF12</code> 有大写，
+      <code>../task_abcd1234</code> 带了目录，都会在拼路径之前被拒绝。
+      通过模式之后，仍然 <code>resolve()</code> 并检查结果还在 <code>.tasks</code> 根目录下。
+      <code>resolve()</code> 只把路径规范化；拒绝越界的是后面的 <code>is_relative_to</code>。
+    </p>
+    <p>
+      存储根目录还要落在当前工作区里面。
+      <code>TaskStore</code> 若被指到工作区外，<code>_root</code> 会直接报错。
+      本章实际使用的是 <code>当前目录/.tasks</code>。
+    </p>
+    <p class="box">
+      <strong>和 s09 的同构：</strong>先拒绝不合法的名字，再确认解析后的路径仍在允许的根目录内。
+      记忆用的是文件名规则，任务用的是 <code>task_</code> 加 8 位小写十六进制。
+    </p>
+
+    <h3>3. 创建：随机 ID，排他写入</h3>
+    <pre>subject = subject.strip()
+if not subject:
+    raise ValueError("Task subject cannot be empty")
+
+for _ in range(100):
+    task = Task(
+        id=f"task_{secrets.token_hex(4)}",
+        subject=subject,
+        description=description,
+        status="pending",
+        owner=None,
+        blockedBy=[],
+    )
+    try:
+        with self._path(task.id, create_root=True).open("x", encoding="utf-8") as handle:
+            json.dump(asdict(task), handle, indent=2)
+        return task
+    except FileExistsError:
+        continue
+raise RuntimeError("Could not allocate a unique task ID")</pre>
+    <p class="src">
+      真实实现：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:102">code.py L102–125</a>。
+      <code>secrets.token_hex</code> 与 open 模式 <code>"x"</code> 的语义在 Python 标准库，
+      North 源码没有再解释这两个词：
+      <a href="https://docs.python.org/3/library/secrets.html#secrets.token_hex"><code>token_hex</code></a>
+      用 <code>nbytes</code> 个随机字节生成十六进制文本，4 字节就是 8 个十六进制字符；
+      <a href="https://docs.python.org/3/library/functions.html#open">open 模式 <code>"x"</code></a>
+      表示排他创建，文件已经存在就失败。
+    </p>
+    <p>
+      标题去掉两端空白后不能是空串。描述可以是空串。
+      新任务的依赖固定是空列表，负责人固定是空。创建函数没有 <code>blockedBy</code> 参数，
+      工具 schema 还写了 <code>additionalProperties: false</code>，多传的字段不属于这个工具。
+    </p>
+    <p>
+      ID 不使用递增计数器。每次取 4 字节随机数，撞上已有文件就换一个，最多 100 次。
+      模式 <code>"x"</code> 不会把已经存在的任务 JSON 盖掉。
+      盖掉是后面 <code>save()</code> 的事，那条路径只用于更新已知 ID。
+    </p>
+
+    <h3>4. 加边：先整批校验，再保存一次</h3>
+    <pre>if task.status != "pending" or task.owner is not None:
+    raise ValueError("...pending and unowned")
+
+dependencies = list(dict.fromkeys(add_blocked_by))
+for dependency in dependencies:
+    if dependency == task_id:
+        raise ValueError("Task cannot depend on itself")
+    if not self.exists(dependency):
+        raise ValueError(f"Dependency not found: {dependency}")
+    if dependency not in task.blockedBy and self._depends_on(dependency, task_id):
+        raise ValueError(f"Dependency cycle detected: {task_id} -&gt; {dependency}")
+
+task.blockedBy.extend(
+    dependency for dependency in dependencies
+    if dependency not in task.blockedBy
+)
+self.save(task)</pre>
+    <p class="src">
+      真实实现：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:141">code.py L141–171</a>。
+      环检测的行走：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:127">L127–139</a>。
+    </p>
+    <p>
+      <code>dict.fromkeys</code> 按输入顺序建字典。字典键天然不重复，所以再转回列表时，
+      重复 ID 只保留第一次出现的那个，后面的顺序不变。这里用它，而不是 <code>set</code>，
+      是因为集合不保证顺序。
+    </p>
+    <p>
+      校验按这个顺序做完，中途任何一条失败都还没有 <code>save</code>：
+    </p>
+    <ol>
+      <li><code>addBlockedBy</code> 必须是列表。工具 schema 还要求至少一项；函数本身遇到空列表会原样再保存一次。</li>
+      <li>目标任务要存在，并且仍是 <code>pending</code>、owner 仍是空。已经认领或已经完成，都不能再加边。</li>
+      <li>不能依赖自己。</li>
+      <li>每个前置文件都要存在。</li>
+      <li>若这条边还不存在，就从该前置沿着 <code>blockedBy</code> 往前走。走到了目标任务，说明会成环。</li>
+      <li>只把还没有的 ID 追加进去，然后保存一次。</li>
+    </ol>
+    <p>
+      重复添加同一条边是安全的：它不会写进列表两次，也不必再做环检测。
+      边已经在图里，再声明一次不会制造新环。
+    </p>
+    <h4>4.1 环检测是传递的，开工检查不是</h4>
+    <p>
+      <code>_depends_on(dependency, task_id)</code> 从「将要当成前置的那条任务」出发，
+      沿着它的 <code>blockedBy</code> 继续走。若能走到正在被修改的任务，
+      就不能再加「这条任务依赖那个前置」。
+    </p>
+    <pre>已有：测试.blockedBy = [接口]
+      接口.blockedBy = [表]
+
+想加：表.blockedBy = [测试]
+行走：测试 → 接口 → 表，走到了「表」
+结果：拒绝。否则表等测试、测试等接口、接口等表。</pre>
+    <p>
+      <code>can_start</code> 并不做这次行走。它只看本条 <code>blockedBy</code> 里的直接 ID
+      是不是都已经 <code>completed</code>。因此：
+    </p>
+    <ul>
+      <li>测试只写了 <code>blockedBy: [接口]</code> 时，接口一完成，测试就可以认领。函数不会再去看「接口是不是还在等表」。</li>
+      <li>若建图时漏了「测试等接口」这条边，只给测试写了「等表」，表完成后测试就会被允许开始。Harness 不会替模型把缺的边补上。</li>
+    </ul>
+    <p class="box">
+      <strong>读图口诀：</strong>加边时沿着前置链防止成环；开工时只相信这条任务自己列出的直接前置。
+    </p>
+
+    <h3>5. 能不能开始，和能不能认领</h3>
+    <pre>def incomplete_dependencies(task):
+    incomplete = []
+    for dependency in task.blockedBy:
+        try:
+            if load_task(dependency).status != "completed":
+                incomplete.append(dependency)
+        except (FileNotFoundError, ValueError):
+            incomplete.append(dependency)
+    return incomplete
+
+def can_start(task_id):
+    return not incomplete_dependencies(load_task(task_id))</pre>
+    <p class="src">
+      真实实现：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:219">code.py L219–231</a>。
+    </p>
+    <p>
+      空的 <code>blockedBy</code> 得到空的未完成列表，<code>can_start</code> 为真。
+      前置文件丢了、ID 对不上、状态字段坏了，都算「还没完成」，而不是「当作没有这条依赖」。
+      丢文件因此会挡住认领，不会悄悄放行。
+    </p>
+    <p>
+      <code>can_start</code> 只描述依赖。一条已经是 <code>in_progress</code> 或
+      <code>completed</code> 的任务，只要前置都完成了，它也会返回真。
+      认领还要另外满足：自己的状态必须是 <code>pending</code>。
+    </p>
+
+    <h3>6. 认领：两条业务拒绝都是普通字符串</h3>
+    <pre>if task.status != "pending":
+    return f"Task {task_id} is {task.status}, cannot claim"
+dependencies = incomplete_dependencies(task)
+if dependencies:
+    return f"Blocked by: {dependencies}"
+task.owner = owner
+task.status = "in_progress"
+TASKS.save(task)
+return f"Claimed {task.id} ({task.subject})"</pre>
+    <p class="src">
+      真实实现：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:234">code.py L234–245</a>。
+      工具入口把 owner 写成 <code>"agent"</code>：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:381">L381–382</a>。
+    </p>
+    <p>
+      状态不对，或者还有未完成的直接前置，函数<strong>返回说明文字</strong>，不抛异常。
+      模型在 <code>tool_result</code> 里读到 <code>cannot claim</code> 或 <code>Blocked by</code>，
+      就可以去完成前置，或改认领另一条。
+      对比之下，非法 ID、给已认领任务加边，会在 <code>TaskStore</code> 里抛
+      <code>ValueError</code>，再被 <code>execute_tool</code> 收成 <code>Error: ...</code>。
+      两类文本模型都能看见：前者是预期中的状态拒绝，后者是校验失败。
+    </p>
+    <p>
+      正常创建出来的 pending 任务，owner 一定是空。
+      <code>claim_task</code> 本身不再检查「是不是已经有 owner」，它只看状态和依赖，
+      然后写下本次 owner。本章工具没有把 owner 暴露给模型，所以模型不能指定别人的名字。
+    </p>
+
+    <h3>7. 完成：先核对身份，再算「新解锁」</h3>
+    <pre>if task.status != "in_progress":
+    return f"Task {task_id} is {task.status}, cannot complete"
+if task.owner != owner:
+    return f"Task {task_id} is owned by {task.owner}, not {owner}"
+
+ready_before = {那些 pending、有前置、而且现在就能开始的 ID}
+
+task.status = "completed"
+TASKS.save(task)
+
+unblocked = [那些 pending、有前置、刚才还不在 ready_before、现在能开始的标题]</pre>
+    <p class="src">
+      真实实现：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:248">code.py L248–273</a>。
+    </p>
+    <p>
+      必须已经是 <code>in_progress</code>，而且文件里的 owner 必须等于这次调用者。
+      本章工具调用者永远是 <code>"agent"</code>。手改成别人的 owner 之后，这个进程不能替他完成。
+      完成后 owner 字段还在，只是状态变成 <code>completed</code>。
+    </p>
+    <p>
+      「刚刚解锁」不是「所有现在能做的任务」。计算分三刀：
+    </p>
+    <ol>
+      <li>完成<strong>之前</strong>，记下已经可开始、而且自己带有前置的 pending 任务。</li>
+      <li>把当前任务写成 <code>completed</code> 并落盘。</li>
+      <li>再看一遍。仍然 pending、仍然有前置、刚才不在那份集合里、现在 <code>can_start</code> 为真的，才放进 <code>Unblocked</code>。</li>
+    </ol>
+    <p>
+      没有前置的任务一开始就能做，不会因为别人完成而被叫做「新解锁」。
+      早就可开始的下游也不会被重复报告。
+      返回里用的是 <code>subject</code>，顺序来自 <code>list_tasks()</code> 的文件名排序，
+      不是创建顺序，也不是建议的执行顺序。两个任务若标题相同，这行字会分不清是哪一个 ID。
+    </p>
+    <p class="box">
+      <strong>完成不等于做完。</strong><code>complete_task</code> 只改状态文件。
+      它不检查表是否真的建好、测试是否真的通过。
+      这和
+      <a href="../phase-1/0020-fail-check-harness.html">0020</a>
+      的验证缺口是同一件事：Harness 记下了「有人宣称完成」，没有记下证据。
+    </p>
+
+    <h3>8. 列表是摘要，详情才是全文</h3>
+    <pre>list_tasks   [ ] task_id: 标题 [pending] (blockedBy: ...)
+get_task     整份 JSON，含 description 和全部字段</pre>
+    <p class="src">
+      列表：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:354">code.py L354–374</a>。
+      详情：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:215">L215–216</a>、
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:377">L377–378</a>。
+      列举实现是按文件名排序的 <code>task_*.json</code>：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:188">L188–193</a>。
+    </p>
+    <p>
+      标记 <code>[ ]</code>、<code>[&gt;]</code>、<code>[x]</code> 只是给人看的状态缩写。
+      目录不存在时列表是空字符串提示，不会自动创建目录。
+      文件名排序不等于拓扑排序。第一行不是「下一个该认领的任务」。
+      跨会话继续时，短标题往往不够，需要 <code>get_task</code> 把描述读回来。
+    </p>
+
+    <h3>9. 工具层把负责人钉死</h3>
+    <table>
+      <tr><th>工具</th><th>成功时模型看见什么</th><th>本章不允许模型做的事</th></tr>
+      <tr>
+        <td><code>create_task</code></td>
+        <td><code>Created task_xxxxxxxx: 标题</code></td>
+        <td>不能在创建时传入依赖或 owner</td>
+      </tr>
+      <tr>
+        <td><code>update_task</code></td>
+        <td>更新后的整份 <code>blockedBy</code></td>
+        <td>不能删边，不能改已认领的任务</td>
+      </tr>
+      <tr>
+        <td><code>list_tasks</code></td>
+        <td>每个任务一行摘要</td>
+        <td>不返回 description</td>
+      </tr>
+      <tr>
+        <td><code>get_task</code></td>
+        <td>完整 JSON</td>
+        <td>不修改文件</td>
+      </tr>
+      <tr>
+        <td><code>claim_task</code></td>
+        <td>认领成功，或状态 / 阻塞说明</td>
+        <td>不能替别的 owner 认领；工具固定写 <code>agent</code></td>
+      </tr>
+      <tr>
+        <td><code>complete_task</code></td>
+        <td>完成，并可能多一行 <code>Unblocked</code></td>
+        <td>不能完成别人认领的任务，也不能跳过认领</td>
+      </tr>
+    </table>
+    <p class="src">
+      README 写明本章只处理顺序执行的状态更新：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/README.zh.md:118">L118</a>。
+      owner 字段是为后面的分工留下的，s10 的工具 schema 里没有这个参数。
+    </p>
+
+    <h2>动手：真跑 North s10</h2>
+    <p>
+      从 North 仓库根目录启动，沿用已有虚拟环境和 <code>.env</code>。不要把 API key 贴到聊天里。
+      工作区里如果已经有 <code>.tasks/</code>，先看清那些 JSON 是不是上次留下的，避免和本次观察混在一起。
+    </p>
+    <pre>cd D:\agent-learning\learn-claude-code-north
+.\.venv\Scripts\Activate.ps1
+python s10_task_system\code.py</pre>
+    <p class="src">
+      README 的试跑提示：
+      <a href="cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/README.zh.md:201">L201–215</a>。
+    </p>
+    <h3>观察一：先看见四个文件，再看见边</h3>
+    <pre>Create tasks: setup database schema, create API endpoints (depends on schema), write tests (depends on endpoints), write docs (depends on schema)</pre>
+    <p>
+      看终端里的工具顺序，再看 <code>.tasks/</code>。
+      期望是先出现若干 <code>task_</code> JSON，依赖字段先是空的；
+      随后另一次 <code>update_task</code> 才把 ID 写进 <code>blockedBy</code>。
+      若模型在同一次回复里猜 ID，工具结果里会出现找不到任务或 ID 不合法。那正好说明两阶段不是可选文风。
+    </p>
+    <h3>观察二：认领被挡住，完成才会解锁</h3>
+    <pre>List all tasks and their statuses
+Claim the first unblocked task and complete it
+List tasks again — which ones are now unblocked?</pre>
+    <p>
+      「第一行」不是调度结果。没有前置的「建表」应该能认领；
+      接口和文档在表完成前应得到 <code>Blocked by</code>。
+      表完成之后，返回文本里的 <code>Unblocked</code> 应包含接口和文档的标题，不包含仍被接口挡住的测试。
+      退出程序再启动，JSON 还在，但新的 <code>messages</code> 是空的。不调用列表，模型不会自动知道进度。
+    </p>
+    <h3>观察三：完成没有检查工作产品</h3>
+    <p>
+      可以让模型认领并完成「建表」，同时不要真的创建数据库文件。
+      <code>complete_task</code> 仍会成功。把这个结果记成边界：状态文件记录的是宣称，不是验证。
+    </p>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>任务系统和 TodoWrite 是同一张表：</strong>不是。清单整表替换、活在进程里、没有依赖和负责人。</li>
+        <li><strong>记忆文件会记下任务进度：</strong>不会。s09 拒绝把临时任务状态写成长期知识。</li>
+        <li><strong>创建时就能把依赖一起传进去：</strong>不能。<code>create_task</code> 只收标题和描述。</li>
+        <li><strong>同一条回复里后面的工具能看见前面的返回值：</strong>不能。参数在执行前已经定死。</li>
+        <li><strong><code>blockedBy</code> 的箭头和「谁先做完」同向：</strong>不是。列表里存的是前置 ID，图上的完成顺序箭头指向后继。</li>
+        <li><strong><code>can_start</code> 会沿着整条链检查：</strong>不会。它只看直接前置。传递检查出现在加边时的环检测。</li>
+        <li><strong>漏掉的边会被自动补上：</strong>不会。图里没有的前置，就不会挡住认领。</li>
+        <li><strong>列表第一项就是下一个可做任务：</strong>不是。顺序是任务 ID 的文件名排序。</li>
+        <li><strong>前置文件不见了就当作没有依赖：</strong>不是。缺失和非法文件都算未完成，认领会被挡住。</li>
+        <li><strong>pending 可以直接完成：</strong>不能。完成要求状态已经是 <code>in_progress</code>，且 owner 匹配。</li>
+        <li><strong><code>Unblocked</code> 列出所有当前能做的任务：</strong>不是。只列出这一次完成之后新变得可开始、并且自己带有前置的任务。</li>
+        <li><strong>完成后 owner 会被清空：</strong>不会。只改状态。</li>
+        <li><strong>认领之后还能补依赖：</strong>不能。加边要求 pending 且 owner 为空。所以边要在认领前加完。</li>
+        <li><strong>标记完成就证明工作做完了：</strong>不能。本章没有检查工作产品。</li>
+        <li><strong>排他创建和 <code>save</code> 一样不会覆盖：</strong>不对。只有创建用 <code>"x"</code>；<code>save</code> 会重写该 ID 的文件。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。新 ID 要等创建返回，同一次回复里的参数已经定死。"
+      data-bad="创建不接收依赖。同轮的另一个工具调用还看不见刚生成的 ID。">
+      <p>为什么任务图要先创建节点，再更新依赖？</p>
+      <button data-correct="true">先建节点再拿返回编号连边</button>
+      <button data-correct="false">同轮调用就能引用新的编号</button>
+      <button data-correct="false">依赖只需要写进进程内存中</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。认领同时要求状态是 pending，并且每条直接前置都已完成。"
+      data-bad="in_progress 和 completed 都不能再认领；只满足依赖不够。">
+      <p>claim_task 在哪种情况下会成功？</p>
+      <button data-correct="true">待办状态且全部前置已完成</button>
+      <button data-correct="false">进行状态且全部前置已完成</button>
+      <button data-correct="false">完成状态且当前没有负责人</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。必须先认领成 in_progress，而且文件里的 owner 要等于这次调用者。"
+      data-bad="pending 会被拒绝。owner 不匹配也会被拒绝，即使状态已经是进行中。">
+      <p>complete_task 接受哪种任务？</p>
+      <button data-correct="true">进行中且负责人就是调用者</button>
+      <button data-correct="false">待办中且负责人就是调用者</button>
+      <button data-correct="false">已完成且任何调用者都可以</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。它是完成前后的差分，不是当前所有可做任务的名单。"
+      data-bad="没有前置的任务、以及完成前就已经可开始的任务，都不会算作刚刚解锁。">
+      <p>返回文本里的 Unblocked 指什么？</p>
+      <button data-correct="true">这次完成后才变得可以开始</button>
+      <button data-correct="false">目录里全部待办任务的标题</button>
+      <button data-correct="false">没有依赖的任务被重新创建</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。模式 x 在文件已存在时失败，创建循环会换一个新 ID。"
+      data-bad="覆盖已有 JSON 是 save 的行为。创建路径必须避开别人的任务文件。">
+      <p>创建任务时使用 open 模式 x，是为了什么？</p>
+      <button data-correct="true">文件已存在就拒绝覆盖写入</button>
+      <button data-correct="false">文件已存在就合并两条记录</button>
+      <button data-correct="false">文件已存在就删除整个目录</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。读不到合法前置时，把它算作未完成，认领会返回 Blocked by。"
+      data-bad="缺失不是「没有这条依赖」，也不是「前置已经完成」。">
+      <p>前置任务的 JSON 文件丢失时，认领会怎样？</p>
+      <button data-correct="true">视为未完成因此不能认领</button>
+      <button data-correct="false">视为已完成因此可以认领</button>
+      <button data-correct="false">视为无依赖因此直接开始</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。落盘、依赖和负责人是任务系统相对进程内清单多出来的能力。"
+      data-bad="整表替换是 TodoWrite。把状态改成 completed 也不会自动证明工作已经做完。">
+      <p>Task System 相对 TodoWrite 多出什么？</p>
+      <button data-correct="true">单条落盘并记录依赖负责人</button>
+      <button data-correct="false">整表替换且只活在当前进程</button>
+      <button data-correct="false">自动证明任务描述已经做完</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能用一句话区分 s05 清单、s09 记忆和 s10 任务图：一个管步骤提醒，一个管可复用知识，一个管进度和依赖。</li>
+      <li>能讲清六个字段在创建时的初值，以及状态机只有 claim、complete 两个动作。</li>
+      <li>能说明 <code>blockedBy</code> 存的是前置 ID，完成顺序的箭头指向后继。</li>
+      <li>能解释两阶段建图：同一次回复中的工具参数在结果返回前已经定死，所以必须先拿到运行时 ID。</li>
+      <li>能按顺序说出加边校验：pending 且未认领、非自依赖、前置存在、不会成环、重复边不双写，然后才保存。</li>
+      <li>能区分环检测会沿前置链行走，<code>can_start</code> 只看直接前置，缺掉的边不会被补上。</li>
+      <li>能说明认领失败返回普通字符串，而非法更新会变成 <code>Error:</code>；两者都进工具结果，含义不同。</li>
+      <li>能解释 <code>Unblocked</code> 是完成前后的差分，列表顺序是文件名排序，完成不验证工作产品。</li>
+      <li>能指出本章工具把 owner 固定为 <code>agent</code>，因此还不是多 Agent 分工。</li>
+      <li>真跑 <code>python s10_task_system\code.py</code>，至少看见一次先创建后加边、一次认领被阻塞、一次完成后的解锁，并在重启后确认 JSON 还在。</li>
+    </ul>
+
+    <h2>速查</h2>
+    <div class="box">
+      <p>
+        本课压缩版：
+        <a href="../../reference/phase-2/s10-task-system.html">阶段 2 · s10 Task System 速查</a>。
+        先用本课把建图和状态机走通，再用速查回忆字段、校验顺序和解锁差分。
+      </p>
+      <p>
+        本课新稳定术语已追加到
+        <a href="../../GLOSSARY.md">GLOSSARY.md</a> 的 Task System 部分。
+      </p>
+    </div>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>
+          主阅读：
+          <a href="../../learn-claude-code-north/s10_task_system/README.zh.md">North s10 中文 README</a>；
+          本课已把两阶段建图、直接前置和真实循环接线展开，不打开也可以按过关标准学习。
+        </li>
+        <li>
+          对照清单：
+          <a href="./0025-todo-write.html">0025 s05 TodoWrite</a>；
+          重点看整表替换和单条记录、有没有依赖。
+        </li>
+        <li>
+          对照记忆：
+          <a href="./0029-memory.html">0029 s09 Memory</a>；
+          重点看知识文件和任务文件为什么不能混用。
+        </li>
+        <li>
+          原理回看：
+          <a href="../phase-1/0020-fail-check-harness.html">0020 失败先查 harness</a>；
+          重点是状态被标成 completed，仍然可能没有验证工作产品。
+        </li>
+        <li>
+          下一课：s11 才会把慢命令放到后台。本章的工具调用仍然是同步的，任务图只负责进度，不负责并行执行。
+        </li>
+      </ul>
+    </div>
+
+    <p>
+      <a href="./index.html">阶段 2 分册</a>
+      · <a href="./0029-memory.html">上一课 0029</a>
+    </p>
+    <div data-lesson-id-footer="0030"></div>
+    <footer>
+      不清楚的立刻问我。下一课 s11：慢操作不必堵住整轮循环。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>
