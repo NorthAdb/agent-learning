@@ -342,7 +342,7 @@ _Avoid_: 用 `eval` 解析模型输出；与 `literal_eval` 混为一谈
 _Avoid_: 用 `eval` 解析模型输出；以为 literal_eval 和 eval 一样只是「算个值」
 
 **线程 / `threading.Thread`**:
-同一进程里另一条执行线。`Thread(target=fn, args=..., daemon=True).start()` 立刻返回。解决「慢命令别堵死 agent loop」（North s13）。`target` 传函数对象，不要加 `()`；单元素 `args` 别忘逗号 `("x",)`；`join` 才等结束。
+同一进程里另一条执行线。`Thread(target=fn, args=..., daemon=True).start()` 立刻返回。解决「慢命令别堵死 agent loop」（North s11）。`target` 传函数对象，不要加 `()`；单元素 `args` 别忘逗号 `("x",)`；`join` 才等结束。
 _Avoid_: `target=fn()`；`args=("x")` 少逗号；以为 `start` 会等到结束；把线程当成 async
 
 **`threading.Lock`**:
@@ -687,6 +687,38 @@ _Avoid_: 把 `can_start` 当成已经可以认领；它只表示依赖满足，�
 `complete_task` 对比完成前后：原先还不能开始、完成后变为可开始、状态仍是 pending、且自己带有前置的任务。返回的是标题，顺序来自文件名排序。
 出处：North [`s10_task_system/code.py` L248–273](cursor://file/d:/agent-learning/learn-claude-code-north/s10_task_system/code.py:248)。
 _Avoid_: 把它读成“当前所有能做的任务”；没有前置的任务不会出现在这行里。完成也不验证工作产品是否真的做完。
+
+## Background Tasks
+
+**后台任务**（background task）:
+一条 Bash 在守护线程里执行。主循环先拿到 `bg_id`，不在这次工具调用里等待命令结束。登记表只在当前进程内存里。
+出处：North [`s11_background_tasks/README.zh.md` L23–36](cursor://file/e:/agent_l/learn-claude-code-north/s11_background_tasks/README.zh.md:23)。
+_Avoid_: 把 s10 的 `.tasks/{id}.json` 当成后台编号；以为 install/build/test 会自动进后台。
+
+**`run_in_background`**:
+bash 工具的布尔参数。只有工具名是 bash 且该值 `is True` 时才进后台。字符串 `"true"`、数字 `1` 和其他工具都不算。
+出处：North [`s11_background_tasks/code.py` L403–407](cursor://file/e:/agent_l/learn-claude-code-north/s11_background_tasks/code.py:403)。
+_Avoid_: 以为 `run_bash` 自己看见这个参数就会开线程；那个函数忽略它，始终同步执行。
+
+**`bg_id`**:
+形如 `bg_0001` 的进程内编号。它不是 `tool_use_id`，也不是任务图里的 `task_*`。
+出处：North [`s11_background_tasks/code.py` L334–341](cursor://file/e:/agent_l/learn-claude-code-north/s11_background_tasks/code.py:334)。
+_Avoid_: 重启后还去磁盘找这个编号；本章没有把它写成文件。
+
+**占位结果**（background placeholder）:
+后台路径上，这一次 `tool_use` 唯一的 `tool_result`。正文只说明任务已启动。`PostToolUse` 看见的也是这句，不是命令输出。
+出处：North [`s11_background_tasks/code.py` L443–449](cursor://file/e:/agent_l/learn-claude-code-north/s11_background_tasks/code.py:443)。
+_Avoid_: 用同一个 `tool_use_id` 再补一条结果；把占位句子当成命令已经成功。
+
+**`task_notification`**:
+后续轮次注入的一段文本，包含 `task_id`、`status`、命令和最多 500 字符的摘要。不复用原来的 `tool_use_id`。
+出处：North [`s11_background_tasks/code.py` L384–392](cursor://file/e:/agent_l/learn-claude-code-north/s11_background_tasks/code.py:384)；注入点 [`L461–464`](cursor://file/e:/agent_l/learn-claude-code-north/s11_background_tasks/code.py:461)。
+_Avoid_: 以为命令一结束就会叫醒模型；模型已经停住时，要等下一次进入 `agent_loop`。
+
+**进程组清理**:
+命令用新会话启动，退出时向原进程组发信号。这是生命周期收尾，不是沙箱。`os.killpg` 仅 Unix。
+出处：North [`s11_background_tasks/README.zh.md` L81](cursor://file/e:/agent_l/learn-claude-code-north/s11_background_tasks/README.zh.md:81)；[`code.py` L57–64](cursor://file/e:/agent_l/learn-claude-code-north/s11_background_tasks/code.py:57)。
+_Avoid_: 把它当成容器或权限系统；以为另建会话的子进程也一定会被杀掉。
 
 ## Frameworks (workspace stance)
 

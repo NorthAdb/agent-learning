@@ -15,11 +15,11 @@
 
 ## Solid ground
 - Python 0001–0016 已过关（语法地基，Agent 只是载体）
-- 0017–0028 已过关：公式 → Agency/Harness → ReAct → 失败先查 harness → s01–s08（loop / tools / permission / hooks / todo / subagent / skill / compact）
+- 0017–0030 已过关：公式 → Agency/Harness → ReAct → 失败先查 harness → s01–s10（loop / tools / permission / hooks / todo / subagent / skill / compact / memory / task system）
 
 ## Goals
-- Current: 过关 0029（North s09 Memory：筛选、提取、整理持久记忆）
-- Next: 沿 North 主线继续 s10 起；课上代码仍是当章 `code.py`
+- Current: 读 0031（North s11 Background Tasks：慢 Bash 先交回编号，结果以后再通知）。课件已生成，未过关
+- Next: 沿 North 主线继续 s11 起；课上代码仍是当章 `code.py`
 
 ## Artifacts
 - 教法状态：`.alvar/maps/`、`.alvar/sessions/`、`.alvar/visuals/`

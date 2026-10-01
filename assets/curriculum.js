@@ -210,4 +210,11 @@ window.LESSON_CURRICULUM = [
     phase: "2",
     duration: "60–90 分钟",
   },
+  {
+    id: "0031",
+    file: "phase-2/0031-background-tasks.html",
+    title: "s11：后台任务；先交回编号，结果以后再通知",
+    phase: "2",
+    duration: "60–90 分钟",
+  },
 ];

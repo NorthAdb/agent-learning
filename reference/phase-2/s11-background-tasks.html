@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>阶段 2 · s11 Background Tasks 速查</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+  <link rel="stylesheet" href="../../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="../index.html">速查索引</a> · 课 0031 · 打印友好</p>
+    <h1>s11：Background Tasks</h1>
+    <p class="mission">
+      只有明确要求的 Bash 先交回编号；命令输出以后再作为通知送进对话。
+    </p>
+    <p class="src">
+      来源：
+      <a href="../../learn-claude-code-north/s11_background_tasks/README.zh.md">s11 README</a>
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s11_background_tasks/README.zh.md:13">L13–136</a>；
+      <a href="../../learn-claude-code-north/s11_background_tasks/code.py">code.py</a>
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s11_background_tasks/code.py:318">L318–491</a>。
+    </p>
+
+    <h2>一张图</h2>
+    <pre>PreToolUse                 主线程审批；拒绝则没有 bg_id
+  ↓
+should_run_background      bash 且 run_in_background is True
+  ↓
+start                      登记 bg_0001，守护线程跑命令，立刻返回
+  ↓
+tool_result                占位句子。这一次 tool_use 到此结束
+  ↓
+下次 messages.create 之前
+  ↓
+task_notification          文本，不带原来的 tool_use_id</pre>
+
+    <h2>判断</h2>
+    <ul>
+      <li>进后台：工具名是 <code>bash</code>，并且参数<strong>是</strong>布尔 <code>True</code>。</li>
+      <li>不进后台：缺省、<code>False</code>、字符串 <code>"true"</code>、数字 <code>1</code>、install/build/test 关键词、读/写/改/glob。</li>
+      <li><code>run_bash</code> 收下该参数后仍然同步。分叉在 <code>execute_tool</code> 里，进后台时不会调用 <code>run_bash</code>。</li>
+    </ul>
+
+    <h2>登记表</h2>
+    <pre>bg_0001
+  status: running → completed | failed
+  只在这次进程的内存里
+  收集后从 tasks / results 删除</pre>
+    <ul>
+      <li>退出码 0：<code>completed</code>。</li>
+      <li>非零、120 秒超时（退出码 <code>None</code>）、线程异常：<code>failed</code>。</li>
+      <li>进程输出先截到 50000 字符；通知 <code>summary</code> 再截到 500。</li>
+      <li>没有列出后台任务的工具。模型只看见占位句子和后来的通知。</li>
+    </ul>
+
+    <h2>什么时候看得见</h2>
+    <ul>
+      <li>同一次提问里模型还在调工具：下一次请求模型之前，通知贴在上一条 tool_result 用户消息上。</li>
+      <li>模型已经停住：要等你再输入一句，再次进入 <code>agent_loop</code>。</li>
+      <li>命令完成不会打断正在进行的模型调用，也不会自己再问一轮。</li>
+      <li>同一条回复里的下一个工具不必等后台命令结束；模型仍要等整批 tool_result 一起回来。</li>
+    </ul>
+
+    <h2>不负责</h2>
+    <ul>
+      <li>不把 s10 任务图放进后台。本章工具仍是 s04 的五个。</li>
+      <li>进程组清理不是沙箱。<code>os.killpg</code> 是 Unix 接口。</li>
+      <li>不定时。完成也不证明工作做完。闹钟是 s12。</li>
+    </ul>
+
+    <h2>和相邻课</h2>
+    <table>
+      <tr><th>课</th><th>留下什么</th><th>不负责</th></tr>
+      <tr><td>s04 Hooks</td><td>工具前后的钩子</td><td>慢命令不阻塞</td></tr>
+      <tr><td>s10 Task System</td><td>进度、owner、直接前置</td><td>后台执行</td></tr>
+      <tr><td>s11 Background Tasks</td><td>内存中的 bash 编号和稍后通知</td><td>任务图；到点再跑；叫醒已停下的模型</td></tr>
+    </table>
+
+    <h2>过关句</h2>
+    <p class="box">
+      <strong>后台 = 显式布尔真 + 先交回编号 + 以后再通知。</strong>
+      占位结果不是命令输出；通知不是第二条 tool_result；完成不会自己叫醒模型。
+    </p>
+    <p>
+      <a href="../../lessons/phase-2/0031-background-tasks.html">打开 0031 课件</a> ·
+      <a href="../../lessons/phase-2/0030-task-system.html">回看 s10 Task System</a> ·
+      <a href="../../lessons/phase-2/0024-hooks.html">回看 s04 Hooks</a>
+    </p>
+    <footer>下一课：s12 Cron Scheduler。后台任务不负责到点再跑。</footer>
+  </main>
+</body>
+</html>
