@@ -1,7 +1,7 @@
 # NOTES
 
 ## Local sources (own git remotes)
-- 教学根目录 `d:\agent-learning`：独立 git → origin https://github.com/NorthAdb/agent-learning。`python-100Days/` 与 `learn-claude-code-north/` 以 submodule 接入；`AI-Agents-in-Depth-md/`、`playground/`、`sources/` 直接跟踪。`.env` 与 `.venv/` 仍然忽略。
+- 教学根目录 `d:\agent-learning`：独立 git → origin https://github.com/NorthAdb/agent-learning。`python-100Days/` 与 `learn-claude-code-north/` 是普通目录，文件直接进本仓；`AI-Agents-in-Depth-md/`、`playground/`、`sources/` 同样直接跟踪。`.env` 与 `.venv/` 仍然忽略。
 - GitHub Pages：https://northadb.github.io/agent-learning/（`master` 根目录静态站；本地 `python -m http.server`）
 - `python-100Days/` → origin `https://github.com/NorthAdb/Python-100-Days`
 - `learn-claude-code-north/` → origin `https://github.com/NorthAdb/learn-claude-code-north`
@@ -104,9 +104,9 @@ Ch1 是概念地图，**禁止整章塞进一课**。课件/练习/速查放 `le
 **本阶段故意不讲**（留给后面或卡住再看）：Manus/OpenClaw 案例细读、工具五类、上下文五组件消融、Model as Agent / 苦涩的教训、模型选型、框架对照表（含 LangChain）、护栏三层、全书设计模式、[L02 五子系统](https://walkinglabs.github.io/learn-harness-engineering/zh/lectures/lecture-02-what-a-harness-actually-is/)（动手前或阶段 2 再开）。
 
 ### 阶段 2 · 能动手（当前）
-- **已过关**：0021（s01 循环 + bash）、0022（s02 多工具 + dispatch map）、0023（s03 三道闸门）、0024（s04 hooks）、0025（s05 TodoWrite）、0026（s06 Subagent）、0027（s07 Skill Loading）、0028（s08 Context Compact）、0029（s09 Memory）
-- **当前课**：0030 / North **s10**（Task System：任务落盘、`blockedBy`、认领与解锁）。课件已生成，未过关；必须真跑 `s10_task_system/code.py`
-- 再往后：s11 Background Tasks（慢命令放到后台；任务图本身仍是同步工具）
+- **已过关**：0021（s01 循环 + bash）、0022（s02 多工具 + dispatch map）、0023（s03 三道闸门）、0024（s04 hooks）、0025（s05 TodoWrite）、0026（s06 Subagent）、0027（s07 Skill Loading）、0028（s08 Context Compact）、0029（s09 Memory）、0030（s10 Task System：任务落盘、`blockedBy`、认领与解锁）
+- **当前课**：0031 / North **s11**（Background Tasks：慢 Bash 先交回编号，结果以后再通知）。课件已生成，未过关；必须真跑 `s11_background_tasks/code.py`
+- 再往后：s12 cron，以及协作 / MCP / 集成收口
 - 卫星：书 Ch4 工具、Ch5 Coding Agent；Harness 里「划清任务边界 / 防止提前宣告完成 / 跑通才算验证」
 
 ### 阶段 3 · 上下文、记忆、知识
