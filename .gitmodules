@@ -1,0 +1,6 @@
+[submodule "python-100Days"]
+	path = python-100Days
+	url = https://github.com/NorthAdb/Python-100-Days
+[submodule "learn-claude-code-north"]
+	path = learn-claude-code-north
+	url = https://github.com/NorthAdb/learn-claude-code-north

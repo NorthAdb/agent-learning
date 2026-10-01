@@ -1,0 +1,6 @@
+{
+  "last_model": "gpt-demo",
+  "turns_used": 2,
+  "last_tool": "rag_search",
+  "ok": true
+}

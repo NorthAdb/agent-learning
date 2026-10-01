@@ -1,7 +1,7 @@
 # NOTES
 
 ## Local sources (own git remotes)
-- 教学根目录 `d:\agent-learning`：独立 git → origin https://github.com/NorthAdb/agent-learning（跟踪 MISSION/lessons 等；子项目在 `.gitignore`）
+- 教学根目录 `d:\agent-learning`：独立 git → origin https://github.com/NorthAdb/agent-learning。`python-100Days/` 与 `learn-claude-code-north/` 以 submodule 接入；`AI-Agents-in-Depth-md/`、`playground/`、`sources/` 直接跟踪。`.env` 与 `.venv/` 仍然忽略。
 - GitHub Pages：https://northadb.github.io/agent-learning/（`master` 根目录静态站；本地 `python -m http.server`）
 - `python-100Days/` → origin `https://github.com/NorthAdb/Python-100-Days`
 - `learn-claude-code-north/` → origin `https://github.com/NorthAdb/learn-claude-code-north`
@@ -9,7 +9,7 @@
 - Clone 策略：地基三件套已在仓库旁；其余资源按需拉，勿一次塞满
 
 ## File layout (where code goes)
-- **练习脚本**（如 `hello_agent.py`）→ `playground/python/`（阶段 0；已在 `.gitignore`，本地统一管理）
+- **练习脚本**（如 `hello_agent.py`）→ `playground/python/`（阶段 0；目录已进教学仓，`.venv` 仍忽略）
   - 按课号分子目录更清晰：`playground/python/0001-hello/hello_agent.py`
   - 该目录共用一个 `.venv`（建在 `playground/python/.venv`）
 - **课件** → 按阶段分子目录（进教学仓 git）：`lessons/phase-0/`、`lessons/phase-1/`、`lessons/phase-2/`
@@ -22,7 +22,7 @@
   - 阶段 1 速查：`reference/phase-1/`
   - 过关后把可压缩知识点追加进对应速查；术语冲突以 GLOSSARY 为准
   - 路径对照：`reference/path.html`（书 / North / Harness 讲义怎么配）
-- **阶段 1 练习** → `playground/phase-1/`（`.gitignore` 已覆盖 `playground/`；无第三方包时可用阶段 0 的 venv 解释器）
+- **阶段 1 练习** → `playground/phase-1/`（无第三方包时可用阶段 0 的 venv 解释器）
 - **上游教材/实战仓** → `python-100Days/`、`learn-claude-code-north/`、`AI-Agents-in-Depth-md/`（不要往里塞你的练习文件）
 - 以后按需 clone 的新上游 → `sources/<name>/`
 

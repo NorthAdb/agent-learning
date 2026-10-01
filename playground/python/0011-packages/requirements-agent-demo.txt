@@ -1,0 +1,4 @@
+# 0011 demo deps (Agent-style requirements.txt)
+# Comments start with #; pip skips them. Use ASCII-only here on Windows.
+
+requests>=2.31.0

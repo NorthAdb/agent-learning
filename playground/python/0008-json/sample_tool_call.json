@@ -1,0 +1,7 @@
+{
+  "name": "rag_search",
+  "arguments": {
+    "query": "如何把 Java 服务接入 Agent harness？",
+    "top_k": "2"
+  }
+}

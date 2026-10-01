@@ -1,0 +1,10 @@
+{
+  "model": "gpt-demo",
+  "max_turns": 8,
+  "rag": {
+    "top_k": 3,
+    "knowledge_dir": "docs",
+    "enabled": true
+  },
+  "allowed_tools": ["rag_search", "read_file", "final"]
+}

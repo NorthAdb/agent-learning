@@ -1,0 +1,74 @@
+=== FILES ===
+20
+
+=== DECORATORS ===
+dataclass: 17
+
+=== CLASSES ===
+s11_error_recovery.RecoveryState
+s12_task_system.Task
+s13_background_tasks.Task
+s14_cron_scheduler.Task
+s14_cron_scheduler.CronJob
+s15_agent_teams.Task
+s15_agent_teams.CronJob
+s15_agent_teams.MessageBus
+s16_team_protocols.Task
+s16_team_protocols.MessageBus
+s16_team_protocols.ProtocolState
+s17_autonomous_agents.Task
+s17_autonomous_agents.MessageBus
+s17_autonomous_agents.ProtocolState
+s18_worktree_isolation.Task
+s18_worktree_isolation.MessageBus
+s18_worktree_isolation.ProtocolState
+s19_mcp_plugin.Task
+s19_mcp_plugin.MessageBus
+s19_mcp_plugin.ProtocolState
+s19_mcp_plugin.MCPClient
+s20_comprehensive.Task
+s20_comprehensive.MessageBus
+s20_comprehensive.ProtocolState
+s20_comprehensive.RecoveryState
+s20_comprehensive.CronJob
+s20_comprehensive.MCPClient
+
+=== IMPORTS ===
+anthropic: 20
+dotenv: 20
+pathlib: 19
+os: 15
+dataclasses: 9
+datetime: 7
+ast: 5
+yaml: 2
+subprocess: 1
+
+=== FEATURE HITS ===
+subprocess             n=20  s01_agent_loop, s02_tool_use, s03_permission, s04_hooks, s05_todo_write, s06_subagent, s07_skill_loading, s08_context_compact, s09_memory, s10_system_prompt, s11_error_recovery, s12_task_system, s13_background_tasks, s14_cron_scheduler, s15_agent_teams, s16_team_protocols, s17_autonomous_agents, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+getattr family         n=20  s01_agent_loop, s02_tool_use, s03_permission, s04_hooks, s05_todo_write, s06_subagent, s07_skill_loading, s08_context_compact, s09_memory, s10_system_prompt, s11_error_recovery, s12_task_system, s13_background_tasks, s14_cron_scheduler, s15_agent_teams, s16_team_protocols, s17_autonomous_agents, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+try                    n=20  s01_agent_loop, s02_tool_use, s03_permission, s04_hooks, s05_todo_write, s06_subagent, s07_skill_loading, s08_context_compact, s09_memory, s10_system_prompt, s11_error_recovery, s12_task_system, s13_background_tasks, s14_cron_scheduler, s15_agent_teams, s16_team_protocols, s17_autonomous_agents, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+pathlib Path           n=19  s02_tool_use, s03_permission, s04_hooks, s05_todo_write, s06_subagent, s07_skill_loading, s08_context_compact, s09_memory, s10_system_prompt, s11_error_recovery, s12_task_system, s13_background_tasks, s14_cron_scheduler, s15_agent_teams, s16_team_protocols, s17_autonomous_agents, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+glob/fnmatch           n=17  s02_tool_use, s03_permission, s04_hooks, s05_todo_write, s06_subagent, s07_skill_loading, s08_context_compact, s09_memory, s12_task_system, s13_background_tasks, s14_cron_scheduler, s15_agent_teams, s16_team_protocols, s17_autonomous_agents, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+raise                  n=17  s02_tool_use, s05_todo_write, s06_subagent, s07_skill_loading, s08_context_compact, s09_memory, s10_system_prompt, s11_error_recovery, s12_task_system, s13_background_tasks, s14_cron_scheduler, s15_agent_teams, s16_team_protocols, s17_autonomous_agents, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+isinstance             n=16  s01_agent_loop, s04_hooks, s05_todo_write, s06_subagent, s07_skill_loading, s08_context_compact, s09_memory, s12_task_system, s13_background_tasks, s14_cron_scheduler, s15_agent_teams, s16_team_protocols, s17_autonomous_agents, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+with                   n=16  s03_permission, s06_subagent, s07_skill_loading, s08_context_compact, s09_memory, s10_system_prompt, s11_error_recovery, s12_task_system, s13_background_tasks, s14_cron_scheduler, s15_agent_teams, s16_team_protocols, s17_autonomous_agents, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+json                   n=16  s05_todo_write, s06_subagent, s07_skill_loading, s08_context_compact, s09_memory, s10_system_prompt, s11_error_recovery, s12_task_system, s13_background_tasks, s14_cron_scheduler, s15_agent_teams, s16_team_protocols, s17_autonomous_agents, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+listcomp               n=13  s06_subagent, s07_skill_loading, s08_context_compact, s09_memory, s12_task_system, s13_background_tasks, s14_cron_scheduler, s15_agent_teams, s16_team_protocols, s17_autonomous_agents, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+dictcomp               n=12  s03_permission, s05_todo_write, s06_subagent, s07_skill_loading, s08_context_compact, s14_cron_scheduler, s15_agent_teams, s16_team_protocols, s17_autonomous_agents, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+sorted                 n=12  s07_skill_loading, s08_context_compact, s09_memory, s12_task_system, s13_background_tasks, s14_cron_scheduler, s15_agent_teams, s16_team_protocols, s17_autonomous_agents, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+any/all                n=11  s01_agent_loop, s02_tool_use, s03_permission, s08_context_compact, s09_memory, s13_background_tasks, s14_cron_scheduler, s15_agent_teams, s16_team_protocols, s19_mcp_plugin, s20_comprehensive
+lambda                 n=10  s03_permission, s08_context_compact, s09_memory, s11_error_recovery, s15_agent_teams, s16_team_protocols, s17_autonomous_agents, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+@dataclass             n= 9  s12_task_system, s13_background_tasks, s14_cron_scheduler, s15_agent_teams, s16_team_protocols, s17_autonomous_agents, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+asdict                 n= 9  s12_task_system, s13_background_tasks, s14_cron_scheduler, s15_agent_teams, s16_team_protocols, s17_autonomous_agents, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+enumerate              n= 8  s05_todo_write, s06_subagent, s07_skill_loading, s08_context_compact, s09_memory, s14_cron_scheduler, s15_agent_teams, s20_comprehensive
+threading              n= 8  s13_background_tasks, s14_cron_scheduler, s15_agent_teams, s16_team_protocols, s17_autonomous_agents, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+datetime               n= 7  s14_cron_scheduler, s15_agent_teams, s16_team_protocols, s17_autonomous_agents, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+field(                 n= 5  s16_team_protocols, s17_autonomous_agents, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+Protocol               n= 5  s16_team_protocols, s17_autonomous_agents, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+re module              n= 4  s09_memory, s18_worktree_isolation, s19_mcp_plugin, s20_comprehensive
+zip                    n= 3  s14_cron_scheduler, s15_agent_teams, s20_comprehensive
+match-case             n= 2  s09_memory, s20_comprehensive
+Queue                  n= 2  s14_cron_scheduler, s15_agent_teams
+self._priv             n= 2  s19_mcp_plugin, s20_comprehensive
+ThreadPool             n= 1  s15_agent_teams

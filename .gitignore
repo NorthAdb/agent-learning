@@ -1,16 +1,3 @@
-# Nested source repos — each has its own git remote
-python-100Days/
-learn-claude-code-north/
-
-# Local book dump (MinerU markdown + images; not lesson HTML)
-AI-Agents-in-Depth-md/
-
-# Future on-demand clones
-sources/
-
-# Local practice sandbox (keep scripts local unless you choose to track)
-playground/
-
 # Local / OS
 .DS_Store
 Thumbs.db
