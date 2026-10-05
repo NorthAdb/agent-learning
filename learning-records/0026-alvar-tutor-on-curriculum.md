@@ -7,4 +7,5 @@
 ## Implications
 - 学 / 卡住 / `/alvar-teach` → 摸底再讲，一步一测；写课件仍走 Lesson depth
 - 状态在 `.alvar/`；过关仍写 `learning-records/`
+- （2026-10-05）`.alvar/` 已删除、不再维护；过关仍只写 `learning-records/`
 - 当前试跑目标仍是 **0018**，不是另开主题

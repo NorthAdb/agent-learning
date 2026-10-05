@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>阶段 2 · s14 MCP Tools 速查</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+  <link rel="stylesheet" href="../../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="../index.html">速查索引</a> · 课 0034 · 打印友好</p>
+    <h1>s14：MCP Tools</h1>
+    <p class="mission">
+      连接只发现工具；带前缀的名字要到下一轮组池时才交给模型。
+    </p>
+    <p class="src">
+      来源：
+      <a href="../../learn-claude-code-north/s14_mcp_plugin/README.zh.md">s14 README</a>
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/README.zh.md:35">L35–153</a>；
+      <a href="../../learn-claude-code-north/s14_mcp_plugin/code.py">code.py</a>
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:316">L316–419</a>。
+    </p>
+
+    <h2>一张图</h2>
+    <pre>本轮 tools = 五个基础工具 + connect_mcp
+  ↓
+connect_mcp("docs")  →  mcp_clients 多一个 client
+  ↓
+下一轮 assemble_tool_pool
+  ↓
+mcp__docs__search / mcp__docs__get_version
+  ↓
+permission 查宿主表，不查 readOnlyHint
+  ↓
+call_tool(原始名)  →  tool_result</pre>
+
+    <h2>名字</h2>
+    <ul>
+      <li>格式：<code>mcp__{服务器}__{工具}</code>。调用 server 时用原始名。</li>
+      <li>非法字符变成下划线。规范化后撞名或超过 64 字符：组装抛错，这轮停住。</li>
+      <li>lambda 用默认参数绑住当时的 client 和原始工具名。</li>
+    </ul>
+
+    <h2>授权</h2>
+    <ul>
+      <li>docs 的 search、get_version，deploy 的 status：<code>allow</code>。</li>
+      <li>deploy 的 trigger：<code>confirm</code>。</li>
+      <li>表里没有的 <code>mcp__</code> 工具：<code>confirm</code>。</li>
+      <li><code>readOnlyHint</code> 不参与判断。</li>
+    </ul>
+
+    <h2>不负责</h2>
+    <ul>
+      <li>没有真实传输。只有进程内的 docs 和 deploy。</li>
+      <li>再次连接同名服务器不会刷新，只返回 already connected。</li>
+      <li>不带任务、团队、后台、cron。那些在 s15 才和这条池子合并。</li>
+    </ul>
+
+    <h2>过关句</h2>
+    <p class="box">
+      <strong>MCP = 下一轮才进工具池 + 前缀名 + 宿主授权。</strong>
+      server 的自我说明不是许可。漏参数是一条错误结果，不是进程崩溃。
+    </p>
+    <p>
+      <a href="../../lessons/phase-2/0034-mcp-tools.html">打开 0034 课件</a> ·
+      <a href="../../lessons/phase-2/0024-hooks.html">回看 s04</a>
+    </p>
+    <footer>下一课：s15 把这条池子接回同一个循环。</footer>
+  </main>
+</body>
+</html>

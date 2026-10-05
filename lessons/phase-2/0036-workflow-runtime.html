@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0036 · s16 Workflow Runtime</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0036"></div>
+    <h1>s16：步骤写在代码里，模型只交一次工具调用</h1>
+    <p class="mission">
+      s15 的每一轮仍由模型决定下一步。审查代码若总是「每个维度先审计再验证，再合并」，
+      顺序其实在执行前就知道。把顺序留在对话里，中断之后只能靠历史回忆走到哪。
+      本课在 s15 的工具池上加一个 <code>Workflow</code> 工具：模型只提交保存好的名字、参数和可选的续跑编号；
+      宿主运行自己注册的脚本，把每个 <code>agent()</code> 的结果写进 journal。
+      大目标仍是造 harness：固定编排是代码，临场决策才留给模型。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      主材料：North
+      <a href="../../learn-claude-code-north/s16_workflow_runtime/README.zh.md">s16 中文 README</a>
+      （为何写进代码
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/README.zh.md:13">L13–27</a>，
+      原语与续跑
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/README.zh.md:98">L98–187</a>，
+      相对 s15
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/README.zh.md:220">L220–239</a>）
+      +
+      <a href="../../learn-claude-code-north/s16_workflow_runtime/code.py"><code>s16_workflow_runtime/code.py</code></a>
+      （journal 键
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:321">L321–364</a>，
+      <code>agent</code> / <code>parallel</code> / <code>pipeline</code>
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:455">L455–532</a>，
+      启动与续跑校验
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:542">L542–564</a>，
+      模型侧适配器
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:744">L744–767</a>）。
+      本章脚本内部用了 <code>async</code> / <code>await</code>。阶段 0 故意没把这套语法排成课。
+      本课只讲编排语义：<code>await</code> 表示「这一步的结果回来再往下」，不展开事件循环。
+      本书没有这套 workflow journal。
+    </p>
+    <p class="muted">
+      <strong>本课已内化</strong>：模型不能提交脚本文本，只能选 <code>WORKFLOWS</code> 里的名字；
+      schema 只收 <code>name</code>、<code>args</code>、<code>resume_from_run_id</code>；
+      <code>parallel</code> 等齐，<code>pipeline</code> 按条目各自往下走；
+      带 schema 的 <code>agent()</code> 校验失败会再试一次，仍失败则整次 workflow 报错；
+      journal 的键来自类型、标签、prompt、schema 的稳定哈希，不来自完成顺序；
+      续跑要求名字和参数与快照一致，并持有 run 锁；
+      嵌套 <code>workflow()</code> 只允许一层；
+      <code>demo</code> 用假 runner，交互模式才打真实 API。
+      <strong>故意跳过</strong>：自己写通用 <code>async</code> 框架、替换 s15 主循环、把 workflow 完成当成用户目标已经达成。
+      目标是否达成是 s17。
+      <strong>不另写</strong> playground。过关优先跑 <code>demo</code> 和 <code>resume</code>，它们不依赖你再设计一个编排。
+    </p>
+    <p class="muted">
+      <strong>行号约定：</strong>点 <code>cursor://file/...</code> 核对。
+    </p>
+
+    <h3>本课新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>出处</th></tr>
+      <tr>
+        <td><strong><code>Workflow</code> 工具</strong></td>
+        <td>主循环里的一次 tool_use。背后跑宿主注册的脚本，中间结果不塞进对话。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/README.zh.md:43">README L43–46</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>WORKFLOWS</code></strong></td>
+        <td>宿主的注册表：名字 → (可信元数据, 脚本函数)。模型选名字，不提交函数。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:744">code.py L744–752</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>parallel</code></strong></td>
+        <td>等齐屏障。全部完成后一起返回；其中一个失败，这次 workflow 失败。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:506">code.py L506–508</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>pipeline</code></strong></td>
+        <td>每个条目自己走完各阶段。条目 A 可以已到后面的阶段，条目 B 还在前面。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:510">code.py L510–519</a></td>
+      </tr>
+      <tr>
+        <td><strong>journal</strong></td>
+        <td><code>.runtime/&lt;runId&gt;.journal.jsonl</code>。一行一个 <code>agent()</code> 的键和值。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:321">code.py L321–364</a></td>
+      </tr>
+      <tr>
+        <td><strong>语义键</strong></td>
+        <td>由 kind、label、prompt、schema 算出的稳定哈希。和谁先跑完无关。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:352">code.py L352–356</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>resume_from_run_id</code></strong></td>
+        <td>再次执行同一脚本。键已在 journal 里的 <code>agent()</code> 直接用缓存。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:555">code.py L555–565</a></td>
+      </tr>
+    </table>
+
+    <h2>为什么现在学？</h2>
+    <p>
+      模型一轮轮决定下一步，适合「下一步取决于刚才看见了什么」。
+      代码审查的维度列表和「先审计、再逐条验证」在开工前就是知道的。
+      若顺序只存在于对话，进程在中途停掉，已经花掉的子调用也会一起丢掉。
+    </p>
+    <p>
+      s06 的子代理是模型临场派一次。s16 把多次调用和它们的先后写成宿主脚本，
+      并用 journal 记住已经成功的调用。主循环仍是 s15 那一个：模型只是多了一个工具可选。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/README.zh.md:13">README L13–27</a>、
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/README.zh.md:229">L229</a>。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>s16 概念</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr>
+        <td>注册脚本</td>
+        <td>流程引擎里部署好的定义，调用方只传业务键</td>
+        <td>模型不能上传一段新代码当 workflow。未知名字是错误工具结果。</td>
+      </tr>
+      <tr>
+        <td><code>parallel</code></td>
+        <td><code>CompletableFuture.allOf</code></td>
+        <td>屏障：都完成才把数组交回脚本。一个失败，整次失败。</td>
+      </tr>
+      <tr>
+        <td><code>pipeline</code></td>
+        <td>每个订单自己走状态机，订单之间不必齐步</td>
+        <td>阶段函数拿到的是上一步结果、原始条目和下标。不是「全体完成第 1 阶段再全体进第 2 阶段」。</td>
+      </tr>
+      <tr>
+        <td>语义键</td>
+        <td>用业务主键做幂等，而不是用消费顺序号</td>
+        <td>并行完成顺序不稳定。用「第几个完成」当键，续跑会对错缓存。</td>
+      </tr>
+      <tr>
+        <td>run 锁</td>
+        <td>同一流程实例不能两个节点同时往下写</td>
+        <td>锁盖住执行和最终落盘。另一个进程不能同时 resume 这个 runId。</td>
+      </tr>
+    </table>
+
+    <h2>整体设计</h2>
+    <h3>模块地图</h3>
+    <pre>s15 主循环不变
+  模型调用 Workflow(name, args, resume_from_run_id?)
+        ↓
+  run_workflow 只从 WORKFLOWS 取出 meta 和函数
+        ↓
+  validate_meta、权限、预留或校验 runId、拿 run 锁
+        ↓
+  脚本里的 agent / parallel / pipeline / phase / log
+        ↓
+  journal 记下每次真正跑过的 agent()
+        ↓
+  这次 tool_result：启动信息、结果、任务状态
+中间变量留在脚本里，不进入主对话</pre>
+    <p>
+      示例注册的名字是 <code>review-changes</code>。每个维度走审计再验证。
+      <code>demo</code> 用固定的 <code>MockAgentRunner</code>，所以事件顺序可以重复看。
+      不带参数启动 CLI 时，主模型和子 agent 都走真实 API。
+    </p>
+
+    <h3>一次 demo 运行在看什么</h3>
+    <pre>python s16_workflow_runtime\code.py demo
+
+phase Review
+  四个维度各自 audit，schema 必须是 findings 对象
+  每条 finding 再 parallel 做验证，schema 必须是 verdict
+pipeline：某个维度已经在验证时，另一个维度可能还在审计
+
+结束
+  task_notification 一类的完成事件
+  .runtime/ 下有 runId 的快照、输出、journal、lock
+
+python s16_workflow_runtime\code.py resume
+  脚本再执行一遍
+  每个没改过的 agent() 打印 status=cached
+  全部命中时 agents=0 tokens=0</pre>
+    <p class="box">
+      <strong>一句话：</strong>模型选择要跑哪份保存好的脚本；脚本决定调用顺序；journal 决定续跑时哪一次不用再花。
+    </p>
+    <p class="src">
+      试跑命令：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/README.zh.md:233">README L233–239</a>。
+    </p>
+
+    <h3>状态放在哪一层？</h3>
+    <table>
+      <tr><th>位置</th><th>保存什么</th><th>主对话里有没有</th></tr>
+      <tr>
+        <td>脚本局部变量</td>
+        <td>维度、findings、confirmed</td>
+        <td>没有。只有最终返回值进入这次 tool_result</td>
+      </tr>
+      <tr>
+        <td><code>&lt;runId&gt;.journal.jsonl</code></td>
+        <td>每个语义键的 agent 输出</td>
+        <td>没有全文。续跑时运行时自己读</td>
+      </tr>
+      <tr>
+        <td><code>&lt;runId&gt;.json</code> 快照</td>
+        <td>workflow 名、参数、任务状态</td>
+        <td>续跑用来核对是不是同一次</td>
+      </tr>
+      <tr>
+        <td>主循环 messages</td>
+        <td>一次 Workflow 工具的结果，外加进度事件如何被宿主打印</td>
+        <td>有结果，没有每次子 agent 的原始往返</td>
+      </tr>
+    </table>
+
+    <h2>规则先看四条小例</h2>
+    <h3>例 1：等齐和不等齐</h3>
+    <pre>parallel([验证 finding A, 验证 finding B])
+  A 和 B 都结束，才把两个 verdict 交回
+  一个抛错，gather 失败，这次 workflow 失败
+
+pipeline(四个维度, audit, verify)
+  维度 correctness 可以已经在 verify
+  维度 style 还可以在 audit
+  没有「四个维度都审计完，才允许任何一个开始验证」这道屏障</pre>
+    <p>
+      下一步要同时用上一阶段的全部结果时，用 <code>parallel</code>。
+      每个条目都能独立走完同一串阶段时，用 <code>pipeline</code>。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:506">code.py L506–519</a>。
+    </p>
+
+    <h3>例 2：schema 不对就再试一次</h3>
+    <pre>runner 返回的对象
+  SimpleJsonSchema.validate
+  通过 → 记账、写入 journal、返回
+
+不通过
+  再用原 prompt 加上 “Return valid JSON.” 跑一次
+  仍不通过 → WorkflowInputError
+  这次 agent() 没有成功记录
+
+续跑时缓存若也过不了 schema
+  同样报错，不会把坏对象交给下游</pre>
+    <p>
+      这是 s05 的反面：当时不信任工具参数；这里不信任子 agent 的散文。
+      校验放在编排层，下游拿到的是对象。只自动重试一次。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:483">code.py L483–496</a>、
+      缓存校验
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:466">L466–470</a>。
+    </p>
+
+    <h3>例 3：键不看谁先完成</h3>
+    <pre>basis = kind + label + prompt + schema 的稳定 JSON
+key   = kind-十位哈希
+
+parallel 里 B 比 A 先返回
+  不会变成 key 是 agent-0001、agent-0002 这种完成序号
+
+续跑时 prompt 或 label 改了
+  键不同，缓存不命中，这一步真的再跑
+依赖它的后续步骤如果 prompt 里夹了新结果，也会跟着变成新键</pre>
+    <p>
+      缓存命中时不增加 <code>usage.agents</code> 和 tokens。
+      所以 resume 全部命中时可以看到 <code>agents=0 tokens=0</code>。
+      命中仍会先占一次 agent 计数上限的检查：<code>claim_agent</code> 在读缓存之前。
+      上限是每次运行 1000 次 <code>agent()</code> 调用尝试，包括缓存命中这一次计数。
+    </p>
+    <p class="src">
+      键：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:352">code.py L352–356</a>。
+      命中短路径：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:459">L459–474</a>。
+      上限常量：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:36">L36</a>。
+    </p>
+
+    <h3>例 4：续跑不是换一份参数重来</h3>
+    <pre>resume_from_run_id 指向已有 run
+  快照里的 workflowName 必须等于这次 meta.name
+  args 省略 → 用快照里的参数
+  args 给了但和快照不同 → WorkflowInputError
+
+journal 缺文件或某一行不是 {key, value}
+  启动前就失败，不去改已经成功的产物
+
+另一个进程已拿着这个 run 的锁
+  不能同时 resume</pre>
+    <p>
+      新运行会在打开 journal 之前用排他创建预留新的 runId。
+      元数据本身也在跑脚本前校验：名字必须是 1–64 字符的安全 slug，缺 description 就 <code>WorkflowInputError</code>。
+      这和 s12 先 <code>validate_cron</code> 再保存是同一类习惯：注册内容不合法，就不要跑到一半才坏。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:542">code.py L542–565</a>。
+      元数据：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/README.zh.md:83">README L83–95</a>。
+    </p>
+
+    <h2>细节实现</h2>
+    <h3>嵌套只一层，计数和账本共用</h3>
+    <p>
+      脚本可以 <code>workflow(name, args)</code> 再跑一份已注册的子流程。
+      <code>depth &gt;= 1</code> 时再嵌套就报错。子流程共用这一次的 journal、token 账本和 agent 计数，不是另开一个 runId。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:521">code.py L521–532</a>。
+    </p>
+
+    <h3>未知名字不会拆掉主循环</h3>
+    <p>
+      <code>run_workflow</code> 发现名字不在注册表，或 args 不是对象，就抛 <code>WorkflowInputError</code>。
+      它作为这次工具调用的失败交给 s15 宿主，宿主按工具错误收成 <code>tool_result</code>。
+      模型可以改名字再试。不会因此替换掉 s15 的 <code>while</code>。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:744">code.py L744–752</a>。
+    </p>
+
+    <h3>和相邻课的边界</h3>
+    <table>
+      <tr><th></th><th>谁决定下一步</th><th>中断之后</th></tr>
+      <tr>
+        <td>s15 主循环</td>
+        <td>模型每轮选工具</td>
+        <td>靠对话历史</td>
+      </tr>
+      <tr>
+        <td>s06 子代理</td>
+        <td>模型临场派一次</td>
+        <td>没有 journal</td>
+      </tr>
+      <tr>
+        <td>s16 Workflow</td>
+        <td>脚本里的 parallel / pipeline</td>
+        <td>未改的 agent() 走缓存</td>
+      </tr>
+      <tr>
+        <td>s17 Goal</td>
+        <td>不决定步骤</td>
+        <td>只判断整件事做完没有。本章不做这个判断</td>
+      </tr>
+    </table>
+
+    <h2>动手：真跑 North s16</h2>
+    <pre>cd learn-claude-code-north
+python s16_workflow_runtime\code.py demo
+python s16_workflow_runtime\code.py resume</pre>
+    <p>
+      <code>demo</code> 应看到阶段、子 agent、以及最终完成事件。
+      <code>resume</code> 应看到 <code>cached</code>，并且全部命中时用量是 0。
+      目录 <code>s16_workflow_runtime\.runtime\</code> 里应有 journal 和快照。
+    </p>
+    <p>
+      不带 <code>demo</code> 的交互模式会调用真实 API。过关不强制这次调用。
+      若你跑了，观察模型提交的是 <code>review-changes</code> 这个名字和 <code>args.changes</code>，不是一段脚本文本。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/README.zh.md:231">README L231–239</a>。
+    </p>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>Workflow 替换了 s15 的主循环：</strong>没有。它是工具池里的一个工具。</li>
+        <li><strong>模型可以传入一段新脚本：</strong>不能。schema 没有代码字段，注册表也不接受。</li>
+        <li><strong>pipeline 会等所有条目完成当前阶段：</strong>不会。等齐的是 <code>parallel</code>。</li>
+        <li><strong>子 agent 回一段话，运行时帮你抽字段：</strong>带 schema 时不行。校验失败再试一次，仍失败就报错。</li>
+        <li><strong>续跑的键是完成顺序：</strong>不是。键来自调用内容的哈希。</li>
+        <li><strong>改了 prompt 还能命中旧缓存：</strong>不能。prompt 是键的一部分。</li>
+        <li><strong>resume 时可以换一套 args：</strong>不可以。和快照不一致就 <code>WorkflowInputError</code>。</li>
+        <li><strong>全部缓存命中仍会把 tokens 累加上次的数：</strong>不会。命中不调用 runner，用量保持 0。但 <code>claim_agent</code> 仍会计一次上限。</li>
+        <li><strong>workflow() 可以无限套娃：</strong>不可以。只一层，而且共用这次 journal。</li>
+        <li><strong>脚本跑完就表示用户的目标已经达成：</strong>不表示。那是下一课判断器的事。</li>
+        <li><strong>demo 会打真实模型：</strong>不会。它用 MockAgentRunner。交互模式才会。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。模型只提供注册表里的名字、参数和可选 runId。"
+      data-bad="没有字段用来提交可执行脚本或元数据。未知名字是工具错误。">
+      <p>模型调用 Workflow 时可以提交什么？</p>
+      <button data-correct="true">只能提交已注册的名字和参数</button>
+      <button data-correct="false">可以提交一段新的脚本文本</button>
+      <button data-correct="false">可以改写宿主保存的元数据</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。pipeline 按条目推进。要等齐全部结果时用 parallel。"
+      data-bad="pipeline 内部没有阶段屏障。一个条目失败仍会让整次 workflow 失败。">
+      <p>四个维度谁先验证完，pipeline 会不会互相等待？</p>
+      <button data-correct="true">不会等齐每个维度各自往下走</button>
+      <button data-correct="false">会等四个维度都审计完再验证</button>
+      <button data-correct="false">parallel 才是按条目不等齐的那个</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。键由类型、标签、prompt、schema 决定，所以完成顺序不影响续跑。"
+      data-bad="用第几个完成当键，两次并行的缓存会对错。">
+      <p>journal 怎样认出同一个 agent 调用？</p>
+      <button data-correct="true">用调用内容算出的稳定哈希</button>
+      <button data-correct="false">用这次并行里第几个完成</button>
+      <button data-correct="false">用主对话里的消息序号</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。校验失败会再要一次 JSON。仍失败则 WorkflowInputError，且不把坏结果写入成功记录。"
+      data-bad="不会无限重试，也不会把散文交给下游自己解析。">
+      <p>带 schema 的子 agent 第一次返回不合法时？</p>
+      <button data-correct="true">再试一次仍失败就终止这次运行</button>
+      <button data-correct="false">无限重试直到返回合法对象</button>
+      <button data-correct="false">把原文交回脚本让它自己抽字段</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。名字必须一致。给出的 args 若和快照不同，启动前就报错。"
+      data-bad="省略 args 会沿用快照。这不是换参重跑。">
+      <p>resume 时参数和当初不同，会怎样？</p>
+      <button data-correct="true">报错并且不会改已成功的产物</button>
+      <button data-correct="false">用新参数继续并覆盖旧 journal</button>
+      <button data-correct="false">忽略新参数但假装跑了新的调用</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。命中不调用 runner，所以用量是 0。claim_agent 仍发生在读缓存之前。"
+      data-bad="不会把上一次的 token 再加一遍，也不会因此去打真实 API。">
+      <p>resume 全部命中缓存时，用量为什么是 0？</p>
+      <button data-correct="true">命中路径不会再次调用 runner</button>
+      <button data-correct="false">因为上限把 token 强制写成了零</button>
+      <button data-correct="false">因为 demo 会重新请求真实模型</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能说明 s16 不替换主循环：模型一次工具调用选中注册脚本，顺序在代码里。</li>
+      <li>能区分 <code>parallel</code> 的等齐和 <code>pipeline</code> 的按条目推进。</li>
+      <li>能说明 schema 失败只再试一次；journal 键来自调用内容，不来自完成顺序。</li>
+      <li>能说明续跑核对 workflow 名和参数，持有 run 锁，坏 journal 在改产物前失败。</li>
+      <li>能说明嵌套只一层，且共用 journal；未知名字是工具错误。</li>
+      <li>能说明 workflow 结束不等于用户目标完成。</li>
+      <li>真跑 <code>demo</code> 和 <code>resume</code>，看见缓存命中，并在 <code>.runtime</code> 里找到 journal。</li>
+    </ul>
+
+    <h2>速查</h2>
+    <div class="box">
+      <p>
+        <a href="../../reference/phase-2/s16-workflow-runtime.html">阶段 2 · s16 Workflow Runtime 速查</a>。
+        术语在 <a href="../../GLOSSARY.md">GLOSSARY.md</a> 的 Workflow Runtime 部分。
+      </p>
+    </div>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>
+          主阅读：
+          <a href="../../learn-claude-code-north/s16_workflow_runtime/README.zh.md">North s16 中文 README</a>。
+        </li>
+        <li>
+          主循环回看：
+          <a href="./0035-integrated-harness.html">0035</a>。
+          一次子代理回看：
+          <a href="./0026-subagent.html">0026</a>。
+        </li>
+        <li>
+          下一课 s17：脚本可以已经结束，整件事是否做完仍由另一个判断器看对话里的证据。
+        </li>
+      </ul>
+    </div>
+
+    <p>
+      <a href="./index.html">阶段 2 分册</a>
+      · <a href="./0035-integrated-harness.html">上一课 0035</a>
+    </p>
+    <div data-lesson-id-footer="0036"></div>
+    <footer>
+      不清楚的立刻问我。下一课 s17：模型不再调工具，只说明它想停；目标是否完成另算。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>阶段 2 · s16 Workflow Runtime 速查</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+  <link rel="stylesheet" href="../../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="../index.html">速查索引</a> · 课 0036 · 打印友好</p>
+    <h1>s16：Workflow Runtime</h1>
+    <p class="mission">
+      一次 Workflow 工具调用跑完宿主脚本。续跑时未改的 agent() 读 journal。
+    </p>
+    <p class="src">
+      来源：
+      <a href="../../learn-claude-code-north/s16_workflow_runtime/README.zh.md">s16 README</a>
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/README.zh.md:98">L98–187</a>；
+      <a href="../../learn-claude-code-north/s16_workflow_runtime/code.py">code.py</a>
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:455">L455–565</a>。
+    </p>
+
+    <h2>一张图</h2>
+    <pre>模型：Workflow(name, args, resume?)
+  ↓
+注册表取出可信脚本。未知名字 → 工具错误
+  ↓
+parallel 等齐；pipeline 按条目往下
+  ↓
+agent()+schema：不合法再试一次
+  ↓
+journal 键 = 类型|标签|prompt|schema 的哈希
+  ↓
+tool_result 只有最终结果。中间变量不进主对话</pre>
+
+    <h2>续跑</h2>
+    <ul>
+      <li>名字、参数必须和快照一致。锁住整个 run。</li>
+      <li>键命中且缓存仍符合 schema → <code>cached</code>，不再调用 runner。</li>
+      <li>全部命中：<code>agents=0 tokens=0</code>。<code>claim_agent</code> 仍会计入 1000 次上限。</li>
+      <li>嵌套 <code>workflow()</code> 只一层，共用这次 journal。</li>
+    </ul>
+
+    <h2>不负责</h2>
+    <ul>
+      <li>不替换 s15 主循环。不接受模型上传脚本。</li>
+      <li>不判断用户的最终目标是否达成。</li>
+      <li><code>demo</code> 不打真实 API。<code>resume</code> 用上一份 runId。</li>
+    </ul>
+
+    <h2>过关句</h2>
+    <p class="box">
+      <strong>编排 = 注册脚本 + 语义键 journal + 一次工具结果。</strong>
+      等齐用 parallel。按条目推进用 pipeline。
+    </p>
+    <p>
+      <a href="../../lessons/phase-2/0036-workflow-runtime.html">打开 0036 课件</a> ·
+      <a href="../../lessons/phase-2/0035-integrated-harness.html">回看 s15</a>
+    </p>
+    <footer>下一课：s17。workflow 结束仍可能没达到完成条件。</footer>
+  </main>
+</body>
+</html>

@@ -76,7 +76,8 @@
 | `/alvar-teach`、卡住、讲一遍、测我 | Probe（选择题工具）→ mermaid 计划 → 一次只讲/锁一个节点 |
 | 写课件、改练习、过关了 | 原工作流：Lesson depth + `learning-records/` |
 
-状态在 `.alvar/`（`LEARNER.md` / `maps/` / `sessions/`）。过关记录仍写 `learning-records/`。项目 skill：`.cursor/skills/alvar-curriculum/`。
+过关记录仍写 `learning-records/`。项目 skill：`.cursor/skills/alvar-curriculum/`。
+（2026-10-05）`.alvar/` 状态目录已按用户要求删除，不再维护；若以后仍用 `/alvar-teach`，该 skill 会按自己的规则重建 maps / sessions。
 
 **密度自检**：若把「主阅读：去看 DayXX / 去看书第 N 章」当成讲解主体 → 不合格，需把该节写进 HTML。  
 **不做**：全书粘贴；一课塞无关联的两章；为凑时长灌水。
@@ -104,9 +105,8 @@ Ch1 是概念地图，**禁止整章塞进一课**。课件/练习/速查放 `le
 **本阶段故意不讲**（留给后面或卡住再看）：Manus/OpenClaw 案例细读、工具五类、上下文五组件消融、Model as Agent / 苦涩的教训、模型选型、框架对照表（含 LangChain）、护栏三层、全书设计模式、[L02 五子系统](https://walkinglabs.github.io/learn-harness-engineering/zh/lectures/lecture-02-what-a-harness-actually-is/)（动手前或阶段 2 再开）。
 
 ### 阶段 2 · 能动手（当前）
-- **已过关**：0021（s01 循环 + bash）、0022（s02 多工具 + dispatch map）、0023（s03 三道闸门）、0024（s04 hooks）、0025（s05 TodoWrite）、0026（s06 Subagent）、0027（s07 Skill Loading）、0028（s08 Context Compact）、0029（s09 Memory）、0030（s10 Task System：任务落盘、`blockedBy`、认领与解锁）
-- **当前课**：0031 / North **s11**（Background Tasks：慢 Bash 先交回编号，结果以后再通知）。课件已生成，未过关；必须真跑 `s11_background_tasks/code.py`
-- 再往后：s12 cron，以及协作 / MCP / 集成收口
+- **已过关**：0021–0037（s01–s17）。阶段 2 主线收完。
+- **当前课**：本阶段没有下一课。卡住时回看对应 HTML / 速查 / 当章 `code.py`，卫星仍是书 Ch4–Ch5 与 Harness 讲义。
 - 卫星：书 Ch4 工具、Ch5 Coding Agent；Harness 里「划清任务边界 / 防止提前宣告完成 / 跑通才算验证」
 
 ### 阶段 3 · 上下文、记忆、知识

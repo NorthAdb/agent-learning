@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0032 · s12 Cron Scheduler</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0032"></div>
+    <h1>s12：到点再跑，进程关了闹钟也停</h1>
+    <p class="mission">
+      s11 让一条已经开始的 Bash 先交回编号，但它不记住「明天早上 9 点再跑一次测试」。
+      用户仍要自己盯着钟点，到了再发一句 prompt。
+      本课只加这一层：把五段 cron 表达式和要交给模型的 prompt 存下来，
+      进程活着时到点入队，等当前回合结束再开一轮 Agent loop。
+      大目标还是造 harness：时间触发是宿主的事，不是模型自己记得几点。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      主材料：North
+      <a href="../../learn-claude-code-north/s12_cron_scheduler/README.zh.md">s12 中文 README</a>
+      （问题
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/README.zh.md:9">L9–13</a>，
+      到期入队与空闲交付
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/README.zh.md:64">L64–105</a>，
+      持久化与运行边界
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/README.zh.md:107">L107–126</a>）
+      +
+      <a href="../../learn-claude-code-north/s12_cron_scheduler/code.py"><code>s12_cron_scheduler/code.py</code></a>
+      （<code>CronJob</code> 与表达式
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:263">L263–366</a>，
+      保存、入队、确认
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:368">L368–556</a>，
+      三条工具
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:559">L559–610</a>，
+      调度线程与循环
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:613">L613–765</a>）。
+      <code>datetime</code>、<code>asdict</code>、守护线程已在
+      <a href="../phase-0/0016-threads-time.html">0016</a> 讲过。本章第一次把它们接成闹钟。
+    </p>
+    <p class="muted">
+      <strong>本课已内化</strong>：五段表达式（分 时 日 月 周），保存前 <code>validate_cron</code>；
+      调度线程每秒看本地时间，匹配且本分钟还没触发才入队；
+      队列线程只在拿到 <code>agent_lock</code> 时交付；
+      交付文本是 <code>[Scheduled] {prompt}</code>；
+      模型调用成功后才确认，失败则删掉刚追加的消息并放回队列；
+      <code>durable=True</code> 写入 <code>.scheduled_tasks.json</code>，否则只在内存；
+      至少一次交付；进程关闭后不补跑错过的分钟；定时回合不能弹交互审批。
+      <strong>故意跳过</strong>：秒级 cron、时区库、系统 crontab / systemd timer 的写法、
+      s11 后台命令、多 Agent。README 写明本章不包含后台命令，因为队列里是一条 prompt，不是某次命令的输出。
+      <strong>不另写</strong> playground。
+    </p>
+    <p class="muted">
+      <strong>行号约定：</strong>下文 <code>L292</code> 等是 North 源码导航，不属于 Python 代码。
+      核对时点旁边的 <code>cursor://file/...</code>。
+    </p>
+
+    <h3>本课新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>出处</th></tr>
+      <tr>
+        <td><strong>cron 表达式</strong></td>
+        <td>五个空格分隔的字段：分钟、小时、日、月、星期。本章没有秒字段。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/README.zh.md:52">README L52–62</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>CronJob</code></strong></td>
+        <td>一条已保存的闹钟：编号、表达式、prompt、是否重复、是否落盘、是否待交付、上次触发分钟。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:263">code.py L263–270</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>pending_delivery</code></strong></td>
+        <td>已经到期、模型还没成功收下。为真时本分钟不会再次入队。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:495">code.py L495–496</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>last_fired</code></strong></td>
+        <td>形如 <code>2026-10-04 09:00</code> 的分钟标记。同一分钟只入队一次。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:491">code.py L491–496</a></td>
+      </tr>
+      <tr>
+        <td><strong>至少一次交付</strong></td>
+        <td>模型调用成功并写回确认之前若进程退出，重启后同一条 prompt 可能再送一次。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/README.zh.md:116">README L116</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>durable</code></strong></td>
+        <td>为真时任务定义写入 <code>.scheduled_tasks.json</code>。进程关着的时候它不会自己响。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/README.zh.md:109">README L109–122</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>agent_lock</code></strong></td>
+        <td>非阻塞锁。用户回合占着它时，定时回合要等，避免两个人同时改同一份会话。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:720">code.py L720–728</a></td>
+      </tr>
+    </table>
+
+    <h2>为什么现在学？</h2>
+    <p>
+      「每天 9 点跑测试」和「这条测试现在在后台跑」是两件不同的事。
+      s11 回答第二条：命令已经开始，主循环不必干等。
+      它没有一张表记录下次该什么时候开始，也没有线程每秒看钟。
+    </p>
+    <p>
+      如果只靠现在的 Agent loop，到点之后仍要有人把 prompt 打进终端。
+      Harness 要自己保存时间和要说的那句话，到点放进队列，再等 Agent 空闲时送进同一条循环。
+    </p>
+    <p>
+      本章工具仍是 s04 的五个，再加 <code>schedule_cron</code>、<code>list_crons</code>、<code>cancel_cron</code>。
+      没有 s11 的 <code>run_in_background</code>。队列里运送的是一句用户消息，不是某次 Bash 的输出。
+    </p>
+    <p class="src">
+      问题与边界：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/README.zh.md:11">README L11–13</a>、
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/README.zh.md:30">L30</a>。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>s12 概念</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr>
+        <td>五段 cron</td>
+        <td>Spring 的 cron</td>
+        <td>Spring 常见六段，第一段是秒。本章没有秒，第一段是分钟。</td>
+      </tr>
+      <tr>
+        <td><code>CronJob</code></td>
+        <td>一行调度记录：表达式 + 要执行的内容</td>
+        <td>执行内容是交给模型的 prompt，不是一个 Java 方法引用。</td>
+      </tr>
+      <tr>
+        <td><code>durable</code> 文件</td>
+        <td>把任务定义存进表里</td>
+        <td>进程不在，没有线程去扫这张表。落盘不等于到点仍会跑。</td>
+      </tr>
+      <tr>
+        <td><code>agent_lock</code></td>
+        <td>同一会话不能并发处理两个请求</td>
+        <td>拿不到锁就跳过这一拍，0.2 秒后再试，不排队阻塞用户输入。</td>
+      </tr>
+      <tr>
+        <td>确认发生在模型调用成功之后</td>
+        <td>消息队列：消费成功再 ack</td>
+        <td>ack 的是「模型收下了这句 prompt」，不是「测试已经跑完」。</td>
+      </tr>
+      <tr>
+        <td>定时回合拒绝交互审批</td>
+        <td>后台线程不能去读 <code>System.in</code></td>
+        <td>判断写在 <code>request_permission</code>：当前线程不是主线程就直接拒绝。</td>
+      </tr>
+    </table>
+
+    <h2>整体设计</h2>
+    <h3>模块地图</h3>
+    <pre>保留 s04：五个工具、Permission、Hooks
+
+s12 新加上的几块
+  CronJob / scheduled_jobs     已注册的闹钟
+  validate_cron / cron_matches 保存前拒绝坏表达式；运行时按本地时间匹配
+  cron_scheduler_loop          每秒 poll_due_jobs
+  cron_queue                   已到期、还没送进对话的任务
+  queue_processor_loop         每 0.2 秒看队列；抢到 agent_lock 才开一轮
+  agent_loop 开头              取出队列，追加 [Scheduled] 用户消息
+  acknowledge / restore        模型调用成功才确认；失败放回队列</pre>
+    <p class="src">
+      两条线程只在跑 CLI 时启动。导入 <code>code.py</code> 不会把闹钟打开：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/README.zh.md:124">README L124</a>，
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:731">code.py L731–752</a>。
+    </p>
+
+    <h3>一次完整运行</h3>
+    <pre>用户：每天 09:00 跑测试，重启后还要留着
+  模型调用 schedule_cron("0 9 * * *", "run tests", durable=true)
+  validate_cron 通过
+  内存里出现 cron_xxxxxxxx
+  durable 为真，整表写入 .scheduled_tasks.json
+
+调度线程每秒读 datetime.now()
+  09:00 这一分钟第一次匹配
+  pending_delivery=true，last_fired="当天 09:00"
+  先写盘，再放进 cron_queue
+
+队列线程发现队列非空，且用户回合没占着 agent_lock
+  进入 agent_loop
+  messages 追加：{role:user, content:"[Scheduled] run tests"}
+  messages.create 成功
+  recurring 任务清掉 pending_delivery，定义还在
+  模型可以再调用 bash 去跑测试</pre>
+    <p class="box">
+      <strong>一句话：</strong>闹钟负责到点把一句话放进队列；Agent 空闲时这才变成一轮新的用户消息。
+      模型收下这句话，不代表工作已经做完。
+    </p>
+    <p class="src">
+      同一条剧本：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/README.zh.md:21">README L21–28</a>。
+    </p>
+
+    <h3>三个时刻，三件事</h3>
+    <table>
+      <tr><th>时刻</th><th>谁在干活</th><th>会话里看不看得见</th></tr>
+      <tr>
+        <td>注册</td>
+        <td><code>schedule_job</code> 校验并保存</td>
+        <td>看得见工具结果：<code>Scheduled cron_...</code>。这一分钟不一定触发。</td>
+      </tr>
+      <tr>
+        <td>到期</td>
+        <td>调度线程入队，并尽量先把 <code>pending_delivery</code> 写盘</td>
+        <td>还看不见。队列在内存里。</td>
+      </tr>
+      <tr>
+        <td>交付</td>
+        <td>队列线程抢到锁，<code>agent_loop</code> 追加 <code>[Scheduled]</code></td>
+        <td>看得见。这是一条新的用户消息，不是 tool_result。</td>
+      </tr>
+    </table>
+
+    <h3>状态放在哪一层？</h3>
+    <table>
+      <tr><th>位置</th><th>保存什么</th><th>重启后</th></tr>
+      <tr>
+        <td><code>scheduled_jobs</code></td>
+        <td>全部已注册任务，含非持久的</td>
+        <td>进程结束即空。持久任务靠文件装回来。</td>
+      </tr>
+      <tr>
+        <td><code>cron_queue</code></td>
+        <td>待交付的任务对象</td>
+        <td>不单独落盘。装载时若 <code>pending_delivery</code> 仍为真，会重新入队。</td>
+      </tr>
+      <tr>
+        <td><code>.scheduled_tasks.json</code></td>
+        <td>只含 <code>durable=True</code> 的任务</td>
+        <td>重新加载。错过的分钟不补。</td>
+      </tr>
+      <tr>
+        <td><code>session_history</code></td>
+        <td>已经送进对话的 <code>[Scheduled]</code> 文本</td>
+        <td>本章 CLI 不把整段对话写盘。</td>
+      </tr>
+    </table>
+
+    <h2>规则先看四条小例</h2>
+    <h3>例 1：五段，而且先校验再保存</h3>
+    <pre>validate_cron("0 9 * * *")     → None     合法，没有错误字符串
+validate_cron("0 9 * *")       → 字段数量不对
+validate_cron("60 9 * * *")    → 分钟超出 0–59
+validate_cron("0 9 * * 7")     → 星期超出 0–6
+schedule_job("0 9 * *", "run tests")
+  → 返回错误字符串，scheduled_jobs 里没有新任务</pre>
+    <p>
+      合法形状是 <code>*</code>、<code>*/N</code>、<code>N</code>、<code>N-M</code>、<code>N,M</code>。
+      <code>*/N</code> 只要求 N 是正整数，不要求 N 小于字段上限。
+      匹配时用当前值对 N 取余，余数为 0 才算中。
+      星期 0 是周日：代码把 Python 的周一=0 换成 cron 的周日=0，
+      <code>cron_weekday = (weekday() + 1) % 7</code>。
+    </p>
+    <p class="src">
+      校验：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:349">code.py L349–365</a>。
+      星期换算：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:298">L298</a>。
+      Python 的 <code>weekday()</code>：
+      <a href="https://docs.python.org/3/library/datetime.html#datetime.datetime.weekday">datetime.weekday</a>。
+    </p>
+
+    <h3>例 2：日和星期同时写，是「或」</h3>
+    <pre>表达式  0 9 1 * 1
+  日字段不是 *
+  星期字段也不是 *
+
+cron_matches 的收尾
+  两个都不是 *  →  日匹配 或  星期匹配
+
+所以每月 1 日 09:00 会触发
+周一 09:00 也会触发，哪怕那天不是 1 日</pre>
+    <p>
+      只有一边被限制时，就只看那一边。两边都是 <code>*</code>，日和星期都不挡。
+      这是本章代码的规则，不要按「必须同时是 1 日且是周一」去记。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:306">code.py L306–314</a>。
+    </p>
+
+    <h3>例 3：同一分钟不会入队两次</h3>
+    <pre>09:00:01  匹配，last_fired 写成 "2026-10-04 09:00"，pending_delivery=true
+09:00:02  调度线程又醒了
+          pending_delivery 已是真，直接 continue
+09:01     若是每分钟任务，分钟标记变了，可以再入队
+
+模型调用还没成功时
+  pending_delivery 保持真
+  即使分钟标记被清掉，也不会再入队第二条</pre>
+    <p>
+      入队前先改状态。持久任务要先 <code>save_durable_jobs()</code> 成功，才 <code>append</code> 到队列。
+      写盘失败就把 <code>pending_delivery</code> 和 <code>last_fired</code> 改回去，队列里不会出现一条只活在内存里的到期任务。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:474">code.py L474–501</a>。
+    </p>
+
+    <h3>例 4：进程关了，durable 不会补跑</h3>
+    <pre>durable=True   定义在 .scheduled_tasks.json
+durable=False  只在这次进程的 scheduled_jobs 里
+
+09:00 时进程没开
+  没有调度线程
+  09:00 这次不会补
+  下次匹配要等表达式再次对上「现在」
+
+文件损坏
+  启动时打印 [cron] could not load ...
+  不会假装装载成功</pre>
+    <p>
+      需要进程关闭后仍准点执行，要用系统自己的 crontab 或 systemd timer。
+      本章的 durable 只保留任务定义，不代替操作系统的调度服务。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/README.zh.md:118">README L118–126</a>，
+      损坏分支：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:392">code.py L392–394</a>。
+    </p>
+
+    <h2>细节实现</h2>
+    <h3>模型收下之后才确认</h3>
+    <pre>fired = consume_cron_queue()          队列清空，任务在 fired 里
+scheduled_start = len(messages)
+追加若干条 [Scheduled] ...
+
+messages.create 抛错
+  删掉 scheduled_start 之后的消息
+  restore_cron_jobs：pending_delivery 再设为真，不在队列里的补回去
+  本轮结束
+
+messages.create 成功
+  助手回复先写入 messages
+  acknowledge_cron_jobs
+    recurring：pending_delivery = false，任务还在
+    一次性：从 scheduled_jobs 删除
+  写盘失败则把状态和队列恢复</pre>
+    <p>
+      确认发生在工具执行之前。模型已经看见这句 prompt，但 bash 还没跑；
+      若此时进程退出，重启后 <code>pending_delivery</code> 可能已经是 false，不会为了「测试没跑完」再送一次。
+      至少一次指的是这句 prompt 的交付，不是工作产品。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:642">code.py L642–672</a>，
+      确认：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:511">L511–538</a>。
+    </p>
+
+    <h3>定时回合不能问你 Allow?</h3>
+    <p>
+      破坏性 bash、工作区外路径，平时会在主线程里 <code>input("Allow?")</code>。
+      队列线程不是主线程。它一进 <code>request_permission</code> 就返回拒绝，不会和终端抢输入。
+      拒绝名单里的命令仍然直接拒绝，和是不是定时回合无关。
+      普通、不需要确认的 bash 仍可在定时回合里执行。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:187">code.py L187–190</a>。
+    </p>
+
+    <h3>写盘是临时文件再替换</h3>
+    <p>
+      <code>save_durable_jobs</code> 只序列化 <code>durable</code> 为真的任务，用 <code>asdict</code> 变成字典。
+      先写带 pid 和线程号的临时文件，再 <code>os.replace</code> 到 <code>.scheduled_tasks.json</code>。
+      替换是同一目录下的原子改名。写到一半崩溃，旧文件还在。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:368">code.py L368–382</a>。
+      <code>os.replace</code>：
+      <a href="https://docs.python.org/3/library/os.html#os.replace">Python os.replace</a>。
+    </p>
+
+    <h3>和相邻课的边界</h3>
+    <table>
+      <tr><th></th><th>留下什么</th><th>不负责</th></tr>
+      <tr>
+        <td>s10 任务图</td>
+        <td>进度、前置、认领</td>
+        <td>几点开始</td>
+      </tr>
+      <tr>
+        <td>s11 后台</td>
+        <td>一条 Bash 先交回编号</td>
+        <td>本章没带这套参数。到点送的是 prompt</td>
+      </tr>
+      <tr>
+        <td>s12 Cron</td>
+        <td>本地时间、队列、空闲时再开一轮</td>
+        <td>进程关闭后的准点执行；多 Agent 分工</td>
+      </tr>
+    </table>
+
+    <h2>动手：真跑 North s12</h2>
+    <p>在 North 仓库根目录执行。测试一分钟级任务时，进程要保持开着。</p>
+    <pre>cd learn-claude-code-north
+python s12_cron_scheduler\code.py</pre>
+    <p class="src">
+      README 的三句练习：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/README.zh.md:137">L137–143</a>。
+    </p>
+
+    <h3>观察一：先有定义，后有 [Scheduled]</h3>
+    <pre>Schedule "run date" every 2 minutes and keep it after restart.</pre>
+    <p>
+      期望工具结果里有 <code>cron_</code> 编号，工作目录出现 <code>.scheduled_tasks.json</code>。
+      到点之前对话里没有 <code>[Scheduled]</code>。
+      进程保持运行，匹配的那一分钟应出现 <code>[cron] due</code>，随后出现 <code>[cron] delivered</code>。
+      若你当时还占着一轮对话，交付会等到这把 <code>agent_lock</code> 松开。
+    </p>
+
+    <h3>观察二：列表和取消</h3>
+    <pre>List all cron jobs.
+Cancel the cron job you just created.</pre>
+    <p>
+      列表里能看见表达式、prompt 前 60 字、recurring/one-shot、durable/session。
+      取消后文件里不应再有这个 id。取消写盘失败时，代码会把内存和队列改回去。
+    </p>
+
+    <h3>观察三：坏表达式不会进表</h3>
+    <p>
+      让模型登记 <code>* * * *</code> 或 <code>60 * * * *</code>。
+      工具结果应是 <code>Error:</code> 开头，<code>.scheduled_tasks.json</code> 不新增这条。
+    </p>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>把 Spring 的六段 cron 原样贴进来：</strong>本章要五段，第一段是分钟。多一段会在校验时被拒绝。</li>
+        <li><strong>星期 0 是周一：</strong>不是。0 是周日，1 是周一，6 是周六。</li>
+        <li><strong>日和星期都写了就要同时满足：</strong>本章是或。两边都不是 <code>*</code> 时，中任意一边即可。</li>
+        <li><strong><code>durable=True</code> 等于关机后仍会跑：</strong>不等于。线程随进程停，错过的分钟不补。</li>
+        <li><strong>到点会立刻打断正在进行的用户回合：</strong>不会。拿不到 <code>agent_lock</code> 就继续等。</li>
+        <li><strong><code>[Scheduled]</code> 是一条 tool_result：</strong>不是。它是追加的用户消息。</li>
+        <li><strong>模型调用失败会把 prompt 弄丢：</strong>不会。刚追加的消息会删掉，任务放回队列。</li>
+        <li><strong>确认之后测试没跑完，重启还会再送一次：</strong>不保证。确认的是模型收下 prompt，发生在工具执行之前。</li>
+        <li><strong>同一分钟调度线程醒 60 次就会入队 60 次：</strong>不会。<code>last_fired</code> 或 <code>pending_delivery</code> 会挡住。</li>
+        <li><strong>定时回合可以弹 <code>Allow?</code>：</strong>不能。非主线程直接拒绝需要确认的操作。</li>
+        <li><strong>导入模块就会开始每秒扫描：</strong>不会。线程在 CLI 启动路径里才开。</li>
+        <li><strong>文件坏了就静默当成没有任务：</strong>不会。启动日志会打出加载错误。</li>
+        <li><strong>本章也会把慢 bash 放进后台：</strong>不会。没有 s11 那条分叉。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。五段，顺序是分、时、日、月、星期。没有秒。"
+      data-bad="六段是另一套表达式。本章校验写死了五个字段。">
+      <p>本章能保存的 cron 表达式是什么样？</p>
+      <button data-correct="true">五段且首段表示分钟</button>
+      <button data-correct="false">六段且首段表示秒钟</button>
+      <button data-correct="false">三段就够表示每天几点</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。两边都不是星号时，日匹配或星期匹配即可。"
+      data-bad="代码没有要求两边同时为真。只有一边被限制时才只看那一边。">
+      <p>日和星期都写了具体值时怎么匹配？</p>
+      <button data-correct="true">日匹配或者星期匹配即可</button>
+      <button data-correct="false">必须同一天同时满足两边</button>
+      <button data-correct="false">星期会被忽略只看日期</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。写盘成功才 append。失败会把 pending 和 last_fired 改回。"
+      data-bad="不会先把只存在于内存的到期任务暴露给队列线程。">
+      <p>持久任务到期时，入队和写盘谁先成功？</p>
+      <button data-correct="true">先写盘成功之后才放进队列</button>
+      <button data-correct="false">先放进队列再尝试写盘</button>
+      <button data-correct="false">写盘失败也保留队列里的那条</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。确认发生在 messages.create 成功之后。失败会删消息并 restore。"
+      data-bad="工具还没执行。确认的也不是测试已经通过。">
+      <p>一次性任务什么时候从登记表里删除？</p>
+      <button data-correct="true">模型调用成功之后才删除</button>
+      <button data-correct="false">一入队就把定义从磁盘删掉</button>
+      <button data-correct="false">测试命令退出码为零才删除</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。durable 只留定义。调度线程随进程停止，错过的分钟不补。"
+      data-bad="文件还在，不表示 9 点那一次已经补跑过。">
+      <p>进程在 9 点关闭时，durable 任务会怎样？</p>
+      <button data-correct="true">定义还在但这一分钟不会补跑</button>
+      <button data-correct="false">操作系统会替这个进程补跑</button>
+      <button data-correct="false">下次启动会把 9 点补送一次</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。queue_processor 用非阻塞 acquire。拿不到就等下一拍。"
+      data-bad="不会插进用户正在进行的 messages.create，也不会丢弃已经入队的任务。">
+      <p>用户回合还占着锁时，到期任务怎么办？</p>
+      <button data-correct="true">留在队列里等到锁松开再送</button>
+      <button data-correct="false">立刻打断当前模型调用</button>
+      <button data-correct="false">这一次到期被直接丢掉</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。request_permission 发现不是主线程就返回拒绝。"
+      data-bad="拒绝名单仍在定时回合生效。不需要确认的普通命令仍可执行。">
+      <p>定时回合里遇到要你确认的命令，会怎样？</p>
+      <button data-correct="true">非主线程直接拒绝不读输入</button>
+      <button data-correct="false">照样在终端弹出 Allow 询问</button>
+      <button data-correct="false">需要确认的命令改成自动允许</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能用一句话区分 s11 和 s12：一个让已经开始的 Bash 先交回编号，一个到点把 prompt 送进新的一轮。</li>
+      <li>能写出五段字段的顺序，并说明没有秒；星期 0 是周日。</li>
+      <li>能说明日和星期同时受限时是或，不是与。</li>
+      <li>能按顺序讲：校验 → 保存 → 每秒匹配 → 写盘成功才入队 → 抢到 <code>agent_lock</code> 才追加 <code>[Scheduled]</code> → 模型调用成功才确认。</li>
+      <li>能说明至少一次指的是 prompt 交付：调用成功前崩溃可能再送；确认后不因为工具还没跑完而自动重送。</li>
+      <li>能说明 <code>durable</code> 只保留定义，进程关闭不补跑，导入模块不启动线程。</li>
+      <li>能指出定时回合不能做交互审批。</li>
+      <li>真跑 <code>python s12_cron_scheduler\code.py</code>，至少看见一次成功注册、一份 <code>.scheduled_tasks.json</code>，以及到点后的 <code>[cron] delivered</code> 或 <code>[Scheduled]</code>。进程要保持运行到那一分钟。</li>
+    </ul>
+
+    <h2>速查</h2>
+    <div class="box">
+      <p>
+        本课压缩版：
+        <a href="../../reference/phase-2/s12-cron-scheduler.html">阶段 2 · s12 Cron Scheduler 速查</a>。
+      </p>
+      <p>
+        新术语在
+        <a href="../../GLOSSARY.md">GLOSSARY.md</a> 的 Cron Scheduler 部分。
+      </p>
+    </div>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>
+          主阅读：
+          <a href="../../learn-claude-code-north/s12_cron_scheduler/README.zh.md">North s12 中文 README</a>。
+          本课已把五段表达式、入队、确认和「关机不补跑」展开。
+        </li>
+        <li>
+          时间与线程回看：
+          <a href="../phase-0/0016-threads-time.html">0016</a>。
+          本章用本地 <code>datetime.now()</code>，不用时区库。
+        </li>
+        <li>
+          对照后台：
+          <a href="./0031-background-tasks.html">0031 s11</a>。
+          编号和通知不是闹钟。
+        </li>
+        <li>
+          下一课 s13 才把一轮循环拆成 Lead 和持久队友。本章到点之后仍是同一个 Agent。
+        </li>
+      </ul>
+    </div>
+
+    <p>
+      <a href="./index.html">阶段 2 分册</a>
+      · <a href="./0031-background-tasks.html">上一课 0031</a>
+    </p>
+    <div data-lesson-id-footer="0032"></div>
+    <footer>
+      不清楚的立刻问我。下一课 s13：一个 Agent 装不下时，让队友分头做，结果从收件箱回来。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

@@ -720,6 +720,93 @@ _Avoid_: 以为命令一结束就会叫醒模型；模型已经停住时，要�
 出处：North [`s11_background_tasks/README.zh.md` L81](cursor://file/e:/agent_l/learn-claude-code-north/s11_background_tasks/README.zh.md:81)；[`code.py` L57–64](cursor://file/e:/agent_l/learn-claude-code-north/s11_background_tasks/code.py:57)。
 _Avoid_: 把它当成容器或权限系统；以为另建会话的子进程也一定会被杀掉。
 
+## Cron Scheduler
+
+**cron 表达式**（本章五段）:
+分钟、小时、日、月、星期。没有秒。星期 0 是周日。日和星期都不是 `*` 时，匹配是或。
+出处：North [`s12_cron_scheduler/code.py` L292–365](cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:292)。
+_Avoid_: 把 Spring 的六段（第一段是秒）原样拿来；把日和星期理解成必须同时满足。
+
+**`pending_delivery`**:
+任务已到期、模型还没成功收下。为真时同一分钟不会再次入队。持久任务会把这个标志写进 `.scheduled_tasks.json`。
+出处：North [`s12_cron_scheduler/code.py` L474–501](cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:474)。
+_Avoid_: 把它当成「测试已经跑完」。
+
+**至少一次交付**（cron）:
+模型调用成功并写回确认之前若进程退出，重启后同一条 prompt 可能再送一次。确认发生在工具执行之前。
+出处：North [`s12_cron_scheduler/README.zh.md` L116](cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/README.zh.md:116)；确认点 [`code.py` L667–672](cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:667)。
+_Avoid_: 以为确认之后工具没跑完还会自动重送；以为 `durable` 会在进程关闭时补跑错过的分钟。
+
+## Agent Teams
+
+**队友**（teammate）:
+持久线程，自带 system 和 messages，在 WORK 与 IDLE 之间切换。不是 s06 那种做完即弃的一次调用。
+出处：North [`s13_agent_teams/code.py` L1148–1164](cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:1148)。
+_Avoid_: 把两个队友的工具结果放进同一份 messages。
+
+**`MessageBus`**:
+按名字分文件的收件箱 `.mailboxes/<name>.jsonl`。读取会删掉文件，所以每份收件箱只有一个消费者。
+出处：North [`s13_agent_teams/code.py` L846–885](cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:846)。
+_Avoid_: 以为模型有 `check_inbox` 工具。
+
+**`result` 与 `idle_notification`**:
+前者是这项任务的产出摘要，后者表示队友可以再接任务。计划仍为 pending 时两条都不发。
+出处：North [`s13_agent_teams/code.py` L1301–1313](cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:1301)。
+_Avoid_: 用一句「完成了」同时表示产出和空闲。
+
+**计划闸门**（plan gate）:
+`plan_gates` 不是 `not_required` 或 `approved` 时，队友的 bash、write_file、edit_file 直接被挡住。读文件不受这道闸门限制。
+出处：North [`s13_agent_teams/code.py` L1032–1038](cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:1032)。
+_Avoid_: 把 worktree 当成沙箱；认为模型可以调用 `remove_worktree`。
+
+## MCP Tools
+
+**工具池**（assemble_tool_pool）:
+每一轮 `messages.create` 之前现组的工具表。连接 MCP 只影响下一轮的表。
+出处：North [`s14_mcp_plugin/code.py` L316–359](cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:316)。
+_Avoid_: 以为 `connect_mcp` 同一轮里就能调用刚发现的工具。
+
+**`mcp__服务器__工具`**:
+模型看见的名字。`call_tool` 仍使用 server 上的原始工具名。规范化后撞名或超过 64 字符会在组装时失败。
+出处：North [`s14_mcp_plugin/code.py` L328–353](cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:328)。
+_Avoid_: 把 `readOnlyHint` 当成授权；没写进宿主策略的外部工具默认是询问，不是放行。
+
+## Integrated Harness
+
+**集成宿主**:
+s15 不新增机制。它规定 cron、后台通知、压缩、工具池、权限和停止点在同一个 `agent_loop` 里的顺序。
+出处：North [`s15_integrated_harness/code.py` L3102–3224](cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:3102)。
+_Avoid_: 把工具名 `task` 当成 `create_task`。前者是一次性子代理。
+
+**`async_event_loop`**:
+CLI 里每秒查看 cron 队列、Lead 收件箱和待注入的后台结果。任一非空就再进入 `agent_loop`。
+出处：North [`s15_integrated_harness/code.py` L3236–3261](cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:3236)。
+_Avoid_: 以为单独的 s11 也会自己叫醒模型。叫醒来自这层循环。
+
+## Workflow Runtime
+
+**`Workflow` 工具**:
+模型只提交注册表里的名字、参数和可选 runId。脚本决定 `parallel`（等齐）或 `pipeline`（按条目推进）。中间变量不进入主对话。
+出处：North [`s16_workflow_runtime/code.py` L506–519](cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:506)。
+_Avoid_: 以为模型可以上传一段新脚本；以为 workflow 结束等于用户目标完成。
+
+**语义键**:
+journal 用类型、标签、prompt、schema 的稳定哈希对应一次 `agent()`。续跑命中则不再调用 runner。
+出处：North [`s16_workflow_runtime/code.py` L352–356](cursor://file/e:/agent_l/learn-claude-code-north/s16_workflow_runtime/code.py:352)。
+_Avoid_: 用并行完成顺序当键；续跑时更换参数。
+
+## Goal Loop
+
+**Goal**:
+会话级完成条件，同时只有一个。`/goal 条件` 会替换旧目标并立刻开工。判断器没有工具，只读对话。
+出处：North [`s17_goal_loop/README.zh.md` L51–75](cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/README.zh.md:51)。
+_Avoid_: 把「不再调用工具」当成目标已完成；让判断器自己去跑测试。
+
+**`block` / `limit`**:
+没完成时把理由追加进同一份 messages 并继续。连续阻止超过默认 8 次则 `limit`：停止自动续轮，目标仍在。判断器报错同样不宣布成功。
+出处：North [`s17_goal_loop/code.py` L407–422](cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:407)。
+_Avoid_: 把 `limit`、`error` 或 `max_turns` 记成已完成或已清除。
+
 ## Frameworks (workspace stance)
 
 当前不学封装层（LangChain / LangGraph 等）。对照用词以本书公式为准：Agent = LLM + 上下文 + 工具；Harness 是环绕模型的运行与治理层。

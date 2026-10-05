@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0035 · s15 Integrated Harness</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0035"></div>
+    <h1>s15：还是同一个循环，事件从更多口进来</h1>
+    <p class="mission">
+      s01 到 s14 把循环、工具、权限、钩子、清单、子代理、技能、压缩、记忆、任务、后台、闹钟、团队、MCP
+      拆成各自能跑的一章。单独能跑，不表示它们知道彼此的事件该写回哪一段对话。
+      本课不发明新机制。它只回答：这些东西在 <code>agent_loop</code> 的哪一步进入，
+      产生的通知又怎样回到同一份 <code>messages</code>。
+      大目标仍是造 harness：机制可以很多，模型每轮仍只看见一次请求和一批工具结果。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      主材料：North
+      <a href="../../learn-claude-code-north/s15_integrated_harness/README.zh.md">s15 中文 README</a>
+      （循环上的位置
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/README.zh.md:39">L39–74</a>，
+      内置工具名单
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/README.zh.md:80">L80–101</a>，
+      和单独章节不同的缝
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/README.zh.md:119">L119–200</a>）
+      +
+      <a href="../../learn-claude-code-north/s15_integrated_harness/code.py"><code>s15_integrated_harness/code.py</code></a>
+      （内置工具名
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:2877">L2877–3004</a>，
+      压缩管线
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:3059">L3059–3070</a>，
+      主循环
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:3102">L3102–3224</a>，
+      自动唤醒
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:3236">L3236–3261</a>）。
+      各机制的细则以 0021–0034 为准。本章只讲它们接在一起时多出来的顺序和差别。
+    </p>
+    <p class="muted">
+      <strong>本课已内化</strong>：每轮先注入 cron 和后台通知，再走压缩管线，再组装 system 和工具池，然后叫模型；
+      没有 <code>tool_use</code> 就 Stop、记记忆、释放 Lead 侧 assignment 并返回；
+      有工具则先 <code>PreToolUse</code>，显式后台 bash 交占位结果，其余同步执行后再 <code>PostToolUse</code>；
+      后台线程结束时会再跑一次 <code>PostToolUse</code>（这是和 s11 不同的缝）；
+      非主线程上的 bash，以及需要确认的 MCP，直接拒绝，不和主终端抢输入；
+      CLI 另有一条循环，cron 队列、Lead 收件箱、已结束的后台任务都能叫醒一轮；
+      <code>todo_write</code> 和任务图、<code>task</code> 一次子代理和 <code>spawn_teammate</code> 仍然是不同工具。
+      <strong>故意跳过</strong>：把 0021–0034 的规则再讲一遍；s16 的 workflow 脚本；s17 的目标判断器。
+      <strong>不另写</strong> playground。
+    </p>
+    <p class="muted">
+      README 对照表写「内置工具 25 个」。代码从
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:2877">L2877</a>
+      到
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:3004">L3004</a>
+      注册了 26 个名字，和 README 名单
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/README.zh.md:84">L84–93</a>
+      一致。过关时以这份名单为准。
+      <strong>行号约定：</strong>点 <code>cursor://file/...</code> 核对。
+    </p>
+
+    <h3>本课新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>出处</th></tr>
+      <tr>
+        <td><strong>集成宿主</strong></td>
+        <td>一份 <code>code.py</code> 里同时接上前面各章用到的机制。没有另一个新的 Agent 公式。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/README.zh.md:29">README L29</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>prepare_context</code></strong></td>
+        <td>叫模型前的压缩管线：大输出预算、裁中段、必要时压旧工具结果、再不够才摘要。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:3059">code.py L3059–3070</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>async_event_loop</code></strong></td>
+        <td>主线程之外的唤醒：cron 队列、Lead 收件箱、尚未注入的后台结果，任一非空就再进 <code>agent_loop</code>。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:3236">code.py L3236–3261</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>task</code> 工具</strong></td>
+        <td>一次性子代理。名字和任务图里的 task record 无关。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/README.zh.md:128">README L128</a></td>
+      </tr>
+      <tr>
+        <td><strong>异步回合</strong></td>
+        <td>不在主线程上的那一轮。bash 直接拒绝；需要确认的 MCP 也直接拒绝。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:1772">code.py L1772–1789</a></td>
+      </tr>
+    </table>
+
+    <h2>为什么现在学？</h2>
+    <p>
+      分开的章节会让人以为「后台通知」和「定时 prompt」和「队友事件」各写各的对话。
+      真要长期干活，它们必须在同一次 <code>messages.create</code> 之前按固定顺序写进同一份历史，
+      否则模型要么看不见，要么看见的顺序每次不一样。
+    </p>
+    <p>
+      所以本章的技能不是再记一个名词，而是能指着循环说：这一步是谁的事件，失败时谁被恢复，哪一步还不许问你。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>s15 概念</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr>
+        <td>一个 <code>agent_loop</code></td>
+        <td>一个请求管道，过滤器按顺序排</td>
+        <td>过滤器改的是同一份 messages，不是各自返回一个新的 HTTP 响应。</td>
+      </tr>
+      <tr>
+        <td><code>async_event_loop</code></td>
+        <td>另一个线程把事件丢进同一个会话</td>
+        <td>它不叫模型。它拿锁之后调用同一个 <code>agent_loop</code>。</td>
+      </tr>
+      <tr>
+        <td>主线程才能问 <code>Allow?</code></td>
+        <td>后台任务不能读 <code>System.in</code></td>
+        <td>本章比 s12 更严：异步回合里<strong>每一条</strong> bash 都拒绝，不只是破坏性命令。</td>
+      </tr>
+      <tr>
+        <td>26 个内置工具</td>
+        <td>一个进程里注册多组 Bean</td>
+        <td>模型每轮看见的是组装后的列表，再加已经连接的 MCP。不是 26 个永远同时出现在系统提示正文里。</td>
+      </tr>
+    </table>
+
+    <h2>整体设计</h2>
+    <h3>一轮里的顺序</h3>
+    <pre>consume_cron_queue     追加 [Scheduled] ...
+inject_background_notifications
+满 3 轮没写清单        追加一条更新 todos 的提醒
+prepare_context        预算 → snip → 超限才 micro / 摘要
+update_context         记忆目录、技能目录、MCP 状态进 system
+assemble_tool_pool     26 个内置名 + 已连接的 mcp__*
+call_llm               429/529 重试，max_tokens 升级，过长则 reactive compact
+
+调用失败               restore 还没确认的 cron，释放 agent 的 assignment，返回
+调用成功               acknowledge cron
+
+没有 tool_use          Stop，remember_after_turn，释放 assignment，返回
+有 tool_use            PreToolUse
+                       后台 bash → 占位 tool_result，主线程不跑 PostToolUse
+                       其他工具 → handler，再 PostToolUse
+                       build_user_content 把结果和此刻已完成的后台通知一起追加</pre>
+    <p class="src">
+      循环：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:3102">code.py L3102–3224</a>。
+      管线：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:3059">L3059–3070</a>。
+      README 的位置表：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/README.zh.md:61">L61–74</a>。
+    </p>
+
+    <h3>26 个内置名字</h3>
+    <pre>bash  read_file  write_file  edit_file  glob
+todo_write  task  load_skill  compact
+create_task  update_task  list_tasks  get_task  claim_task  complete_task
+schedule_cron  list_crons  cancel_cron
+spawn_teammate  list_teammates  send_message
+request_shutdown  request_plan  review_plan
+create_worktree
+connect_mcp</pre>
+    <p>
+      <code>todo_write</code> 仍是会话内整表替换。任务图仍是 <code>.tasks/*.json</code>。
+      <code>task</code> 是一次性子代理，不要把它读成「创建一条任务记录」。
+      创建记录的名字是 <code>create_task</code>。
+    </p>
+
+    <h3>谁能在你不打字时再开一轮</h3>
+    <p>
+      s11 单独运行时，命令结束不会自己叫醒模型。s15 的 CLI 加了 <code>async_event_loop</code>：
+      每秒看三处，cron 队列、Lead 收件箱、还有待注入的后台结果。有任意一处，就在锁里再调用 <code>agent_loop</code>。
+      所以集成之后，「后台完成」和「队友来信」可以在你停在提示符上时自动变成下一轮。
+      这是宿主多出来的唤醒，不是 s11 那一章的 <code>BackgroundManager</code> 自己会叫模型。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:3236">code.py L3236–3261</a>。
+      README：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/README.zh.md:177">L177</a>。
+    </p>
+
+    <h2>规则先看四条小例</h2>
+    <h3>例 1：注入在叫模型之前，确认在调用成功之后</h3>
+    <pre>队列里有一条到期任务
+  先 append [Scheduled]
+  再压缩、再叫模型
+
+call_llm 抛错且不是「再压缩一次就能好」
+  restore_cron_jobs
+  这句 prompt 还会再送
+
+call_llm 成功
+  acknowledge_cron_jobs
+  然后才看有没有 tool_use</pre>
+    <p>
+      和 s12 一样，至少一次指的是这句定时 prompt 被模型收下。
+      本章把它放进了还会压缩、还会重试的同一轮里，所以确认必须留在调用成功之后，不能留在注入的那一瞬间。
+    </p>
+
+    <h3>例 2：后台占位不走主线程的 PostToolUse</h3>
+    <pre>should_run_background：工具名是 bash，且 run_in_background is True
+  start_background_task
+  tool_result 是占位句子
+  continue          主线程这里不调用 PostToolUse
+
+worker 里命令结束
+  trigger_hooks("PostToolUse", block, 真正的输出)
+  状态仍是退出码 0 才 completed，否则 failed</pre>
+    <p>
+      s11 的钩子看见的是占位句子，因为 <code>PostToolUse</code> 发生在主线程返回之前。
+      s15 把这次钩子挪到了 worker 里，对着真正的输出。占位结果本身不再经过主线程的 <code>PostToolUse</code>。
+      读代码时不要把两章的钩子时机记成同一句。
+    </p>
+    <p class="src">
+      分叉：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:3196">code.py L3196–3207</a>。
+      worker：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:2275">L2275–2284</a>。
+      判断条件：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:2254">L2254–2257</a>。
+    </p>
+
+    <h3>例 3：异步回合里 bash 一律不问你</h3>
+    <pre>permission_hook 看见 bash
+  不在主线程
+  → Permission denied: interactive shell approval is unavailable
+    during an asynchronous turn
+
+主线程上的 bash
+  每一条都问 Allow?，不只是破坏性命令
+
+mcp__ 且策略不是 allow
+  不在主线程 → 同样直接拒绝
+  在主线程 → 询问</pre>
+    <p>
+      s12 只在「需要确认」时拒绝非主线程，安全 bash 仍可在定时回合执行。
+      s15 把所有 bash 都当成要确认。定时或队友线程里的 bash 因此会直接失败。
+      文件路径越出工作区则无论哪条线程都直接拒绝，不再询问。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:1765">code.py L1765–1789</a>。
+    </p>
+
+    <h3>例 4：两种委派仍然分开</h3>
+    <pre>task(prompt)
+  新的 messages，做完只把摘要交回来，中间过程丢掉
+
+spawn_teammate(..., task_id=...)
+  先认领，成功才启动持久线程
+  不传 task_id 时，队友可以在 IDLE 里等
+  没 assignment 就不能用文件和 Shell
+
+Lead 启动队友后结束当前轮
+  不在模型循环里反复 list_teammates 空转
+  收件箱事件由 async_event_loop 唤醒下一轮</pre>
+    <p>
+      认领或释放会推进 assignment version，旧的计划审批因此失效。
+      <code>send_message</code> 只传话，不改这套身份。这些规则和 s13 相同，本章只是把唤醒接进了集成 CLI。
+    </p>
+    <p class="src">
+      README：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/README.zh.md:133">L133–141</a>、
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/README.zh.md:192">L192</a>。
+    </p>
+
+    <h2>细节实现</h2>
+    <h3>压缩不会跳过刚刚注入的文本</h3>
+    <p>
+      cron 文本和后台通知先写进 <code>messages</code>，然后才 <code>prepare_context</code>。
+      它们和普通用户消息一样参加预算和裁剪。不是一条永远置顶的侧频道。
+      上下文仍然超限时，调用模型若报 prompt too long，还有一次 <code>reactive_compact</code>，然后重试。
+      这次只尝试一回，标志在 <code>RecoveryState</code> 里。
+    </p>
+
+    <h3>记忆在回合两端</h3>
+    <p>
+      叫模型前，<code>update_context</code> 按当前请求从 <code>.memory/MEMORY.md</code> 选记录，放进 system。
+      技能仍只放目录，全文靠 <code>load_skill</code>。
+      没有 tool_use、准备停止时，<code>remember_after_turn</code> 再提取；有新增才整理。
+      这是 s09 的运行时被接进循环的两端，不是第三种记忆文件。
+    </p>
+    <p class="src">
+      README：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/README.zh.md:143">L143–147</a>。
+      停止点：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:3167">code.py L3167–3170</a>。
+    </p>
+
+    <h3>和前面每一课的关系</h3>
+    <p>
+      判断「后台要不要启动」仍是 bash 加布尔真。判断「cron 五段、日和星期取或」仍是 s12 的函数。
+      判断「收件箱读完即删、计划闸门」仍是 s13。判断「MCP 前缀和宿主策略」仍是 s14。
+      本章新增的是这些判断在同一轮里的先后，以及异步回合不许交互、CLI 会替你叫醒。
+    </p>
+
+    <h2>动手：真跑 North s15</h2>
+    <pre>cd learn-claude-code-north
+python s15_integrated_harness\code.py</pre>
+    <p>挑两句就够，不必一次把 README 的五句都跑完。重点是看见不同事件进同一段对话。</p>
+    <pre>检查这个仓库，告诉我哪些 Python 文件最重要。
+3 分钟后提醒我开会。</pre>
+    <p>
+      第一句应看到工具调用前的 permission。本章主线程上的 bash 每次都问。
+      第二句应注册 cron；到点且进程仍开着时，不必再打字，<code>[cron auto]</code> 或 <code>[Scheduled]</code> 会自己出现。
+    </p>
+    <p>
+      若还要看缝：让模型连接 docs 再查询，下一轮才应出现 <code>mcp__docs__...</code>；
+      让它把一条短 sleep 放进后台再读 README，占位结果应先回来。
+      不要在异步回合里期待 <code>Allow?</code>。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/README.zh.md:220">README L220–237</a>。
+    </p>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>s15 又定义了一种新 Agent：</strong>没有。还是调用模型、看有没有 tool_use、把结果追加回去。</li>
+        <li><strong><code>task</code> 就是 <code>create_task</code>：</strong>不是。前者是一次子代理，后者是任务图节点。</li>
+        <li><strong>对照表写 25 个工具，就按 25 记：</strong>名单和代码是 26 个内置名。MCP 工具另算，连接之后才出现。</li>
+        <li><strong>后台一结束，s11 的管理器自己会再叫模型：</strong>单独的 s11 不会。s15 会，是因为 CLI 的 <code>async_event_loop</code>。</li>
+        <li><strong>s15 的 PostToolUse 和 s11 一样只看见占位句子：</strong>主线程的后台路径跳过了钩子；worker 里对着真实输出再跑一次。</li>
+        <li><strong>定时回合仍可跑安全 bash：</strong>s12 可以。s15 的非主线程对所有 bash 直接拒绝。</li>
+        <li><strong>压缩发生在注入之前，所以通知永远不会被裁：</strong>相反。先注入，再进 <code>prepare_context</code>。</li>
+        <li><strong>队友事件要你提醒 Lead 去读收件箱：</strong>不用。收件箱非空时唤醒循环会自己开一轮。</li>
+        <li><strong>worktree 在集成里升级成了沙箱：</strong>没有。它仍只改默认目录。</li>
+        <li><strong>模型可以 remove_worktree：</strong>仍然不可以。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。先把定时文本和后台通知写进 messages，再压缩，再叫模型。"
+      data-bad="确认不在注入的瞬间。调用失败会把还没确认的 cron 放回去。">
+      <p>一轮调用模型之前，注入和压缩谁先发生？</p>
+      <button data-correct="true">先注入定时和后台再压缩</button>
+      <button data-correct="false">先压缩完再把通知插进开头</button>
+      <button data-correct="false">注入的同时就已经确认送达</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。task 是一次性子代理。创建任务记录用 create_task。"
+      data-bad="todo_write 也不是任务图。三个名字对应三套状态。">
+      <p>工具名 task 在这章表示什么？</p>
+      <button data-correct="true">一次性子代理只交回摘要</button>
+      <button data-correct="false">往任务图里新增一个节点</button>
+      <button data-correct="false">把会话清单整表替换一次</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。占位结果在主线程返回。PostToolUse 发生在 worker 里，对着真实输出。"
+      data-bad="不要把 s11 的钩子时机直接套到这章的后台路径上。">
+      <p>s15 后台 bash 的 PostToolUse 发生在哪？</p>
+      <button data-correct="true">命令结束后在工作线程里</button>
+      <button data-correct="false">主线程对着占位句子立刻调用</button>
+      <button data-correct="false">后台路径完全不再运行这个钩子</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。非主线程看到 bash 就拒绝。主线程则每条 bash 都询问。"
+      data-bad="这比 s12 严。s12 的安全命令仍可在队列线程里跑。">
+      <p>定时或队友线程里执行 bash，s15 会怎样？</p>
+      <button data-correct="true">直接拒绝因为不在主线程</button>
+      <button data-correct="false">安全命令仍会在该线程执行</button>
+      <button data-correct="false">转到主线程弹出 Allow 询问</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。async_event_loop 看 cron 队列、Lead 收件箱和待注入的后台结果。"
+      data-bad="不是 s11 的管理器自己开了一轮，也不是必须再输入一句话。">
+      <p>你停在提示符上时，谁还能再开一轮？</p>
+      <button data-correct="true">闹钟收件箱或后台结果都能叫醒</button>
+      <button data-correct="false">只有你再输入一句才会继续</button>
+      <button data-correct="false">后台线程自己直接调用模型</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。代码和 README 名单是 26 个内置名。已连接的 MCP 工具不在这 26 个里。"
+      data-bad="对照表的 25 和逐项名单不一致。过关以名单为准。">
+      <p>内置工具名有多少个，MCP 算不算在内？</p>
+      <button data-correct="true">二十六名且不含已连接的 MCP</button>
+      <button data-correct="false">二十五名且已经包含 MCP 工具</button>
+      <button data-correct="false">六个基础名再加 connect 而已</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能按顺序说出一轮：注入 cron 和后台通知、压缩、组装 system 和工具池、调用模型、成功后才确认 cron、再按有没有 tool_use 分支。</li>
+      <li>能指出 <code>task</code>、<code>todo_write</code>、<code>create_task</code> 是三件事。</li>
+      <li>能说出 s15 后台钩子和 s11 的差别：占位结果不经主线程 PostToolUse，worker 里对着真实输出再跑。</li>
+      <li>能说出 s15 异步回合比 s12 严：所有 bash 在非主线程直接拒绝。</li>
+      <li>能说出 <code>async_event_loop</code> 的三个唤醒源，并说明这不是 s11 自己会叫模型。</li>
+      <li>能说明 worktree、计划版本、MCP 前缀这些规则没有在集成时改义。</li>
+      <li>真跑 <code>python s15_integrated_harness\code.py</code>，至少看见一次主线程 bash 的询问，以及一次不打字也被叫醒的 cron 或你主动观察的后台占位。</li>
+    </ul>
+
+    <h2>速查</h2>
+    <div class="box">
+      <p>
+        <a href="../../reference/phase-2/s15-integrated-harness.html">阶段 2 · s15 Integrated Harness 速查</a>。
+        术语在 <a href="../../GLOSSARY.md">GLOSSARY.md</a> 的 Integrated Harness 部分。
+      </p>
+    </div>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>
+          主阅读：
+          <a href="../../learn-claude-code-north/s15_integrated_harness/README.zh.md">North s15 中文 README</a>。
+          各机制的细则回看 0021–0034，不必在这章重读。
+        </li>
+        <li>
+          下一课 s16：编排步骤事先写死时，用一次 <code>Workflow</code> 工具跑完脚本，而不是让模型一轮轮现编。
+        </li>
+      </ul>
+    </div>
+
+    <p>
+      <a href="./index.html">阶段 2 分册</a>
+      · <a href="./0034-mcp-tools.html">上一课 0034</a>
+    </p>
+    <div data-lesson-id-footer="0035"></div>
+    <footer>
+      不清楚的立刻问我。下一课 s16：模型只选一个保存好的 workflow，步骤顺序写在宿主代码里。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

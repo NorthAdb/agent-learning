@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>阶段 2 · s12 Cron Scheduler 速查</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+  <link rel="stylesheet" href="../../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="../index.html">速查索引</a> · 课 0032 · 打印友好</p>
+    <h1>s12：Cron Scheduler</h1>
+    <p class="mission">
+      保存五段表达式和 prompt；进程活着时到点入队，Agent 空闲再送进循环。
+    </p>
+    <p class="src">
+      来源：
+      <a href="../../learn-claude-code-north/s12_cron_scheduler/README.zh.md">s12 README</a>
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/README.zh.md:52">L52–126</a>；
+      <a href="../../learn-claude-code-north/s12_cron_scheduler/code.py">code.py</a>
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:263">L263–728</a>。
+    </p>
+
+    <h2>一张图</h2>
+    <pre>schedule_cron     validate_cron 通过才写入 scheduled_jobs
+  ↓
+每秒              cron_matches(本地时间)
+  ↓
+写盘成功          pending_delivery + last_fired，再进 cron_queue
+  ↓
+抢到 agent_lock   追加用户消息 [Scheduled] prompt
+  ↓
+模型调用成功      重复任务清 pending；一次性任务删除
+模型调用失败      删掉刚追加的消息，放回队列</pre>
+
+    <h2>五段</h2>
+    <pre>分  时  日  月  周
+0   9   *   *   *      每天 09:00
+*/5 *   *   *   *      每 5 分钟，余数为 0
+0   9   *   *   1-5    周一到周五 09:00
+0   9   1   *   1      每月 1 日或周一的 09:00</pre>
+    <ul>
+      <li>没有秒。星期 0 是周日，6 是周六。</li>
+      <li>日和星期都不是 <code>*</code> 时，匹配是或。</li>
+      <li>形状：<code>*</code>、<code>*/N</code>、<code>N</code>、<code>N-M</code>、<code>N,M</code>。</li>
+    </ul>
+
+    <h2>交付</h2>
+    <ul>
+      <li>同一分钟：<code>last_fired</code> 或 <code>pending_delivery</code> 挡住第二次入队。</li>
+      <li>用户回合占锁时，队列线程下一拍再试。</li>
+      <li>至少一次指 prompt 被模型收下。确认在工具执行之前。</li>
+      <li>定时回合里，需要 <code>Allow?</code> 的操作直接拒绝。</li>
+    </ul>
+
+    <h2>不负责</h2>
+    <ul>
+      <li><code>durable</code> 只留定义。进程关了不补跑错过的分钟。</li>
+      <li>导入模块不启动调度线程。</li>
+      <li>没有 s11 后台 Bash。本章不把命令输出送进队列。</li>
+    </ul>
+
+    <h2>和相邻课</h2>
+    <table>
+      <tr><th>课</th><th>留下什么</th><th>不负责</th></tr>
+      <tr><td>s11 Background</td><td>慢 Bash 先交回编号</td><td>几点开始</td></tr>
+      <tr><td>s12 Cron</td><td>到点把 prompt 送进空闲回合</td><td>关机后仍准点跑；多 Agent</td></tr>
+    </table>
+
+    <h2>过关句</h2>
+    <p class="box">
+      <strong>闹钟 = 五段表达式 + 到点入队 + 空闲再交付。</strong>
+      落盘不是操作系统定时器；模型收下 prompt 也不等于工作做完。
+    </p>
+    <p>
+      <a href="../../lessons/phase-2/0032-cron-scheduler.html">打开 0032 课件</a> ·
+      <a href="../../lessons/phase-2/0031-background-tasks.html">回看 s11</a>
+    </p>
+    <footer>下一课：s13 Agent Teams。到点之后仍是同一个 Agent。</footer>
+  </main>
+</body>
+</html>

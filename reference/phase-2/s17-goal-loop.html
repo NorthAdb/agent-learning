@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>阶段 2 · s17 Goal Loop 速查</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+  <link rel="stylesheet" href="../../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="../index.html">速查索引</a> · 课 0037 · 打印友好</p>
+    <h1>s17：Goal Loop</h1>
+    <p class="mission">
+      模型想停时，独立判断器只根据对话决定完成、继续，或把人叫回来。
+    </p>
+    <p class="src">
+      来源：
+      <a href="../../learn-claude-code-north/s17_goal_loop/README.zh.md">s17 README</a>
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/README.zh.md:21">L21–147</a>；
+      <a href="../../learn-claude-code-north/s17_goal_loop/code.py">code.py</a>
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:354">L354–422</a>。
+    </p>
+
+    <h2>一张图</h2>
+    <pre>还有 tool_use → 执行，不判断
+没有 tool_use 且没有目标 → allow，返回
+后台还在跑 → defer，不调用判断器
+ok → achieved，清除目标
+impossible → failed，清除，但不是完成
+没完成 → block，理由写回同一份 messages
+连续 block 超 cap → limit，目标还在
+判断器抛错 → error，目标还在
+MAX_TURNS 到了 → max_turns，目标还在</pre>
+
+    <h2>命令</h2>
+    <ul>
+      <li><code>/goal 条件</code>：替换并立刻开工。条件最长 4000 字。</li>
+      <li><code>/goal</code>：查看次数、时间、token、最近理由。</li>
+      <li><code>/goal clear</code>：清除。别名 stop、off、reset、none、cancel。</li>
+    </ul>
+
+    <h2>不负责</h2>
+    <ul>
+      <li>判断器不能读文件、不能跑测试。</li>
+      <li>不是测试框架。证据要主模型写进对话。</li>
+      <li>CLI 不持久化会话。restore 只恢复仍活跃的条件，计数和时间重来。</li>
+      <li>workflow 结束没有特殊豁免。</li>
+    </ul>
+
+    <h2>过关句</h2>
+    <p class="box">
+      <strong>想停 ≠ 做完。</strong>
+      判断器只读对话。上限把人叫回来，不把目标改成已完成。
+    </p>
+    <p>
+      <a href="../../lessons/phase-2/0037-goal-loop.html">打开 0037 课件</a> ·
+      <a href="../../lessons/phase-2/0036-workflow-runtime.html">回看 s16</a> ·
+      <a href="../../lessons/phase-2/0021-agent-loop.html">回看 s01</a>
+    </p>
+    <footer>North s01–s17 课件到此齐。</footer>
+  </main>
+</body>
+</html>

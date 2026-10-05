@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0033 · s13 Agent Teams</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0033"></div>
+    <h1>s13：队友各写各的上下文，结果从收件箱回来</h1>
+    <p class="mission">
+      s12 到点之后仍是同一个 Agent，整段后端重构会堆进一份 messages。
+      本课把工作拆给持久队友：Lead 先提出分工并等你确认，队友各自跑循环，
+      用文件收件箱把结果送回 Lead，空闲时再从共享任务板认领下一项。
+      需要分开改代码时，任务可以绑一个 worktree。大目标仍是造 harness：
+      谁和谁说话、在哪个目录改，由运行时规定，不靠模型互相看见对方的工具结果。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      主材料：North
+      <a href="../../learn-claude-code-north/s13_agent_teams/README.zh.md">s13 中文 README</a>
+      （要回答的六个问题
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/README.zh.md:24">L24–31</a>，
+      队友与 s06 的差别
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/README.zh.md:82">L82–95</a>，
+      收件箱与认领
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/README.zh.md:97">L97–231</a>，
+      worktree 与计划闸门
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/README.zh.md:250">L250–369</a>）
+      +
+      <a href="../../learn-claude-code-north/s13_agent_teams/code.py"><code>s13_agent_teams/code.py</code></a>
+      （认领
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:281">L281–309</a>，
+      收件箱
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:846">L846–885</a>，
+      计划闸门
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:1032">L1032–1051</a>，
+      扫描与认领下一项
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:1116">L1116–1142</a>，
+      队友循环
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:1148">L1148–1372</a>，
+      启动前认领
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:1378">L1378–1405</a>）。
+      任务图的两阶段建图已在
+      <a href="./0030-task-system.html">0030</a> 讲过。本章不重讲那一套字段。
+    </p>
+    <p class="muted">
+      <strong>本课已内化</strong>：Lead 先提案、你确认后才 <code>spawn_teammate</code>；
+      队友是持久线程，不是 s06 的一次调用；
+      通信走 <code>.mailboxes/&lt;name&gt;.jsonl</code>，读走即删；
+      <code>result</code> 和 <code>idle_notification</code> 是两条事件；
+      空闲时先等消息，超时再认领；认领在 <code>task_store_lock</code> 里完成；
+      没认领任务就不能用文件和 Shell；worktree 只换目录，不是沙箱；
+      计划未批准时，bash / 写 / 改会被闸门挡住；模型不能 <code>remove_worktree</code>。
+      <strong>故意跳过</strong>：s11 后台、s12 cron、真实多人服务器、把 worktree 当成权限边界。
+      README 写明那两章没有被带进本章。
+      <strong>不另写</strong> playground。
+    </p>
+    <p class="muted">
+      <strong>行号约定：</strong><code>L281</code> 等是源码导航。点 <code>cursor://file/...</code> 核对。
+    </p>
+
+    <h3>本课新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>出处</th></tr>
+      <tr>
+        <td><strong>Lead</strong></td>
+        <td>和你对话的那个 Agent。它提案、建任务、启动队友、读自己的收件箱。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/README.zh.md:41">README L41–42</a></td>
+      </tr>
+      <tr>
+        <td><strong>队友</strong></td>
+        <td>一条持久线程，自带 system、messages 和工具。在 WORK 和 IDLE 之间切换，直到关机。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:1148">code.py L1148–1164</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>MessageBus</code></strong></td>
+        <td>按名字分文件的收件箱。发送追加一行 JSON，读取会删掉文件。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:846">code.py L846–885</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>result</code></strong></td>
+        <td>队友这一轮不再调工具时，送给 Lead 的结果摘要。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:1301">code.py L1301–1304</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>idle_notification</code></strong></td>
+        <td>另一条事件，表示这个队友可以再接任务。它不描述产出。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:1312">code.py L1309–1313</a></td>
+      </tr>
+      <tr>
+        <td><strong>worktree</strong></td>
+        <td>可选的任务工作目录和分支。文件工具从认领时记下的 cwd 读写。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/README.zh.md:289">README L289</a></td>
+      </tr>
+      <tr>
+        <td><strong>计划闸门</strong></td>
+        <td><code>plan_gates[名字]</code>。不是 <code>not_required</code> 或 <code>approved</code> 时，改工作区的工具直接返回挡住。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:1032">code.py L1032–1038</a></td>
+      </tr>
+    </table>
+
+    <h2>为什么现在学？</h2>
+    <p>
+      配置、认证、测试可以并行，但一个 Agent 依次做会更久，早期细节也会离开上下文。
+      用户通常只说目标，不会自己设计团队。Harness 要规定：谁决定加人、上下文是否共享、
+      结果怎样回来、空闲的人能不能自己领任务、改文件用哪个目录、关机和审批怎样对上号。
+    </p>
+    <p>
+      s06 的 subagent 做完一次就结束，中间过程丢弃，只交回一份摘要。
+      队友要跨任务留着身份，还能收消息。s10 的任务板仍是进度文件；
+      本章加上的是「多个循环怎么用这块板」，不是另一套任务字段。
+    </p>
+    <p class="src">
+      六个问题：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/README.zh.md:24">README L24–31</a>。
+      和 s06 的表：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/README.zh.md:86">L86–91</a>。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>s13 概念</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr>
+        <td>Lead / 队友</td>
+        <td>一个协调线程加若干 worker</td>
+        <td>每个 worker 有自己的对话数组。不能把别人的 tool_result 放进自己的推理。</td>
+      </tr>
+      <tr>
+        <td><code>.mailboxes/*.jsonl</code></td>
+        <td>每个消费者一个队列</td>
+        <td>读的时候把文件删掉。没有第二个消费者再读同一批。</td>
+      </tr>
+      <tr>
+        <td><code>task_store_lock</code></td>
+        <td>认领库存要在锁里改状态</td>
+        <td>扫描可以同时看见同一条候选；只有抢到锁并写成功的那次变成 <code>in_progress</code>。</td>
+      </tr>
+      <tr>
+        <td>worktree</td>
+        <td>每个任务一个工作副本</td>
+        <td>只改工具的默认目录。Shell 仍能访问这个进程有权访问的路径。</td>
+      </tr>
+      <tr>
+        <td><code>request_id</code></td>
+        <td>请求和响应用同一个关联号</td>
+        <td>类型不对、状态已经不是 pending，回复就不会改协议状态。</td>
+      </tr>
+      <tr>
+        <td>计划闸门</td>
+        <td>审批通过前禁止写操作</td>
+        <td>闸门在工具分发层，不靠队友「记得先别改文件」。</td>
+      </tr>
+    </table>
+
+    <h2>整体设计</h2>
+    <h3>模块地图</h3>
+    <pre>保留 s10：任务 JSON、两阶段建图、Hooks、基础文件工具
+
+s13 加上
+  spawn_teammate        先认领初始任务，成功才启动守护线程
+  TeammateRuntime       独立 messages；WORK / IDLE
+  MessageBus            .mailboxes/&lt;name&gt;.jsonl
+  consume_lead_inbox    唯一消费 lead 收件箱的人，再注入下一轮
+  claim_next_task       空闲时最多原子认领一个 ready 任务
+  create_worktree       仅 Lead。把 pending、无人认领的任务绑到目录
+  plan_gates            未批准时挡住 bash、write_file、edit_file</pre>
+    <p>
+      只有 Lead 能 <code>update_task</code> 改依赖。队友只能列举、认领、完成。
+      名字 <code>lead</code> 和 <code>agent</code> 留给运行时，不能当作队友名。
+    </p>
+    <p class="src">
+      启动前认领：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:1395">code.py L1395–1405</a>。
+      保留名：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:839">L839</a>。
+    </p>
+
+    <h3>一次完整运行</h3>
+    <pre>你：把重构拆到任务板，认证用 worktree，最后汇总
+
+Lead 只提案：config、auth、tests。还没调用 spawn_teammate
+
+你：开始吧
+
+Lead  create_task 三次
+      create_worktree("auth-refactor", auth 的 task_id)
+      spawn_teammate 时带上 task_id
+      认领失败则线程不会启动
+
+队友  各自的 messages 里有 [Assigned task ...] 和目录
+      做完 complete_task
+      给 lead 发 result，再发 idle_notification
+      运行时把 [Team events] 注入 Lead 的下一轮
+
+Lead  不用自己轮询收件箱。事件到了，主循环再叫它一次</pre>
+    <p class="box">
+      <strong>一句话：</strong>你确认边界，Lead 建图并启动队友；队友不共享对话，结果由运行时送回。
+    </p>
+    <p class="src">
+      剧本：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/README.zh.md:375">README L375–396</a>。
+      系统提示里的确认句：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/README.zh.md:63">L63–67</a>。
+    </p>
+
+    <h3>两条事件，两种问题</h3>
+    <table>
+      <tr><th>事件</th><th>回答</th><th>不回答</th></tr>
+      <tr>
+        <td><code>result</code></td>
+        <td>这项任务产出了什么</td>
+        <td>这个人还能不能再领</td>
+      </tr>
+      <tr>
+        <td><code>idle_notification</code></td>
+        <td>队友已空闲，固定句子是 Waiting for more work.</td>
+        <td>产出细节</td>
+      </tr>
+    </table>
+    <p>
+      计划还在 <code>pending</code> 时，不发 result，也不发 idle。状态记成 <code>waiting_approval</code>。
+      没有在等计划、且本轮有摘要时，才发 result，然后释放本轮 assignment，再发 idle。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:1301">code.py L1301–1314</a>。
+    </p>
+
+    <h3>状态放在哪一层？</h3>
+    <table>
+      <tr><th>位置</th><th>保存什么</th><th>谁改</th></tr>
+      <tr>
+        <td>队友自己的 <code>messages</code></td>
+        <td>这个人的工具过程</td>
+        <td>只有这条线程。Lead 看不见中间 tool_result</td>
+      </tr>
+      <tr>
+        <td><code>.tasks/*.json</code></td>
+        <td>状态、owner、依赖、可选 worktree</td>
+        <td>认领和完成在任务锁里写</td>
+      </tr>
+      <tr>
+        <td><code>.mailboxes/*.jsonl</code></td>
+        <td>还没被读走的消息</td>
+        <td><code>read_inbox</code> 读完就删文件</td>
+      </tr>
+      <tr>
+        <td><code>teammate_assignments</code></td>
+        <td>当前任务 id 和 cwd</td>
+        <td>认领时写入；回到 IDLE 时释放。完成失败不释放</td>
+      </tr>
+    </table>
+
+    <h2>规则先看四条小例</h2>
+    <h3>例 1：没确认就不要启动</h3>
+    <p>
+      加人会改变谁可以改工作区。系统提示要求先写出小团队的职责，等你确认。
+      代码不会替模型检查「这句话算不算确认」。它提供 <code>spawn_teammate</code>，
+      约束写在提示里。你看到 Lead 还没等回复就启动，那是模型没遵守提示，不是运行时又做了一道闸门。
+    </p>
+    <p>
+      一旦调用 <code>spawn_teammate</code> 且带了 <code>task_id</code>，运行时会在开线程之前认领。
+      认领失败会把刚写下的队友状态抹掉，并返回 <code>Cannot spawn teammate</code>。没有半个已启动的线程。
+    </p>
+
+    <h3>例 2：收件箱不是共享对话</h3>
+    <pre>alice 的 messages 里有她的 read_file 结果
+bob 的 messages 里没有这段
+
+bob 要告诉 Lead：BUS.send("bob", "lead", 摘要, "result")
+  追加到 .mailboxes/lead.jsonl
+
+Lead 侧只有 consume_lead_inbox() 读取
+  读完 unlink 文件
+  协议回复在这里对上 request_id
+  文本再变成 [Team events] 进入 Lead 的 history</pre>
+    <p>
+      <code>check_inbox</code> 不是模型工具。队友和 Lead 都不能自己「打开收件箱看看」。
+      消息到达和消费是运行时的事。
+    </p>
+    <p class="src">
+      发送与删除式读取：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:861">code.py L861–885</a>。
+      README 说明没有 check_inbox 工具：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/README.zh.md:156">L156</a>。
+    </p>
+
+    <h3>例 3：发现和认领是两步</h3>
+    <pre>scan_unclaimed_tasks
+  pending、owner 为空、can_start、worktree 目录可用
+  这只是此刻的快照
+
+claim_task 在 task_store_lock 里重读文件
+  已经不是 pending，或已有 owner → 返回说明，不抛异常
+  这个 owner 还有别的进行中任务 → 拒绝
+  前置没完成 → 拒绝
+  worktree 坏了 → 拒绝，不退回仓库根目录
+  通过才写 owner、in_progress、assignment，并推进 work version</pre>
+    <p>
+      两个队友可以同时看见同一条候选。只有一个 <code>claim_task</code> 能把它写成 <code>in_progress</code>。
+      空闲循环先等收件箱 <code>IDLE_SCAN_INTERVAL</code>（2 秒），有消息就先处理；没有消息才 <code>claim_next_task</code>。
+      关机和 Lead 的直接指令因此先于任务板。
+    </p>
+    <p class="src">
+      扫描：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:1119">code.py L1119–1141</a>。
+      认领：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:281">L281–308</a>。
+      空闲顺序：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:1316">L1316–1338</a>。
+    </p>
+
+    <h3>例 4：计划没过，改不了文件</h3>
+    <pre>plan_gates[name] 是 required、pending 或 rejected
+  bash、write_file、edit_file
+  → "Blocked: plan status is ..."
+
+not_required 或 approved
+  才继续做权限检查（队友侧 prompt_user=False）
+  危险命令不会去读你的键盘，直接返回 permission 错误
+
+read_file、glob、submit_plan 不受这道闸门限制</pre>
+    <p>
+      <code>spawn_teammate(..., require_plan=True)</code> 会在开线程前把闸门设为 <code>required</code>。
+      审批返回时，work version 和 task_id 必须仍和提交计划时一致。中途认领或释放会让旧审批失效。
+      普通 <code>send_message</code> 不改这套身份。
+    </p>
+    <p class="src">
+      闸门：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:1032">code.py L1032–1041</a>。
+      完成任务时也会看闸门：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:320">L320–322</a>。
+    </p>
+
+    <h2>细节实现</h2>
+    <h3>没有任务就没有 cwd</h3>
+    <p>
+      队友的 bash、读、写、改、glob 都先问 <code>current_cwd</code>。
+      assignment 里没有这个名字，工具返回「先认领任务」，不会偷偷用仓库根目录。
+      任务没绑 worktree 时，解析结果是 <code>WORKDIR</code>。绑了就用那个目录。
+      绑定损坏时认领失败，同样不退回仓库根。
+    </p>
+    <p>
+      <code>complete_task</code> 成功只把状态写成 <code>completed</code>，不立刻清 assignment。
+      当前这轮模型里后面的工具仍用这个目录。回到 IDLE 时才 <code>release_completed_assignment</code>。
+      完成失败则目录保持不变，方便改完再试。
+    </p>
+    <p class="src">
+      cwd：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:1192">code.py L1192–1217</a>。
+      释放时机：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:1309">L1309–1313</a>。
+    </p>
+
+    <h3>worktree 不是沙箱，模型也不能删</h3>
+    <p>
+      <code>create_worktree</code> 只给 Lead。任务必须还是 pending、没人认领、还没绑定。
+      Git 失败若已经留下分支或 checkout，运行时报告部分操作，任务保持未绑定，目录留给人处理。
+    </p>
+    <p>
+      <code>remove_worktree</code> 不是模型工具。pending 或 in_progress 的绑定、当前轮还握着的 lease，都会拒绝移除。
+      没明确丢弃改动时，脏工作区也拒绝清理。移除成功仍保留仓库里的 <code>wt/&lt;name&gt;</code> 分支。
+      任务完成不等于目录已经合并或删除。
+    </p>
+    <p class="src">
+      README 的边界：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/README.zh.md:289">L289–303</a>。
+    </p>
+
+    <h3>和相邻课的边界</h3>
+    <table>
+      <tr><th></th><th>留下什么</th><th>不负责</th></tr>
+      <tr>
+        <td>s06 Subagent</td>
+        <td>一次调用、丢掉中间过程</td>
+        <td>跨任务留着的队友</td>
+      </tr>
+      <tr>
+        <td>s10 Task System</td>
+        <td>落盘、前置、两阶段建图</td>
+        <td>多个循环、收件箱、worktree</td>
+      </tr>
+      <tr>
+        <td>s13 Teams</td>
+        <td>确认后启动、原子认领、计划闸门</td>
+        <td>后台 Bash、到点触发、外部 MCP</td>
+      </tr>
+    </table>
+
+    <h2>动手：真跑 North s13</h2>
+    <pre>cd learn-claude-code-north
+python s13_agent_teams\code.py</pre>
+    <p>需要可用的模型和当前目录是一个 Git 仓库（认证任务要建 worktree 时）。</p>
+    <pre>把后端重构拆到共享任务板，在依赖允许时并行完成配置、认证和测试。
+认证任务使用 worktree，保持现有接口，并在最后汇总结果。</pre>
+    <p>Lead 提案之后再回复：<code>开始吧</code>。</p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/README.zh.md:420">README L420–438</a>。
+    </p>
+
+    <h3>观察一：确认之前没有队友线程</h3>
+    <p>
+      第一轮终端里应是分工说明，而不是 <code>[teammate] ... spawned</code>。
+      你回复开始之后，才应看到任务创建、认领和 spawned。
+    </p>
+
+    <h3>观察二：结果和空闲是两条</h3>
+    <p>
+      <code>.mailboxes/</code> 或终端 <code>[bus]</code> 里应能区分 <code>result</code> 和 <code>idle_notification</code>。
+      Lead 的下一轮由运行时唤醒，不需要你提醒它去读收件箱。
+    </p>
+
+    <h3>观察三：目录只跟着认领走</h3>
+    <p>
+      <code>.worktrees/</code> 只出现在绑了 worktree 的任务上。
+      没认领的队友若调用写文件，结果应是先认领，而不是写进仓库根。
+    </p>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>队友就是 s06 多叫几次：</strong>不是。队友线程跨任务保留 messages，并用收件箱双向通信。</li>
+        <li><strong>把两个队友的工具结果放进同一份 messages：</strong>本章不这样做。各写各的数组。</li>
+        <li><strong>模型可以调用 check_inbox：</strong>没有这个工具。消费是运行时的事。</li>
+        <li><strong>result 已经表示人闲了：</strong>不表示。闲不闲看后一条 <code>idle_notification</code>。</li>
+        <li><strong>扫描到了就一定领到：</strong>不一定。认领时会重读状态，别人可能已经领走。</li>
+        <li><strong>worktree 坏了就用仓库根：</strong>不会。认领直接失败。</li>
+        <li><strong>没认领也能在仓库根改文件：</strong>队友的文件和 Shell 工具会拒绝。</li>
+        <li><strong>complete 一返回，目录立刻切走：</strong>不会。要等这轮结束、回到 IDLE 才释放。</li>
+        <li><strong>计划被拒仍可 bash：</strong>不可以。闸门挡住 bash、写、改。</li>
+        <li><strong>队友遇到危险命令会问你 Allow?：</strong>不会。它不读键盘，把 permission 错误交回去。</li>
+        <li><strong>worktree 等于沙箱：</strong>不等于。Shell 仍能访问进程有权访问的路径。</li>
+        <li><strong>模型可以 remove_worktree：</strong>不可以。清理是宿主函数。</li>
+        <li><strong>队友可以改依赖边：</strong>不可以。改图的 <code>update_task</code> 在 Lead 侧。</li>
+        <li><strong>本章同时会到点跑 cron：</strong>不会。s11 和 s12 没带进来。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。提示要求先提案。运行时不会把「开始吧」解析成第二道硬闸门。"
+      data-bad="代码不会在 spawn 之前替你检查自然语言。带 task_id 的调用会先认领。">
+      <p>第一轮 Lead 应该先做什么？</p>
+      <button data-correct="true">先写出分工并等待你确认</button>
+      <button data-correct="false">立刻启动队友再补任务图</button>
+      <button data-correct="false">运行时会拒绝未确认的启动</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。读走会 unlink。Lead 只有 consume_lead_inbox 这一处消费者。"
+      data-bad="没有第二个模型工具可以再读同一批。也不是共享 messages。">
+      <p>lead 收件箱被读取之后，文件怎样？</p>
+      <button data-correct="true">这一次读完就把文件删掉</button>
+      <button data-correct="false">文件留着给队友再读一遍</button>
+      <button data-correct="false">内容会复制进每个队友的对话</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。result 讲产出，idle_notification 讲能不能再接活。"
+      data-bad="计划仍 pending 时两条都不发。一句「完成了」盖不住这两种状态。">
+      <p>队友做完一项任务时，Lead 应看到什么？</p>
+      <button data-correct="true">先看到结果再看到空闲通知</button>
+      <button data-correct="false">只看到一条含糊的完成了</button>
+      <button data-correct="false">空闲通知里写着完整产出</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。扫描是快照。claim_task 在锁里重读，失败就返回说明文字。"
+      data-bad="不会两个人都写成 owner。worktree 坏了也不会退回仓库根。">
+      <p>两个队友同时看见同一条 ready 任务，会怎样？</p>
+      <button data-correct="true">只有一个认领能写成进行中</button>
+      <button data-correct="false">两个人都会成为这条的 owner</button>
+      <button data-correct="false">后认领的人改到仓库根目录去</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。required、pending、rejected 都挡住 bash 和写改。读文件还可以。"
+      data-bad="not_required 和 approved 才放行改工作区的工具。">
+      <p>计划状态是 pending 时，队友调用 bash 会怎样？</p>
+      <button data-correct="true">工具分发直接返回被闸门挡住</button>
+      <button data-correct="false">命令照常执行只是事后记一笔</button>
+      <button data-correct="false">读文件也会一起被这道闸门拒绝</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。没 assignment 就返回错误。绑定损坏时认领失败，不改用 WORKDIR。"
+      data-bad="worktree 只换默认目录，不是沙箱，但失败路径不会偷偷退回仓库根。">
+      <p>队友还没认领任务就 write_file，会怎样？</p>
+      <button data-correct="true">要求先认领而不会写进仓库根</button>
+      <button data-correct="false">自动使用仓库根目录继续写</button>
+      <button data-correct="false">worktree 失败时也退回仓库根</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。complete 只改任务状态。assignment 留到回到 IDLE。"
+      data-bad="失败的完成也不会清目录。模型工具列表里没有 remove_worktree。">
+      <p>complete_task 成功返回的那一刻，工作目录怎样？</p>
+      <button data-correct="true">本轮剩余工具仍用这个目录</button>
+      <button data-correct="false">返回瞬间就把目录切回仓库根</button>
+      <button data-correct="false">模型接着就会删除这个 worktree</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能区分 s06 一次委派和 s13 持久队友：生命周期、上下文、通信方向。</li>
+      <li>能说明确认启动写在系统提示里；带 <code>task_id</code> 的启动会先认领，失败不开线程。</li>
+      <li>能说明收件箱是删文件式的单消费者，<code>check_inbox</code> 不是工具。</li>
+      <li>能分开 <code>result</code> 和 <code>idle_notification</code>，并知道计划 pending 时两条都不发。</li>
+      <li>能按顺序讲空闲循环：先等消息，再原子认领一个；扫描不是认领。</li>
+      <li>能说明没认领就没有 cwd；worktree 坏了不退回仓库根；worktree 不是沙箱；模型不能移除它。</li>
+      <li>能说明计划闸门挡住 bash、写、改，挡不住读。</li>
+      <li>真跑 <code>python s13_agent_teams\code.py</code>，确认之前没有 spawned；确认之后能看到认领，以及 result 与 idle 两条事件。</li>
+    </ul>
+
+    <h2>速查</h2>
+    <div class="box">
+      <p>
+        <a href="../../reference/phase-2/s13-agent-teams.html">阶段 2 · s13 Agent Teams 速查</a>。
+        术语在 <a href="../../GLOSSARY.md">GLOSSARY.md</a> 的 Agent Teams 部分。
+      </p>
+    </div>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>
+          主阅读：
+          <a href="../../learn-claude-code-north/s13_agent_teams/README.zh.md">North s13 中文 README</a>。
+        </li>
+        <li>
+          任务图回看：
+          <a href="./0030-task-system.html">0030</a>。
+          两阶段建图没变，变的是谁来认领。
+        </li>
+        <li>
+          一次委派回看：
+          <a href="./0026-subagent.html">0026</a>。
+        </li>
+        <li>
+          下一课 s14：工具不再全部手写在 <code>code.py</code> 里，连接外部服务后再放进同一工具池。
+        </li>
+      </ul>
+    </div>
+
+    <p>
+      <a href="./index.html">阶段 2 分册</a>
+      · <a href="./0032-cron-scheduler.html">上一课 0032</a>
+    </p>
+    <div data-lesson-id-footer="0033"></div>
+    <footer>
+      不清楚的立刻问我。下一课 s14：连接一个服务，把它的工具放进下一轮的工具池。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

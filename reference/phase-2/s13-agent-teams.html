@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>阶段 2 · s13 Agent Teams 速查</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+  <link rel="stylesheet" href="../../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="../index.html">速查索引</a> · 课 0033 · 打印友好</p>
+    <h1>s13：Agent Teams</h1>
+    <p class="mission">
+      Lead 提案并等确认；队友各写各的对话；结果经收件箱回到 Lead。
+    </p>
+    <p class="src">
+      来源：
+      <a href="../../learn-claude-code-north/s13_agent_teams/README.zh.md">s13 README</a>
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/README.zh.md:39">L39–169</a>；
+      <a href="../../learn-claude-code-north/s13_agent_teams/code.py">code.py</a>
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:281">L281–309</a>、
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s13_agent_teams/code.py:1148">L1148–1405</a>。
+    </p>
+
+    <h2>一张图</h2>
+    <pre>你确认
+  ↓
+Lead 建任务，必要时 create_worktree
+  ↓
+spawn：先 claim，成功才开线程
+  ↓
+队友 WORK（自己的 messages）
+  ↓
+result，然后 idle_notification
+  ↓
+consume_lead_inbox → 下一轮 Lead
+空闲：先等消息，再原子认领下一项</pre>
+
+    <h2>不要混</h2>
+    <ul>
+      <li>s06 做完即弃。队友是 WORK → IDLE → WORK，直到关机。</li>
+      <li><code>result</code> 讲产出。<code>idle_notification</code> 讲还能不能接活。</li>
+      <li>收件箱读完即删。没有 <code>check_inbox</code> 工具。</li>
+      <li>扫描不是认领。锁内重读，失败返回文字。</li>
+      <li>没认领就没有 cwd。worktree 坏了不退回仓库根。</li>
+      <li>计划不是 <code>not_required</code> / <code>approved</code> 时，bash、写、改被挡，读不被挡。</li>
+      <li>模型不能 <code>remove_worktree</code>。worktree 不是沙箱。</li>
+    </ul>
+
+    <h2>不负责</h2>
+    <ul>
+      <li>不带 s11 后台，不带 s12 闹钟。</li>
+      <li>确认启动靠系统提示，代码不解析「开始吧」。</li>
+      <li>队友不读你的键盘。危险命令返回 permission 错误。</li>
+    </ul>
+
+    <h2>过关句</h2>
+    <p class="box">
+      <strong>团队 = 分开的对话 + 删文件式收件箱 + 锁内认领。</strong>
+      你确认边界；运行时送结果；目录跟着任务走。
+    </p>
+    <p>
+      <a href="../../lessons/phase-2/0033-agent-teams.html">打开 0033 课件</a> ·
+      <a href="../../lessons/phase-2/0030-task-system.html">回看 s10</a> ·
+      <a href="../../lessons/phase-2/0026-subagent.html">回看 s06</a>
+    </p>
+    <footer>下一课：s14 MCP。外部工具下一轮才进入工具池。</footer>
+  </main>
+</body>
+</html>

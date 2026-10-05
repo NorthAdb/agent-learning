@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>阶段 2 · s15 Integrated Harness 速查</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+  <link rel="stylesheet" href="../../assets/reference.css" />
+</head>
+<body>
+  <main class="ref">
+    <p class="meta"><a href="../index.html">速查索引</a> · 课 0035 · 打印友好</p>
+    <h1>s15：Integrated Harness</h1>
+    <p class="mission">
+      不新增机制。规定每种旧事件在同一轮的哪一步写进同一份 messages。
+    </p>
+    <p class="src">
+      来源：
+      <a href="../../learn-claude-code-north/s15_integrated_harness/README.zh.md">s15 README</a>
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/README.zh.md:59">L59–177</a>；
+      <a href="../../learn-claude-code-north/s15_integrated_harness/code.py">code.py</a>
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s15_integrated_harness/code.py:3102">L3102–3261</a>。
+    </p>
+
+    <h2>一轮</h2>
+    <pre>注入 cron 与后台通知
+  ↓
+prepare_context
+  ↓
+组装 system 与工具池（26 个内置名 + 已连接 MCP）
+  ↓
+call_llm 成功才确认 cron
+  ↓
+无 tool_use → Stop、记记忆、释放 assignment
+有 tool_use → PreToolUse → 后台占位或同步执行</pre>
+
+    <h2>和单章不同的缝</h2>
+    <ul>
+      <li><code>task</code> 是一次子代理。<code>create_task</code> 才写任务图。<code>todo_write</code> 是会话清单。</li>
+      <li>后台：主线程不对占位结果跑 PostToolUse；worker 里对着真实输出再跑。</li>
+      <li>非主线程：所有 bash 直接拒绝。需要确认的 MCP 也直接拒绝。</li>
+      <li><code>async_event_loop</code> 在你不打字时，因 cron、Lead 收件箱或后台结果再开一轮。</li>
+      <li>先注入再压缩。通知不是永不裁剪的侧频道。</li>
+    </ul>
+
+    <h2>没改义的部分</h2>
+    <ul>
+      <li>后台仍要 bash 且布尔真。cron 仍是五段。MCP 仍是下一轮才进池、宿主策略才算授权。</li>
+      <li>worktree 仍不是沙箱。模型仍不能移除它。</li>
+    </ul>
+
+    <h2>过关句</h2>
+    <p class="box">
+      <strong>集成 = 同一个循环 + 规定事件从哪进、从哪回。</strong>
+      叫醒你的是 CLI 的事件循环，不是每一个单章机制自己会叫模型。
+    </p>
+    <p>
+      <a href="../../lessons/phase-2/0035-integrated-harness.html">打开 0035 课件</a>
+    </p>
+    <footer>下一课：s16。固定编排写进脚本，一次工具调用跑完。</footer>
+  </main>
+</body>
+</html>

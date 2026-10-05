@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0034 · s14 MCP Tools</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0034"></div>
+    <h1>s14：连接之后，下一轮才看得见新工具</h1>
+    <p class="mission">
+      到 s13 为止，工具定义都写在当章 <code>code.py</code> 里。
+      每接一个文档系统或部署平台，就要再手写一份 schema 和调用代码。
+      本课把这件事拆开：server 提供工具列表和调用入口，Harness 负责连接、起名、按宿主策略授权，
+      再把发现的工具放进<strong>下一轮</strong>的工具池。
+      课程里的 docs 和 deploy 是进程内替身，用来看清这条边界。大目标仍是造 harness：
+      模型看见的工具表可以变，循环的形状不变。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      主材料：North
+      <a href="../../learn-claude-code-north/s14_mcp_plugin/README.zh.md">s14 中文 README</a>
+      （角色拆分
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/README.zh.md:11">L11–29</a>，
+      组装、前缀、宿主策略
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/README.zh.md:35">L35–153</a>）
+      +
+      <a href="../../learn-claude-code-north/s14_mcp_plugin/code.py"><code>s14_mcp_plugin/code.py</code></a>
+      （<code>MCPClient</code>
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:163">L163–191</a>，
+      连接与模拟 server
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:198">L198–299</a>，
+      组装工具池
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:316">L316–365</a>，
+      权限与循环
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:394">L394–519</a>）。
+      MCP 这个名字来自模型上下文协议。本章没有实现真实的网络传输。
+      本书未把这套 <code>MCPClient</code> 写成独立章。
+    </p>
+    <p class="muted">
+      <strong>本课已内化</strong>：开始时模型只看见五个基础工具加 <code>connect_mcp</code>；
+      连接成功后，下一轮 <code>assemble_tool_pool</code> 才把 <code>mcp__服务器__工具</code> 放进请求；
+      名字规范化后冲突或超过 64 字符会在组装时抛错，循环把错误写成助手文本并停这轮；
+      授权看宿主的 <code>MCP_HOST_POLICY</code>，不看 server 自己写的 <code>readOnlyHint</code>；
+      未列入策略的外部工具默认要你确认；
+      lambda 用默认参数绑住当时的 client 和工具名；
+      调用错误变成 <code>tool_result</code>，不让脚本退出。
+      <strong>故意跳过</strong>：真实 MCP 传输、JSON-RPC、任务图、后台、cron、团队。
+      README 写明这些留到 s15 再和 MCP 放在一起。
+      <strong>不另写</strong> playground。
+    </p>
+    <p class="muted">
+      <strong>行号约定：</strong><code>L316</code> 等是源码导航，点 <code>cursor://file/...</code> 核对。
+    </p>
+
+    <h3>本课新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>出处</th></tr>
+      <tr>
+        <td><strong>MCP</strong></td>
+        <td>一种约定：server 列出工具并接受调用，宿主决定连谁、叫什么名、允不允许。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/README.zh.md:15">README L15</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>MCPClient</code></strong></td>
+        <td>进程内替身。记住工具定义和 handler。<code>call_tool</code> 按原始名字调用。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:163">code.py L163–190</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>connect_mcp</code></strong></td>
+        <td>按名字取出模拟 server，放进 <code>mcp_clients</code>。这一轮还不会把新工具发给模型。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:282">code.py L282–295</a></td>
+      </tr>
+      <tr>
+        <td><strong>工具池</strong></td>
+        <td>这一轮 <code>messages.create</code> 的 <code>tools</code> 参数。每轮重新组装。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:479">code.py L479–487</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>mcp__服务器__工具</code></strong></td>
+        <td>模型看见的名字。两个下划线分段。handler 仍用 server 上的原始工具名。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:332">code.py L328–353</a></td>
+      </tr>
+      <tr>
+        <td><strong>宿主策略</strong></td>
+        <td>字典键是 <code>(服务器名, 原始工具名)</code>，值是 <code>allow</code> 或 <code>confirm</code>。没写的键按 confirm。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:198">code.py L197–203</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>readOnlyHint</code></strong></td>
+        <td>server 在工具定义上的自我说明。本章权限钩子不读它。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:227">code.py L227</a>；钩子 <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:414">L414–419</a></td>
+      </tr>
+    </table>
+
+    <h2>为什么现在学？</h2>
+    <p>
+      手写 <code>search_docs</code>、<code>deploy_status</code> 能跑，但每加一个服务就要改课程代码里的工具表。
+      把「有哪些工具」留给 server，宿主只保留连接和授权，工具表就可以在运行时变长。
+    </p>
+    <p>
+      循环仍然是：组工具、叫模型、有 <code>tool_use</code> 就执行、把 <code>tool_result</code> 追加回去。
+      变化的是组工具这一步不再读一份写死的 <code>TOOLS</code> 常量。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/README.zh.md:11">README L11–29</a>。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>s14 概念</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr>
+        <td><code>connect_mcp</code></td>
+        <td>服务发现：先连上，再拿接口列表</td>
+        <td>当前这次模型请求的工具表已经发出去了。新工具要等下一轮组装。</td>
+      </tr>
+      <tr>
+        <td><code>mcp__docs__search</code></td>
+        <td>用前缀避免两个 jar 里都有 <code>search</code></td>
+        <td>规范化会把 <code>.</code> 和 <code>/</code> 换成下划线。撞名直接报错，不悄悄合并。</td>
+      </tr>
+      <tr>
+        <td>lambda 默认参数</td>
+        <td>匿名类把要用的对象放进字段，而不是用循环变量</td>
+        <td>不写默认参数的话，循环结束后每个 lambda 都会看见最后一项。</td>
+      </tr>
+      <tr>
+        <td><code>MCP_HOST_POLICY</code></td>
+        <td>网关自己的鉴权表，不信任下游自称「只读」</td>
+        <td><code>readOnlyHint: true</code> 不会变成 allow。没配置就 confirm。</td>
+      </tr>
+      <tr>
+        <td>模拟 server</td>
+        <td>测试里的 fake，而不是真 HTTP</td>
+        <td>本章没有 socket、没有握手。工厂函数在进程里 <code>register</code>。</td>
+      </tr>
+    </table>
+
+    <h2>整体设计</h2>
+    <h3>模块地图</h3>
+    <pre>保留 s04：五个工具、Hooks、Permission
+
+s14 加上
+  MOCK_SERVERS          docs、deploy 两个工厂
+  connect_mcp           实例化并放进 mcp_clients
+  assemble_tool_pool    内置工具 + 已连接 server 的带前缀工具
+  MCP_HOST_POLICY       宿主授权，默认 confirm
+  agent_loop            每轮先组装，再 messages.create</pre>
+
+    <h3>一次完整运行</h3>
+    <pre>第 1 轮工具表
+  bash, read_file, write_file, edit_file, glob, connect_mcp
+
+模型调用 connect_mcp(name="docs")
+  mcp_clients["docs"] = 模拟 server
+  tool_result: Connected ... search, get_version
+  这一次请求的 tools 参数里还没有 mcp__docs__search
+
+第 2 轮再次 assemble_tool_pool
+  多出 mcp__docs__search、mcp__docs__get_version
+  模型可以调用它们
+
+permission_hook
+  ("docs","search") 是 allow，不询问
+  ("deploy","trigger") 是 confirm，先问 Allow?
+  表里没有的 mcp__ 名字，也按 confirm</pre>
+    <p class="box">
+      <strong>一句话：</strong>连接是这一轮的工具结果；新工具名要到下一轮组池时才交给模型。
+    </p>
+    <p class="src">
+      轨迹：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/README.zh.md:185">README L185–190</a>。
+      组装点：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:482">code.py L482</a>。
+    </p>
+
+    <h3>状态放在哪一层？</h3>
+    <table>
+      <tr><th>位置</th><th>保存什么</th><th>模型看不看得见</th></tr>
+      <tr>
+        <td><code>mcp_clients</code></td>
+        <td>已连接的 client</td>
+        <td>看不见对象。系统提示里会多一句已连接的名字</td>
+      </tr>
+      <tr>
+        <td>本轮 <code>tools</code></td>
+        <td>组装出来的 schema</td>
+        <td>看得见。只包含此刻已经连接的 server</td>
+      </tr>
+      <tr>
+        <td><code>mcp_tool_policies</code></td>
+        <td>带前缀的名字 → allow 或 confirm</td>
+        <td>看不见。权限钩子查这张表</td>
+      </tr>
+      <tr>
+        <td>server 上的 annotations</td>
+        <td><code>readOnlyHint</code> 等</td>
+        <td>描述可以出现在 schema 里。钩子不拿它当授权</td>
+      </tr>
+    </table>
+
+    <h2>规则先看四条小例</h2>
+    <h3>例 1：同一轮看不见刚连上的工具</h3>
+    <p>
+      <code>messages.create</code> 的 <code>tools</code> 在这次调用前就定了。
+      模型即使在这条回复里先调用 <code>connect_mcp</code>，同一次回复里也不可能合法地调用
+      <code>mcp__docs__search</code>，因为那个名字还不在它收到的工具表里。
+      它要等工具结果回到对话，循环再组装一次。
+    </p>
+    <p>
+      这和 s10「同一条回复里的参数在执行前已经写死」是同一类限制：
+      后一个工具的参数不能使用前一个工具还没返回的发现结果，除非模型再要一轮。
+    </p>
+
+    <h3>例 2：前缀和撞名</h3>
+    <pre>docs 的 search     → mcp__docs__search
+deploy 的 status   → mcp__deploy__status
+
+规范化：字母数字、下划线、减号以外都变成 _
+  docs.one / get.version
+  docs_one / get_version
+  两者都会变成 mcp__docs_one__get_version
+
+assemble 发现 prefixed 已经在 origins 里
+  raise ValueError(...collision...)
+  agent_loop 抓住异常，写成助手文本 [Error] ValueError: ...
+  然后 Stop，这一轮不再执行工具</pre>
+    <p>
+      名字长于 64 字符同样在组装时抛错。空规范化结果也会在 <code>normalize_mcp_name</code> 里失败。
+      冲突不是「后者覆盖前者」。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:206">code.py L206–211</a>、
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:332">L332–340</a>、
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:490">L490–499</a>。
+    </p>
+
+    <h3>例 3：默认参数绑住这一项</h3>
+    <pre>handlers[prefixed] = (
+    lambda *, client=server, tool=raw_name, **kwargs:
+    client.call_tool(tool, kwargs)
+)</pre>
+    <p>
+      <code>client=server</code> 和 <code>tool=raw_name</code> 在<strong>创建这个函数时</strong>就取值。
+      循环继续，外层的 <code>server</code> 变量会变成下一个 server，已创建的 lambda 仍调用当初那个 client。
+      模型传入的参数进 <code>kwargs</code>，再交给原始工具名。
+      漏了必填参数时，<code>call_tool</code> 捕获 <code>TypeError</code>，返回以 <code>MCP error:</code> 开头的字符串。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:350">code.py L350–353</a>、
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:183">L183–190</a>。
+      默认参数在定义时绑定：
+      <a href="https://docs.python.org/3/faq/programming.html#why-are-default-values-shared-between-objects">Python FAQ：默认值</a>。
+      本章用的是「每个 lambda 自己的默认值」，正是为了避开循环变量晚绑定。
+    </p>
+
+    <h3>例 4：自我声明的只读不算放行</h3>
+    <pre>MCP_HOST_POLICY
+  ("docs", "search")       allow
+  ("docs", "get_version")  allow
+  ("deploy", "status")     allow
+  ("deploy", "trigger")    confirm
+
+docs.search 的 annotations 里虽然有 readOnlyHint: true
+permission_hook 不读 annotations
+它只查 mcp_tool_policies[带前缀的名字]
+
+表里没有的外部工具 → 组装时写成 confirm</pre>
+    <p>
+      所以「描述里写了 readOnly」不会跳过询问。
+      <code>deploy.trigger</code> 即使你只是想看看，策略仍是 confirm。
+    </p>
+    <p class="src">
+      策略表：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:198">code.py L198–203</a>。
+      钩子：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:414">L414–419</a>。
+      默认 confirm：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:354">L354–356</a>。
+    </p>
+
+    <h2>细节实现</h2>
+    <h3>连接是幂等的失败，不是刷新</h3>
+    <p>
+      同名已经在 <code>mcp_clients</code> 里，返回 <code>already connected</code>，不会重新发现工具。
+      名字不在 <code>MOCK_SERVERS</code> 里，返回 Unknown server，并列出 docs、deploy。
+      没有「断开」工具。进程结束，这张字典就没了。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/code.py:282">code.py L282–287</a>。
+    </p>
+
+    <h3>schema 用的是 server 的 inputSchema</h3>
+    <p>
+      组装时把 <code>inputSchema</code> 放进模型的 <code>input_schema</code>。
+      它必须是对象，且 type 缺省或就是 <code>object</code>。否则组装抛错，同样走到循环的错误返回。
+      模型看见带前缀的名字；<code>call_tool</code> 使用注册时的原始名字。两边不是同一个字符串。
+    </p>
+
+    <h3>和相邻课的边界</h3>
+    <table>
+      <tr><th></th><th>工具从哪来</th><th>不负责</th></tr>
+      <tr>
+        <td>s04</td>
+        <td>五个写死的工具</td>
+        <td>运行时发现</td>
+      </tr>
+      <tr>
+        <td>s14</td>
+        <td>五个 + connect + 已连接的 MCP</td>
+        <td>真传输；任务、团队、闹钟、后台</td>
+      </tr>
+      <tr>
+        <td>s15</td>
+        <td>把这条动态池和前面的机制放进同一个循环</td>
+        <td>本章还没做那次合并</td>
+      </tr>
+    </table>
+
+    <h2>动手：真跑 North s14</h2>
+    <pre>cd learn-claude-code-north
+python s14_mcp_plugin\code.py</pre>
+    <pre>连接 docs server，搜索 agent hooks，并告诉我当前文档 API 版本。</pre>
+    <p>
+      期望顺序：<code>connect_mcp</code>，下一轮才是 <code>mcp__docs__search</code> 和 <code>mcp__docs__get_version</code>。
+      search 不应弹出 Allow。终端会有 <code>[mcp] connected: docs</code>。
+    </p>
+    <pre>连接 deploy server，查看 web 服务状态，不要触发部署。</pre>
+    <p>
+      <code>mcp__deploy__status</code> 按策略直接执行。
+      若模型仍调用了 <code>mcp__deploy__trigger</code>，应先问 <code>Allow?</code>。不要为了看拒绝而真的同意部署。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s14_mcp_plugin/README.zh.md:173">README L173–199</a>。
+    </p>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>connect 的同一轮就能调用新工具：</strong>不能。工具表在这次 <code>messages.create</code> 之前已经定了。</li>
+        <li><strong>两个 server 的 search 会重名：</strong>模型看见的名字带服务器前缀。</li>
+        <li><strong>点号和斜杠会各自保留：</strong>不会。规范化后撞车就抛错，循环停在错误文本。</li>
+        <li><strong>readOnlyHint 为真就自动允许：</strong>不会。只查宿主策略。</li>
+        <li><strong>没写进策略表的工具默认允许：</strong>不。默认 confirm。</li>
+        <li><strong>lambda 都指向最后一个 server：</strong>不会。默认参数在创建时绑住 client 和原始工具名。</li>
+        <li><strong>参数漏了会让脚本崩溃：</strong>不会。返回 <code>MCP error: TypeError: ...</code> 这种 tool_result。</li>
+        <li><strong>再次 connect 会刷新工具列表：</strong>不会。返回 already connected。</li>
+        <li><strong>本章会走真的 MCP 网络：</strong>不会。docs 和 deploy 是进程内工厂。</li>
+        <li><strong>系统提示会塞进每个 MCP 工具的全文：</strong>不会。只追加已连接的服务器名字。工具 schema 在 tools 参数里。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。connect 的结果要回到对话后，下一轮才会重新组装工具表。"
+      data-bad="同一次 messages.create 的 tools 不会中途变长。">
+      <p>connect_mcp 成功的那一轮，模型能调用新工具吗？</p>
+      <button data-correct="true">不能要等下一轮重新组装</button>
+      <button data-correct="false">可以在同一条回复里接着调用</button>
+      <button data-correct="false">新工具会写进系统提示全文</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。模型看见前缀名，call_tool 使用注册时的原始名字。"
+      data-bad="不是把前缀再传给 server，也不是两个 search 共用一个无前缀名字。">
+      <p>docs 的 search 在模型侧和调用侧各叫什么？</p>
+      <button data-correct="true">模型侧带前缀调用侧用原名</button>
+      <button data-correct="false">两边都使用不带前缀的 search</button>
+      <button data-correct="false">server 收到的也是带前缀的名字</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。规范化后同名会 ValueError。循环写成错误文本并结束这轮。"
+      data-bad="不会静默覆盖，也不会让两个工具共用一个 handler。">
+      <p>两个工具规范化成同一个名字时会怎样？</p>
+      <button data-correct="true">组装抛错并且这一轮停住</button>
+      <button data-correct="false">后注册的工具悄悄覆盖前者</button>
+      <button data-correct="false">两个工具合并成一个允许调用</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。钩子只查宿主表。没配置的 mcp__ 工具按 confirm。"
+      data-bad="readOnlyHint 留在定义里，不参与 allow 判断。">
+      <p>谁决定一个 MCP 工具要不要询问？</p>
+      <button data-correct="true">宿主策略表没写就默认询问</button>
+      <button data-correct="false">server 的只读标记会自动放行</button>
+      <button data-correct="false">所有外部工具都无条件直接执行</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。默认参数在创建 lambda 时取到当时的 server 和原始工具名。"
+      data-bad="若闭包直接读循环变量，全部 handler 会在循环结束后指向最后一项。">
+      <p>工具池里的 lambda 为什么用默认参数？</p>
+      <button data-correct="true">为了绑住创建当时的那一项</button>
+      <button data-correct="false">为了让全部工具指向最后一项</button>
+      <button data-correct="false">为了把前缀名传给 server 调用</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。call_tool 和 execute_tool 都把异常收成字符串结果。"
+      data-bad="课程脚本不会因此退出。模型可以在下一轮改参数。">
+      <p>MCP 工具少了必填参数时，循环怎样？</p>
+      <button data-correct="true">返回一条 MCP 错误工具结果</button>
+      <button data-correct="false">整个课程脚本因此直接崩溃</button>
+      <button data-correct="false">宿主会用空字符串补上参数</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能说明本章循环没变，变的是每轮工具表由 <code>assemble_tool_pool</code> 现组。</li>
+      <li>能说出连接成功和模型看见新工具之间隔着一轮。</li>
+      <li>能写出 <code>mcp__服务器__工具</code>，并说明调用仍用原始名。</li>
+      <li>能说明规范化撞名或超长会在组装时失败，循环停在错误文本，而不是覆盖。</li>
+      <li>能说明授权只看 <code>MCP_HOST_POLICY</code>，<code>readOnlyHint</code> 不放行；缺省是 confirm。</li>
+      <li>能说明 lambda 默认参数是为了绑住当前 client，而不是晚绑定到最后一项。</li>
+      <li>能指出 docs / deploy 是进程内替身，没有真实传输；本章不带团队、任务、cron、后台。</li>
+      <li>真跑 <code>python s14_mcp_plugin\code.py</code>，看见 connect 在前、带前缀的 docs 工具在后；status 不询问，trigger 会询问。</li>
+    </ul>
+
+    <h2>速查</h2>
+    <div class="box">
+      <p>
+        <a href="../../reference/phase-2/s14-mcp-tools.html">阶段 2 · s14 MCP Tools 速查</a>。
+        术语在 <a href="../../GLOSSARY.md">GLOSSARY.md</a> 的 MCP Tools 部分。
+      </p>
+    </div>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>
+          主阅读：
+          <a href="../../learn-claude-code-north/s14_mcp_plugin/README.zh.md">North s14 中文 README</a>。
+        </li>
+        <li>
+          固定工具池回看：
+          <a href="./0022-tool-use.html">0022</a>、<a href="./0024-hooks.html">0024</a>。
+          分发和钩子还在，工具来源变了。
+        </li>
+        <li>
+          下一课 s15 把这条动态池和任务、团队、后台、闹钟放进同一个 <code>agent_loop</code>。
+        </li>
+      </ul>
+    </div>
+
+    <p>
+      <a href="./index.html">阶段 2 分册</a>
+      · <a href="./0033-agent-teams.html">上一课 0033</a>
+    </p>
+    <div data-lesson-id-footer="0034"></div>
+    <footer>
+      不清楚的立刻问我。下一课 s15：多种机制从哪里进入同一个循环，事件又怎样回到同一段对话。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>

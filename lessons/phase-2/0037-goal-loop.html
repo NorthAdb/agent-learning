@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>0037 · s17 Goal Loop</title>
+  <link rel="stylesheet" href="../../assets/lesson.css" />
+</head>
+<body>
+  <main>
+    <div data-lesson-id="0037"></div>
+    <h1>s17：想停不等于做完，判断器只看对话里的证据</h1>
+    <p class="mission">
+      从 s01 起，模型不再调用工具，循环就返回。这对聊天够用。
+      「修到 pytest 退出码为 0」却不够：模型可以以为自己做完了，对话里却没有那次命令的结果。
+      本课在停止点加一个会话级判断。干活的模型和判断器不是同一次调用。
+      判断器没有工具，只能根据已经写进 <code>messages</code> 的内容说完成、没完成、或已经不可能。
+      大目标仍是造 harness：谁有权宣布结束，要和谁在改代码分开。
+    </p>
+
+    <h2>覆盖声明</h2>
+    <p class="muted">
+      主材料：North
+      <a href="../../learn-claude-code-north/s17_goal_loop/README.zh.md">s17 中文 README</a>
+      （停止点
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/README.zh.md:21">L21–49</a>，
+      判断器能看见什么
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/README.zh.md:51">L51–89</a>，
+      出口与命令
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/README.zh.md:115">L115–170</a>）
+      +
+      <a href="../../learn-claude-code-north/s17_goal_loop/code.py"><code>s17_goal_loop/code.py</code></a>
+      （对话摘录
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:148">L148–176</a>，
+      判断之后的动作
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:354">L354–422</a>，
+      主循环接入点
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:726">L726–756</a>，
+      后台结果如何回来
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:659">L659–673</a>）。
+      本章是以 s04 的五个工具和四类钩子为底的独立示例，没有把 s15 的 26 个工具再装进来。
+      本书没有这个 Goal 判断器。
+    </p>
+    <p class="muted">
+      <strong>本课已内化</strong>：<code>/goal 条件</code> 保存条件并立刻开工，不用再输入「开始」；
+      没有工具调用时才进入判断；没有活跃目标则动作是 <code>allow</code>，退出条件仍和 s01 一样；
+      后台还在跑则 <code>defer</code>，不调用判断器；
+      <code>ok</code> 才 <code>achieved</code> 并清除活跃目标；<code>impossible</code> 是 <code>failed</code>，也不假装完成；
+      没完成是 <code>block</code>，把理由追加进同一份 messages 再 <code>continue</code>；
+      连续阻止超过 <code>block_cap</code>（默认 8）变成 <code>limit</code>，目标仍在；
+      判断器抛错是 <code>error</code>，不宣布成功；
+      全局 <code>max_turns</code> 是另一道出口；
+      判断器不读文件、不跑测试；完成条件要能在对话里核对；
+      同一会话只有一个活跃目标；<code>/goal clear</code> 以及 stop、off、reset、none、cancel 会清除；
+      CLI 不把整个会话落盘。<code>restore</code> 只恢复仍活跃的条件，轮数、时间和 token 重新算。
+      <strong>故意跳过</strong>：把判断器接进 s15 的全套工具、自造测试框架、给 Goal 一个隐藏的固定 20 轮预算。
+      <strong>不另写</strong> playground。
+    </p>
+    <p class="muted">
+      <strong>行号约定：</strong>点 <code>cursor://file/...</code> 核对。
+    </p>
+
+    <h3>本课新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>出处</th></tr>
+      <tr>
+        <td><strong>Goal</strong></td>
+        <td>这一次会话的完成条件。同时只有一个。换成新的会先记下旧的被替换。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:290">code.py L290–312</a></td>
+      </tr>
+      <tr>
+        <td><strong>判断器</strong></td>
+        <td>另一次模型调用。没有工具。输入是条件和摘录后的对话，输出是 ok、reason、impossible。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/README.zh.md:51">README L51–75</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>block</code></strong></td>
+        <td>还没完成。理由写回 messages，主循环继续，不必用户再说「继续」。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:737">code.py L737–750</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>defer</code></strong></td>
+        <td>后台还在跑。不调用判断器，目标保留。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:361">code.py L361–364</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>limit</code></strong></td>
+        <td>连续 block 超过上限。把控制权还给用户，目标仍是活跃的。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:414">code.py L414–420</a></td>
+      </tr>
+      <tr>
+        <td><strong><code>max_turns</code></strong></td>
+        <td>主循环的全局回合上限，环境变量 <code>MAX_TURNS</code>。不是判断器内部的隐藏预算。</td>
+        <td><a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:678">code.py L678–684</a></td>
+      </tr>
+    </table>
+
+    <h2>为什么现在学？</h2>
+    <p>
+      s16 可以报告 workflow 正常结束。结束的是那份脚本，不是「pytest 已经是 0」这件事。
+      若仍用「没有 tool_use 就 return」，模型停下来的愿望会直接变成会话结束。
+    </p>
+    <p>
+      判断器若自己还能跑命令，它就变成第二个干活的 Agent，宣布完成的人和制造证据的人又叠在一起。
+      本章把它做成只读对话的那一次调用。证据必须先被主模型写进消息。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/README.zh.md:15">README L15–19</a>、
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/README.zh.md:225">L225–231</a>。
+    </p>
+
+    <h2>和 Java 怎么对照</h2>
+    <table>
+      <tr><th>s17 概念</th><th>Java 直觉</th><th>关键差异</th></tr>
+      <tr>
+        <td>停止点再判一次</td>
+        <td>业务方法返回前，用另一段代码核对验收条件</td>
+        <td>核对者也是模型，但它没有仓库权限。它只能读已经发生的对话。</td>
+      </tr>
+      <tr>
+        <td><code>block</code> 后 continue</td>
+        <td>校验失败把原因塞回同一个请求再处理</td>
+        <td>没有单独的续跑队列。就在这个 while 里追加一条 user 消息。</td>
+      </tr>
+      <tr>
+        <td><code>defer</code></td>
+        <td>异步任务还没回调，先不要把订单标成完成</td>
+        <td>此刻根本不叫判断器。后台文本进来之后再跑同一条循环。</td>
+      </tr>
+      <tr>
+        <td><code>limit</code> 与 <code>max_turns</code></td>
+        <td>熔断：停止自动重试，工单仍开着</td>
+        <td>两道上限都不把目标改成已完成，也不自动 clear。</td>
+      </tr>
+      <tr>
+        <td>一个活跃 Goal</td>
+        <td>一个请求只有一个验收标准</td>
+        <td>再设一个就是替换。clear 的别名有六个，不是只认 clear 这一个词。</td>
+      </tr>
+    </table>
+
+    <h2>整体设计</h2>
+    <h3>模块地图</h3>
+    <pre>五个基础工具 + 四类钩子
+  GoalState            条件、判断次数、开始时间、最近理由
+  PromptGoalEvaluator  一次没有工具的模型调用
+  GoalController       set / clear / status / evaluate_after_turn
+  AgentSession         没有 tool_use 时才调用上面那个判断
+
+/goal 条件     保存并立刻把条件交给主模型
+/goal          查看
+/goal clear    清除。stop off reset none cancel 同义</pre>
+
+    <h3>一次没完成的回合</h3>
+    <pre>你：/goal python -m pytest 退出码为 0
+
+主模型调用 bash
+  tool_result 回到 messages
+  循环 continue，还不判断
+
+主模型不再调用工具
+  evaluate_after_turn
+  判断器看见对话里没有退出码
+  返回 ok=false
+
+动作 block
+  messages 追加 [Goal still active] 和理由
+  不 return
+  主模型下一轮继续干活
+
+直到 ok=true
+  动作 achieved，活跃目标清掉
+  SessionResult.status 是 achieved</pre>
+    <p class="box">
+      <strong>一句话：</strong>没有工具调用只表示这轮想停。有活跃目标时，停不停由判断器根据对话证据决定。
+    </p>
+    <p class="src">
+      接入点：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:726">code.py L726–756</a>。
+    </p>
+
+    <h3>动作对照</h3>
+    <table>
+      <tr><th>条件</th><th>动作</th><th>目标还在吗</th><th>循环</th></tr>
+      <tr>
+        <td>没有活跃目标</td>
+        <td><code>allow</code></td>
+        <td>本来就没有</td>
+        <td>返回</td>
+      </tr>
+      <tr>
+        <td>后台还在跑</td>
+        <td><code>defer</code></td>
+        <td>在</td>
+        <td>这次不判断。等结果进入 messages 再继续</td>
+      </tr>
+      <tr>
+        <td><code>ok=true</code></td>
+        <td><code>achieved</code></td>
+        <td>清除</td>
+        <td>返回</td>
+      </tr>
+      <tr>
+        <td><code>impossible=true</code></td>
+        <td><code>failed</code></td>
+        <td>清除</td>
+        <td>返回。不是完成</td>
+      </tr>
+      <tr>
+        <td>还没满足，且未超连续上限</td>
+        <td><code>block</code></td>
+        <td>在</td>
+        <td>追加理由并 continue</td>
+      </tr>
+      <tr>
+        <td>连续 block 超过 cap</td>
+        <td><code>limit</code></td>
+        <td>在</td>
+        <td>返回，把人叫回来</td>
+      </tr>
+      <tr>
+        <td>判断器调用抛错</td>
+        <td><code>error</code></td>
+        <td>在</td>
+        <td>返回，不宣称成功</td>
+      </tr>
+      <tr>
+        <td>主循环回合数到了 <code>max_turns</code></td>
+        <td><code>max_turns</code></td>
+        <td>在</td>
+        <td>在调用判断器之前就返回</td>
+      </tr>
+    </table>
+    <p class="src">
+      分支：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:354">code.py L354–422</a>。
+      回合上限：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:678">L678–684</a>。
+    </p>
+
+    <h2>规则先看四条小例</h2>
+    <h3>例 1：口说无凭</h3>
+    <pre>主模型最后一句：测试通过了
+对话里没有 pytest 的命令和退出码
+
+判断器的提示要求根据具体结果判断
+它仍可能被话术骗到，因为它看不到仓库
+所以主模型的 system 要求：跑完验证，把命令和结果写进对话
+
+Goal 不是测试框架
+它不自己执行 pytest</pre>
+    <p>
+      送给判断器的文本保留最近的完整消息，默认预算 24000 字符。
+      只有最新一条本身超长时，才保留它的头和尾，中间打省略。
+      不会为了塞进预算而把最近几条拆碎。
+    </p>
+    <p class="src">
+      摘录：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:148">code.py L148–176</a>。
+      README 对证据的要求：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/README.zh.md:77">L77–89</a>。
+    </p>
+
+    <h3>例 2：完成条件要写得能核对</h3>
+    <pre>差：把代码弄好
+好：pytest tests/auth 退出码为 0，并且没有改 tests/auth 以外的测试文件
+
+三件事
+  结束状态：退出码 0
+  验证方式：哪条命令
+  限制：不能动哪些文件</pre>
+    <p>
+      条件最长 4000 字符，空白条件会 <code>GoalError</code>。
+      想限制自动轮数，用 <code>MAX_TURNS=20</code>，不要在 Goal 里面再塞一个看不出来的 20。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/README.zh.md:91">README L91–113</a>。
+      长度：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:46">code.py L46</a>、
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:294">L294–296</a>。
+    </p>
+
+    <h3>例 3：后台没回来，先不要判</h3>
+    <pre>主模型这轮不再调工具，但 background_running 为真
+  evaluate_after_turn 返回 defer
+  不增加判断次数
+  不把目标标成失败
+
+宿主稍后 submit_background_result(文本)
+  messages 追加 [Background task completed]
+  若目标还在，把连续 block 计数清零，再跑 _run_query
+
+workflow 的完成通知没有特殊权限
+  它也只是对话里的一段文字
+  判断器仍看里面有没有条件要求的证据</pre>
+    <p class="src">
+      defer：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:361">code.py L361–364</a>。
+      后台文本：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:659">L659–673</a>。
+    </p>
+
+    <h3>例 4：停自动，不改成绩</h3>
+    <pre>连续 block 次数 &gt; block_cap（默认 8）
+  动作 limit
+  active 仍在
+  理由写明 Stop hook 连续阻止了多少轮
+
+判断器抛异常
+  动作 error
+  active 仍在
+  不走 achieved
+
+MAX_TURNS 到了
+  动作 max_turns
+  发生在这轮调用模型之前
+  目标仍在
+
+/goal clear
+  active 变成没有
+  记录原因 cleared，met 和 failed 都是否</pre>
+    <p>
+      <code>begin_query</code> 会把连续 block 计数归零。新目标、后台结果回来后继续，都算新的一段自动阻止，而不是接着上一次的 8 次。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:407">code.py L407–422</a>、
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:315">L315–327</a>。
+      别名：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:47">L47</a>。
+    </p>
+
+    <h2>细节实现</h2>
+    <h3>恢复不恢复计数器</h3>
+    <p>
+      <code>GoalController.restore</code> 从后往前找 <code>goal_status</code> 事件。
+      最后一条若 <code>active</code> 为真，就按那条条件新建 <code>GoalState</code>，但判断次数从 0 开始，开始时间是现在，token 起点是 0。
+      已经完成、失败或清除的事件不会把目标重新打开。
+      本章命令行不负责把整个会话写盘。恢复是给更大的宿主用的接口。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/code.py:448">code.py L448–472</a>。
+      README：
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/README.zh.md:170">L170</a>。
+    </p>
+
+    <h3>替换是显式的</h3>
+    <p>
+      已有活跃目标时再 <code>set_goal</code>，先记一条「被新目标替换」，再换上新条件。
+      不会同时存在两个完成条件让判断器挑。
+      <code>/goal</code> 不带正文时是查看：条件、已判断次数、经过秒数、这段目标以来的 token、最近理由。
+    </p>
+
+    <h3>和 s16 的边界</h3>
+    <p>
+      s16 回答一批步骤怎样执行、怎样续跑。s17 回答整件事能否停。
+      两章的代码可以分开跑。若接到同一宿主，workflow 的通知只是消息；
+      Goal 仍在主循环的停止点决定继续还是返回。
+    </p>
+
+    <h2>动手：真跑 North s17</h2>
+    <p>需要 <code>.env</code> 里的 <code>ANTHROPIC_API_KEY</code> 和 <code>MODEL_ID</code>。判断器可用更小的 <code>GOAL_EVALUATOR_MODEL_ID</code>。</p>
+    <pre>cd learn-claude-code-north
+python s17_goal_loop\code.py "/goal python -m pytest 退出码为 0"</pre>
+    <p>
+      期望：主模型会去跑命令；若结果没出现在对话里，你应看到循环自己继续，而不是立刻回到「已经结束」。
+      若判断器连续拦住超过默认 8 次，应把控制权还给你，<code>/goal</code> 仍能看到条件还在。
+      用 <code>/goal clear</code> 能清掉。不要为了看 failed 去写一个必然做不到、又会破坏仓库的目标。
+    </p>
+    <p class="src">
+      <a href="cursor://file/e:/agent_l/learn-claude-code-north/s17_goal_loop/README.zh.md:192">README L192–223</a>。
+    </p>
+
+    <h2>常见坑 + 边界</h2>
+    <div class="box">
+      <ul>
+        <li><strong>没有 tool_use 就表示目标完成：</strong>只在没有活跃目标时，这才和 s01 一样直接停。</li>
+        <li><strong>判断器可以自己再跑一次 pytest：</strong>不能。它没有工具。</li>
+        <li><strong>模型说「通过了」就一定 achieved：</strong>不保证。提示要求看具体结果，但判断器仍然只是模型。</li>
+        <li><strong>Goal 会替你执行测试：</strong>不会。验证靠主模型的工具。Goal 只看记录。</li>
+        <li><strong>后台还在跑也会先判完成：</strong>不会。动作是 defer，而且不调用判断器。</li>
+        <li><strong>workflow 通知有特殊豁免：</strong>没有。它和其他消息一样被阅读。</li>
+        <li><strong>连续拦住 8 次会把目标标成完成或失败：</strong>不会。动作是 limit，目标还在。</li>
+        <li><strong>判断器报错就当成没目标、直接成功：</strong>不会。动作是 error，目标保留。</li>
+        <li><strong>MAX_TURNS 用尽会 clear：</strong>不会。状态是 max_turns，条件还在。</li>
+        <li><strong>可以同时挂两个 Goal：</strong>不可以。新的替换旧的。</li>
+        <li><strong>只有 clear 这个词能取消：</strong>stop、off、reset、none、cancel 也可以。</li>
+        <li><strong>CLI 会把未完成的目标写进磁盘，下次自动接着判：</strong>本章命令行不持久化会话。restore 是接口，而且不恢复旧的次数和时间。</li>
+      </ul>
+    </div>
+
+    <h2>检索练习</h2>
+    <div class="quiz" data-quiz
+      data-ok="对。没有工具调用只表示这轮想停。有目标时还要经过判断器。"
+      data-bad="allow 只发生在没有活跃目标时。那时候才和 s01 一样。">
+      <p>主模型不再调用工具时，有目标的会话会怎样？</p>
+      <button data-correct="true">先判断对话里有没有完成证据</button>
+      <button data-correct="false">立刻返回并当成目标已完成</button>
+      <button data-correct="false">判断器自己再去运行一次测试</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。block 把理由追加到同一份 messages，然后 continue。"
+      data-bad="没有一条单独的续跑队列。用户也不必再输入继续。">
+      <p>判断器说还没完成时，理由去了哪？</p>
+      <button data-correct="true">追加进当前对话并继续这一轮</button>
+      <button data-correct="false">放进另一条队列等用户点继续</button>
+      <button data-correct="false">直接把目标标成失败并返回</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。后台还在跑就 defer，不调用判断器，判断次数也不增加。"
+      data-bad="不会先判失败，也不会把未完成的通知当成完成。">
+      <p>还有后台任务没结束时，停止点做什么？</p>
+      <button data-correct="true">推迟判断并保留当前目标</button>
+      <button data-correct="false">立刻调用判断器看完成了没</button>
+      <button data-correct="false">把目标记成失败以免空等</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。limit、error、max_turns 都把人叫回来，活跃目标还在。"
+      data-bad="achieved 才会清除并记成完成。failed 是 impossible，不是上限。">
+      <p>连续阻止超过上限时，目标状态是什么？</p>
+      <button data-correct="true">仍然活跃只是停止自动续轮</button>
+      <button data-correct="false">自动改成已完成并清除目标</button>
+      <button data-correct="false">自动改成失败并清除目标</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。判断器没有工具。证据要靠主模型把命令和输出写进对话。"
+      data-bad="它不能读仓库，也不能把「通过了」三个字当成测试框架的结果。">
+      <p>判断器根据什么说条件已经满足？</p>
+      <button data-correct="true">只根据对话里已经写下的内容</button>
+      <button data-correct="false">它会自己打开文件核对仓库</button>
+      <button data-correct="false">主模型的一句通过了就足够</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <div class="quiz" data-quiz
+      data-ok="对。同时只有一个。新条件替换旧条件，并立刻按新条件开工。"
+      data-bad="不会并存。clear 的别名也不只一个词。">
+      <p>会话里已经有目标时再输入 /goal 新条件？</p>
+      <button data-correct="true">旧目标被替换并按新条件开始</button>
+      <button data-correct="false">两个条件会同时交给判断器</button>
+      <button data-correct="false">新条件要等旧目标完成才生效</button>
+      <p class="feedback" aria-live="polite"></p>
+    </div>
+
+    <h2>过关标准</h2>
+    <ul>
+      <li>能说明没有 tool_use 只是想停；有活跃目标时要先判断。</li>
+      <li>能列出 allow、defer、achieved、failed、block、limit、error、max_turns 各自是否还留着目标。</li>
+      <li>能说明判断器没有工具；defer 时甚至不会调用它。</li>
+      <li>能说明 block 写回同一份 messages；limit 和错误都不把目标标成完成。</li>
+      <li>能写出一条含结束状态、验证方式、限制的完成条件，并指出「弄好」为什么不能用。</li>
+      <li>能说明一个会话一个目标；clear 有别名；CLI 不持久化；restore 不恢复旧计数。</li>
+      <li>能说明 s16 的脚本结束和 s17 的目标完成不是同一句话。</li>
+      <li>在准备好 API 的前提下真跑 <code>python s17_goal_loop\code.py</code>，看见一次因证据不足而继续，或一次 <code>/goal</code> 状态里目标仍在。</li>
+    </ul>
+
+    <h2>速查</h2>
+    <div class="box">
+      <p>
+        <a href="../../reference/phase-2/s17-goal-loop.html">阶段 2 · s17 Goal Loop 速查</a>。
+        术语在 <a href="../../GLOSSARY.md">GLOSSARY.md</a> 的 Goal Loop 部分。
+      </p>
+    </div>
+
+    <h2>选读</h2>
+    <div class="box">
+      <ul>
+        <li>
+          主阅读：
+          <a href="../../learn-claude-code-north/s17_goal_loop/README.zh.md">North s17 中文 README</a>。
+        </li>
+        <li>
+          停止条件从哪来：
+          <a href="./0021-agent-loop.html">0021</a>。
+          脚本结束不等于目标完成：
+          <a href="./0036-workflow-runtime.html">0036</a>。
+        </li>
+        <li>
+          North 根目录 s01–s17 的课件到这里齐了。下一步是按过关标准真跑，而不是再找一套旧章节号。
+        </li>
+      </ul>
+    </div>
+
+    <p>
+      <a href="./index.html">阶段 2 分册</a>
+      · <a href="./0036-workflow-runtime.html">上一课 0036</a>
+    </p>
+    <div data-lesson-id-footer="0037"></div>
+    <footer>
+      不清楚的立刻问我。s17 是这条主线上的最后一课：结束权在判断器，证据在对话里。
+    </footer>
+  </main>
+  <script src="../../assets/curriculum.js"></script>
+  <script src="../../assets/lesson-nav.js"></script>
+  <script src="../../assets/quiz.js"></script>
+</body>
+</html>
