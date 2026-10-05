@@ -68,6 +68,42 @@
       <tr><td>s12 Cron</td><td>到点把 prompt 送进空闲回合</td><td>关机后仍准点跑；多 Agent</td></tr>
     </table>
 
+    <h2>生产化补丁（s12 之后）</h2>
+    <p>
+      本课机制是对的，缺的只有一件事：<strong>计时器待在 Agent 进程里</strong>。成熟产品把调度切成三层——
+      <strong>调度面</strong>（谁来计时，独立于 Agent 进程）／<strong>投递面</strong>（到点只入队，绝不打断正在跑的回合）／
+      <strong>执行面</strong>（可抛弃的一次 run / session）。
+    </p>
+    <table>
+      <tr><th>要补的</th><th>关键词</th><th>常见做法</th></tr>
+      <tr><td>漏跑</td><td>catch-up / misfire</td><td>不补 / 只补最近一次 / 回填一段时间</td></tr>
+      <tr><td>撞车</td><td>overlap policy</td><td>排队 / 跳过 / 取消上一次 / 允许并行</td></tr>
+      <tr><td>整点风暴</td><td>jitter</td><td>按任务 ID 加确定性偏移；别挑 <code>:00</code></td></tr>
+      <tr><td>成本</td><td>过期 + 上限</td><td>周期任务 N 天过期、每会话任务数上限</td></tr>
+      <tr><td>审批</td><td>non-interactive</td><td>全自动 / 每任务权限模式 / 直接拒绝</td></tr>
+      <tr><td>安全</td><td>untrusted payload</td><td>外部传入文本当数据，只有存好的 prompt 算授权</td></tr>
+    </table>
+    <p>
+      <strong>hook 做不到这件事。</strong>hook 挂在生命周期事件上（<code>UserPromptSubmit</code> / <code>PreToolUse</code> /
+      <code>PostToolUse</code> / <code>Stop</code>…），命令 hook 不能触发 <code>/</code> 命令或工具调用，也就不能自己发起一轮。
+      Claude Code 的做法是专门加 <code>CronCreate</code> / <code>CronList</code> / <code>CronDelete</code> 和一个每秒检查的调度器。
+    </p>
+    <p class="src">
+      三档部署（会话内 / 本机常驻 / 托管云）：
+      <a href="https://code.claude.com/docs/en/scheduled-tasks">Run prompts on a schedule</a>、
+      <a href="https://code.claude.com/docs/en/desktop-scheduled-tasks">Desktop scheduled tasks</a>、
+      <a href="https://code.claude.com/docs/en/routines">Routines</a>。
+      其它产品：
+      <a href="https://docs.temporal.io/develop/python/workflows/schedules">Temporal Schedules</a>、
+      <a href="https://docs.langchain.com/langsmith/cron-jobs">LangGraph cron</a>、
+      <a href="https://help.openai.com/en/articles/10291617-scheduled-tasks-in-chatgpt">ChatGPT tasks</a>。
+      hook 事件清单：<a href="https://code.claude.com/docs/en/hooks">Hooks reference</a>。
+    </p>
+    <p class="box">
+      <strong>别忘了：</strong>绿点只表示 run 起停没有基础设施错误，不代表 prompt 里的任务成功。
+      确认的是 prompt 交付，不是工作产品。
+    </p>
+
     <h2>过关句</h2>
     <p class="box">
       <strong>闹钟 = 五段表达式 + 到点入队 + 空闲再交付。</strong>

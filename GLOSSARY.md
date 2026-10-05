@@ -737,6 +737,36 @@ _Avoid_: 把它当成「测试已经跑完」。
 出处：North [`s12_cron_scheduler/README.zh.md` L116](cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/README.zh.md:116)；确认点 [`code.py` L667–672](cursor://file/e:/agent_l/learn-claude-code-north/s12_cron_scheduler/code.py:667)。
 _Avoid_: 以为确认之后工具没跑完还会自动重送；以为 `durable` 会在进程关闭时补跑错过的分钟。
 
+**调度面 / 投递面 / 执行面**:
+生产化定时任务的三层切法。调度面负责计时并保存定义（独立于 Agent 进程）；投递面到点只把消息放进队列，绝不打断正在跑的回合；执行面是可抛弃的一次 run/session。s12 只把第一层放错了位置。
+出处：[Claude Code · Run prompts on a schedule](https://code.claude.com/docs/en/scheduled-tasks)、[Temporal Schedules](https://docs.temporal.io/develop/python/workflows/schedules)。
+_Avoid_: 把计时器留在 Agent 进程里，再靠 `durable` 文件假装关机也准点。
+
+**抖动**（jitter）:
+给同一时刻的多个任务加确定性偏移，避免整点一起打 API。偏移按任务 ID 算，同一个任务每次都一样。Claude Code 里周期任务最多晚 30 分钟，一次性任务最多早 90 秒。
+出处：[Run prompts on a schedule](https://code.claude.com/docs/en/scheduled-tasks)。
+_Avoid_: 把 `0 9 * * *` 当成正好 09:00:00；需要准点就挑 `3 9 * * *`。
+
+**补跑 / 漏跑策略**（catch-up、misfire policy）:
+进程不在的那几拍怎么处理：不补、只补最近一次、还是回填一段时间。必须显式选一个。s12 选的是不补。
+出处：Desktop 任务「只补最近一次、7 天内」[Desktop scheduled tasks](https://code.claude.com/docs/en/desktop-scheduled-tasks)；Temporal 的 `backfill` [Schedules](https://docs.temporal.io/develop/python/workflows/schedules)。
+_Avoid_: 以为落盘的周期任务会在下次启动时把错过的每一拍都补一遍。
+
+**重叠策略**（overlap policy）:
+上一轮还没跑完、这一拍又到点时怎么办：排队、跳过、取消上一次、允许并行。s12 的对应物是 `agent_lock` 拿不到就等下一拍。
+出处：[Temporal Schedules](https://docs.temporal.io/develop/python/workflows/schedules)。
+_Avoid_: 以为到点一定会另起一轮；抢同一条会话要靠锁。
+
+**一次一 run**（run-per-fire）:
+每次触发开一个独立的、可抛弃的 session/run，而不是往同一条对话里塞消息。换来隔离与并行，代价是 prompt 必须自包含、状态靠仓库。
+出处：[LangGraph cron jobs](https://docs.langchain.com/langsmith/cron-jobs)（每次新建 thread，可配运行完删或留）；[Routines](https://code.claude.com/docs/en/routines)。
+_Avoid_: 两边都想要——复用会话就要配过期和上限，一次一 run 就要写自包含 prompt。
+
+**持久定时器**（durable timer）:
+把「等待」本身写进存储：Worker 和服务都挂了，恢复后 `sleep()` 照样接着走。「关机也准点」的正解。
+出处：[Temporal Timers](https://docs.temporal.io/develop/python/workflows/timers)。
+_Avoid_: 拿 s12 的 `durable=True` 文件当持久定时器——它只保存任务定义。
+
 ## Agent Teams
 
 **队友**（teammate）:

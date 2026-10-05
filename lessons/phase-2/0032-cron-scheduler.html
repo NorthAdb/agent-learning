@@ -51,6 +51,7 @@
       至少一次交付；进程关闭后不补跑错过的分钟；定时回合不能弹交互审批。
       <strong>故意跳过</strong>：秒级 cron、时区库、系统 crontab / systemd timer 的写法、
       s11 后台命令、多 Agent。README 写明本章不包含后台命令，因为队列里是一条 prompt，不是某次命令的输出。
+      文末「s12 之后」只说明为什么要把计时器搬出 Agent 进程，仍不给系统 crontab / systemd timer 的写法。
       <strong>不另写</strong> playground。
     </p>
     <p class="muted">
@@ -528,6 +529,181 @@ Cancel the cron job you just created.</pre>
       <li>能指出定时回合不能做交互审批。</li>
       <li>真跑 <code>python s12_cron_scheduler\code.py</code>，至少看见一次成功注册、一份 <code>.scheduled_tasks.json</code>，以及到点后的 <code>[cron] delivered</code> 或 <code>[Scheduled]</code>。进程要保持运行到那一分钟。</li>
     </ul>
+
+    <h2>s12 之后：真实产品怎么做定时</h2>
+    <p class="muted">
+      这一节是延伸，不进入过关标准。它回答两个学完必然会问的问题：
+      <strong>能不能只用 s04 的 hook 做？成熟 Agent 是怎么做的？</strong>
+      两个答案指向同一件事——<strong>计时要待在 Agent 进程之外</strong>。
+    </p>
+
+    <h3>为什么不是 hook</h3>
+    <p>
+      s04 的四个事件（<code>UserPromptSubmit</code>、<code>PreToolUse</code>、<code>PostToolUse</code>、<code>Stop</code>）
+      都是<strong>生命周期事件</strong>：只有循环走到那个点，<code>trigger_hooks()</code> 才被调用。
+      真实 Claude Code 的 hook 事件多得多，但同样全是生命周期事件，没有「到点了」这一类；命令 hook 也明确
+      「can't trigger <code>/</code> commands or tool calls」，不能自己发起一轮
+      （出处：<a href="https://code.claude.com/docs/en/hooks">Hooks reference</a> 的事件表与 Limitations）。
+      而 cron 最典型的场景是人不在、循环根本没在跑——没有事件可挂。
+    </p>
+    <p>
+      官方做法印证了这一点：Claude Code 为定时任务专门加了 <code>CronCreate</code>、<code>CronList</code>、<code>CronDelete</code>
+      三个工具和一个「每秒检查、低优先级入队」的调度器，而不是复用 hook
+      （出处：<a href="https://code.claude.com/docs/en/scheduled-tasks">Run prompts on a schedule</a>）。
+      它和本课的 <code>cron_scheduler_loop</code> + <code>cron_queue</code> 是同一套结构。
+    </p>
+    <p class="box">
+      <strong>一句话：</strong>hook 是插口，要求「已经有事发生」；闹钟要解决的是「没事发生的时候，谁来碰一下」。
+    </p>
+
+    <h3>同一套机制，三档部署</h3>
+    <p>Claude Code 现在把定时任务分成三档，差别只在「计时器跑在哪」：</p>
+    <table>
+      <tr><th></th><th>Cloud Routines</th><th>Desktop 任务</th><th>会话内 <code>/loop</code></th></tr>
+      <tr><td>跑在哪</td><td>Anthropic 云端</td><td>你的机器</td><td>你的机器</td></tr>
+      <tr><td>机器要开着吗</td><td>不用</td><td>要</td><td>要</td></tr>
+      <tr><td>要开着会话吗</td><td>不用</td><td>不用</td><td><strong>要</strong></td></tr>
+      <tr><td>跨重启</td><td>持久</td><td>持久</td><td><code>--resume</code> 时恢复（过期或已过时的一次性任务除外）</td></tr>
+      <tr><td>能读本地文件</td><td>不能（每次 fresh clone）</td><td>能</td><td>能</td></tr>
+      <tr><td>审批</td><td>无，全自动</td><td>每任务可配</td><td>继承会话</td></tr>
+      <tr><td>最小间隔</td><td>1 小时</td><td>1 分钟</td><td>1 分钟</td></tr>
+    </table>
+    <p class="src">
+      出处：
+      <a href="https://code.claude.com/docs/en/scheduled-tasks">Run prompts on a schedule</a>、
+      <a href="https://code.claude.com/docs/en/desktop-scheduled-tasks">Desktop scheduled tasks</a>、
+      <a href="https://code.claude.com/docs/en/routines">Routines</a>。
+      第三档就是本课：会话一关就不响；第二档把调度器搬进常驻进程；第一档搬到云端。
+    </p>
+    <p>这不是一家的做法。同一个问题的成熟实现分布在四个位置：</p>
+    <table>
+      <tr><th>位置</th><th>代表</th><th>计时器属于谁</th></tr>
+      <tr>
+        <td>会话 / 进程内</td>
+        <td>本课 s12；Claude Code <code>/loop</code>；你正在用的这个 harness 的 <code>schedule_create</code></td>
+        <td>Agent 进程（进程一死就停）</td>
+      </tr>
+      <tr><td>本机常驻服务</td><td>Claude Desktop 任务；n8n 的 durable scheduler</td><td>桌面应用 / 工作流引擎</td></tr>
+      <tr>
+        <td>托管云调度</td>
+        <td>Cloud Routines；ChatGPT Scheduled tasks；LangGraph 的 cron；Devin 的 Schedules API</td>
+        <td>平台服务（与你的机器无关）</td>
+      </tr>
+      <tr>
+        <td>通用调度器 / CI</td>
+        <td>Temporal Schedules；Quartz；K8s CronJob；系统 crontab；GitHub Actions <code>schedule</code>；AWS EventBridge Scheduler</td>
+        <td>外部调度设施</td>
+      </tr>
+    </table>
+    <p class="src">
+      出处：
+      <a href="https://docs.langchain.com/langsmith/cron-jobs">LangGraph cron jobs</a>、
+      <a href="https://docs.temporal.io/develop/python/workflows/schedules">Temporal Schedules</a>、
+      <a href="https://docs.devin.ai/api-reference/v3/schedules/post-organizations-schedules">Devin Schedules API</a>、
+      <a href="https://help.openai.com/en/articles/10291617-scheduled-tasks-in-chatgpt">Scheduled tasks in ChatGPT</a>。
+    </p>
+
+    <h3>成熟产品比本课多补的六件事</h3>
+    <table>
+      <tr><th>生产问题</th><th>本课的做法</th><th>成熟产品</th></tr>
+      <tr>
+        <td><strong>漏跑怎么算</strong></td>
+        <td>明确不补跑</td>
+        <td>都写成显式策略：Desktop 醒来后<strong>只补最近一次</strong>（7 天内的），更早的丢弃；会话内 cron 不补跑、忙完只跑一次；Temporal 有 <code>backfill</code> 主动回填；Quartz 这类调度器有 misfire 策略</td>
+      </tr>
+      <tr>
+        <td><strong>撞车（重叠）</strong></td>
+        <td><code>agent_lock</code> 拿不到就等下一拍</td>
+        <td>Temporal 显式配重叠策略（排队 / 跳过 / 取消上一次 / 允许并行）；Desktop 记「上一轮还在跑」直接 skip</td>
+      </tr>
+      <tr>
+        <td><strong>准点风暴</strong></td>
+        <td>无</td>
+        <td>都加<strong>抖动</strong>：Claude Code 按任务 ID 做确定性偏移，周期任务最多晚 30 分钟、一次性任务最多早 90 秒；官方建议别挑 <code>:00</code>，写 <code>3 9 * * *</code></td>
+      </tr>
+      <tr>
+        <td><strong>成本尾巴</strong></td>
+        <td>无上限</td>
+        <td>Claude Code：每会话最多 50 个任务、周期任务 7 天自动过期；ChatGPT：按套餐限 3 / 5 / 10 / 15 个活跃任务，免费版一天一次；Routines：每小时 100 次；LangGraph 直接警告「不删 cron 就等着收 API 账单」</td>
+      </tr>
+      <tr>
+        <td><strong>要不要弹审批</strong></td>
+        <td>非主线程直接拒绝（<code>request_permission</code>）</td>
+        <td>三种解法：Cloud 全自动不提示；Desktop 每任务独立权限模式 + 记住 always allow；必须交互的 MCP 工具每轮都 stall</td>
+      </tr>
+      <tr>
+        <td><strong>谁有权触发</strong></td>
+        <td>信任存在 <code>.scheduled_tasks.json</code> 里的 prompt</td>
+        <td>Routines 把 API 传来的 <code>text</code> 包进 <code>&lt;routine-fire-payload&gt;</code> 标成不可信数据，只有事先存好的 prompt 才算授权</td>
+      </tr>
+    </table>
+    <p>
+      还有一条边界本课已经讲对、成熟产品又专门写了一遍：<strong>「跑起来了」不等于「做完了」</strong>。
+      Routines 的运行列表里，绿点只表示 session 起停没有基础设施错误，不代表 prompt 里的任务成功
+      （出处：<a href="https://code.claude.com/docs/en/routines">Routines</a>）。
+      这和本课「确认的是 prompt 交付，不是工作产品」是同一件事，也是 s17 Goal Loop 接着要处理的问题。
+    </p>
+
+    <h3>两种取舍：复用会话，还是每次新开</h3>
+    <table>
+      <tr><th></th><th>会话内调度</th><th>一次一 run（run-per-fire）</th></tr>
+      <tr><td>代表</td><td>本课 s12；Claude Code <code>/loop</code>；本 harness 的 <code>schedule_create</code></td><td>Cloud Routines；LangGraph cron；ChatGPT tasks</td></tr>
+      <tr><td>上下文</td><td>继承同一条对话和 MCP</td><td>每次新 session / thread，要重新装</td></tr>
+      <tr><td>隔离</td><td>和用户回合抢同一份会话</td><td>天然隔离，可并行；常用 worktree 或 fresh clone</td></tr>
+      <tr><td>代价</td><td>会话必须活着，所以要配过期和上限</td><td>prompt 必须自包含；状态得靠仓库和文件</td></tr>
+    </table>
+
+    <h3>本节新名词 × 原文</h3>
+    <table>
+      <tr><th>名词</th><th>一句话</th><th>出处</th></tr>
+      <tr>
+        <td><strong>调度面 / 投递面 / 执行面</strong></td>
+        <td>三层切法：谁计时（进程外的调度服务）、到点只入队不打断回合、以及可抛弃的一次 run。本课只把第一层放错了位置。</td>
+        <td><a href="https://code.claude.com/docs/en/scheduled-tasks">Run prompts on a schedule</a>；<a href="https://docs.temporal.io/develop/python/workflows/schedules">Temporal Schedules</a></td>
+      </tr>
+      <tr>
+        <td><strong>抖动</strong>（jitter）</td>
+        <td>给同一时刻的多个任务加一点确定性偏移，避免整点一起打 API。偏移按任务 ID 算，同一个任务每次都一样。</td>
+        <td><a href="https://code.claude.com/docs/en/scheduled-tasks">Run prompts on a schedule</a>；Temporal 的 <code>ScheduleSpec</code> 里也有 <code>jitter</code>（<a href="https://docs.temporal.io/develop/python/workflows/schedules">Schedules</a>）</td>
+      </tr>
+      <tr>
+        <td><strong>补跑 / 漏跑策略</strong>（catch-up、misfire policy）</td>
+        <td>进程不在的那几拍怎么处理：不补、只补最近一次、还是回填一段时间。必须显式选一个，不能靠默认。</td>
+        <td>Desktop「只补最近一次、7 天内」（<a href="https://code.claude.com/docs/en/desktop-scheduled-tasks">Desktop scheduled tasks</a>）；Temporal <code>backfill</code>（<a href="https://docs.temporal.io/develop/python/workflows/schedules">Schedules</a>）</td>
+      </tr>
+      <tr>
+        <td><strong>重叠策略</strong>（overlap policy）</td>
+        <td>上一轮还没跑完、这一拍又到点了怎么办：排队、跳过、取消上一次，还是允许并行。</td>
+        <td><a href="https://docs.temporal.io/develop/python/workflows/schedules">Temporal Schedules</a></td>
+      </tr>
+      <tr>
+        <td><strong>一次一 run</strong>（run-per-fire）</td>
+        <td>每次触发开一个独立的、可抛弃的 session / run，而不是往同一条对话里塞消息。</td>
+        <td><a href="https://docs.langchain.com/langsmith/cron-jobs">LangGraph cron jobs</a>（每次新建 thread，可配运行完删或留）；<a href="https://code.claude.com/docs/en/routines">Routines</a></td>
+      </tr>
+      <tr>
+        <td><strong>持久定时器</strong>（durable timer）</td>
+        <td>把「等待」本身写进存储：Worker 和服务都挂了，恢复后 <code>sleep()</code> 照样接着走。这才是「关机也准点」的正解。</td>
+        <td><a href="https://docs.temporal.io/develop/python/workflows/timers">Temporal Timers</a></td>
+      </tr>
+      <tr>
+        <td><strong>不可信触发载荷</strong></td>
+        <td>外部触发传进来的文本当数据、不当指令；只有事先存好的 prompt 才算授权。定时任务等于给外部开了一个入口，这条必须有。</td>
+        <td><a href="https://code.claude.com/docs/en/routines">Routines</a>（<code>&lt;routine-fire-payload&gt;</code>）</td>
+      </tr>
+    </table>
+
+    <h3>自己要做的话，按这个顺序补</h3>
+    <ol>
+      <li><strong>把定义和线程搬出 Agent 进程</strong>：哪怕先用系统 crontab 到点拉起一个一次性进程。</li>
+      <li><strong>显式定两套策略</strong>：漏跑补不补、撞车谁让谁。</li>
+      <li><strong>加抖动</strong>，并且别把时间都压在整点。</li>
+      <li><strong>加过期和总量上限</strong>，否则忘了的任务会一直烧钱。</li>
+      <li><strong>给触发器做信任边界和幂等键</strong>：至少一次意味着同一句话可能来两次。</li>
+    </ol>
+    <p class="muted">
+      这五步不要求你写代码，只要求能说清「为什么需要」——面试和设计评审问的正是这个。
+    </p>
 
     <h2>速查</h2>
     <div class="box">
